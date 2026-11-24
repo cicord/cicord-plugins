@@ -45,7 +45,7 @@ plugins:
     repo: https://github.com/cicord/cicord-plugins
     version: 0.1.0
   polls:
-    commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
+    commit: 448db6cdc70f6763aea8de644b74334ceb458d2d
     description: Quick polls with buttons or a select menu, live results, automatic closing and an optional discussion thread. Publishes polls.closed for other plugins.
     displayName: Polls
     keywords:
@@ -57,7 +57,7 @@ plugins:
     publisher: Cicord
     verified: true
     repo: https://github.com/cicord/cicord-plugins
-    version: 0.1.0
+    version: 0.1.1
   levels:
     commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
     description: XP and levels for chatting, receiving reactions and voting in polls. Level-up announcements, role rewards, /rank, /top, a daily recap and a public leaderboard on the community portal.
@@ -74,7 +74,7 @@ plugins:
     repo: https://github.com/cicord/cicord-plugins
     version: 0.1.0
   moderation:
-    commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
+    commit: 448db6cdc70f6763aea8de644b74334ceb458d2d
     description: /warn, /timeout, /kick and /ban with an audit log, expiring warnings, automatic escalation, flood protection, member DMs and an optional Slack or Discord webhook.
     displayName: Moderation
     keywords:
@@ -86,7 +86,7 @@ plugins:
     publisher: Cicord
     verified: true
     repo: https://github.com/cicord/cicord-plugins
-    version: 0.1.0
+    version: 0.1.1
   reaction-roles:
     commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
     description: Self-assignable roles from panels defined in the config, with buttons, a select menu or emoji reactions. Single or multiple choice, an optional required role, and panel messages kept up to date in place.
