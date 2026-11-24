@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Polls plugin config",
+  "type": "object",
+  "properties": {
+    "defaultHours": {
+      "description": "How long a poll stays open when /poll does not say (hours).",
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 720,
+      "default": 24,
+      "x-cicord-access": "moderator"
+    },
+    "maxHours": {
+      "description": "Longest poll allowed (hours).",
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 720,
+      "default": 168,
+      "x-cicord-access": "moderator"
+    },
+    "channels": {
+      "description": "Channels where /poll may be used. Empty: everywhere.",
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true,
+      "default": [],
+      "x-cicord-ref": "channel",
+      "x-cicord-access": "moderator"
+    },
+    "managerRoles": {
+      "description": "Roles that may close any poll (its author always can).",
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true,
+      "default": [],
+      "x-cicord-ref": "role"
+    },
+    "confirmVotes": {
+      "description": "Tell voters privately what they voted for.",
+      "type": "boolean",
+      "default": true
+    },
+    "color": {
+      "description": "Embed color.",
+      "type": "string",
+      "pattern": "^#[0-9a-fA-F]{6}$",
+      "default": "#5865f2",
+      "x-cicord-widget": "color"
+    }
+  },
+  "additionalProperties": false
+}

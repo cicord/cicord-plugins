@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reaction roles plugin config",
+  "type": "object",
+  "properties": {
+    "panels": {
+      "description": "Role panels. Every member who can see a panel can take its roles: never list a role with moderation or admin permissions.",
+      "type": "array",
+      "maxItems": 20,
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": ["name", "channel", "options"],
+        "properties": {
+          "name": {
+            "description": "Stable key of the panel (lowercase letters, digits, '-'). The plugin finds the panel message again by this name, so renaming a panel posts a new message.",
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,19}$"
+          },
+          "channel": {
+            "description": "Channel of the panel message.",
+            "type": "string",
+            "x-cicord-ref": "channel"
+          },
+          "title": {
+            "description": "Title of the panel.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "default": "Pick your roles"
+          },
+          "description": {
+            "description": "Text of the panel (Markdown).",
+            "type": "string",
+            "maxLength": 2000,
+            "x-cicord-widget": "markdown"
+          },
+          "color": {
+            "description": "Color of the panel embed.",
+            "type": "string",
+            "pattern": "^#[0-9a-fA-F]{6}$",
+            "default": "#5865f2",
+            "x-cicord-widget": "color"
+          },
+          "style": {
+            "description": "buttons: one button per role. select: a select menu. reactions: members react with the option's emoji (each option needs an emoji).",
+            "enum": ["buttons", "select", "reactions"],
+            "default": "buttons"
+          },
+          "mode": {
+            "description": "multiple: members take any number of the roles. single: taking one removes the others of the panel.",
+            "enum": ["multiple", "single"],
+            "default": "multiple"
+          },
+          "requiredRole": {
+            "description": "Only members with this role can use the panel (e.g. a verified role).",
+            "type": "string",
+            "x-cicord-ref": "role"
+          },
+          "options": {
+            "description": "The roles of the panel.",
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 25,
+            "items": {
+              "type": "object",
+              "required": ["role"],
+              "properties": {
+                "role": {
+                  "description": "Role given by this option. It must be below the bot's highest role.",
+                  "type": "string",
+                  "x-cicord-ref": "role"
+                },
+                "label": {
+                  "description": "Button or menu label (defaults to the role name).",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "emoji": {
+                  "description": "A unicode emoji, or a custom one as <:name:id> or name:id. Required for reaction panels.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                },
+                "description": {
+                  "description": "One line shown in the select menu and under the panel text.",
+                  "type": "string",
+                  "maxLength": 100
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "syncOnStart": {
+      "description": "Post missing panels and update changed ones when the plugin starts (every new revision). Off: only /role-panel posts them.",
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "additionalProperties": false
+}

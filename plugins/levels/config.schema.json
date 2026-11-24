@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Levels plugin config",
+  "type": "object",
+  "properties": {
+    "xpPerMessage": {
+      "description": "XP for a message (at most one per member per cooldown).",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000,
+      "default": 15,
+      "x-cicord-access": "moderator"
+    },
+    "cooldownSeconds": {
+      "description": "Minimum delay between two messages that earn XP.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 86400,
+      "default": 60,
+      "x-cicord-widget": "duration"
+    },
+    "minLength": {
+      "description": "Messages shorter than this (characters) earn no XP.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 200,
+      "default": 3
+    },
+    "reactionXp": {
+      "description": "XP for the author of a message each time another member reacts to it (once per member and message). 0 disables it.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "default": 2
+    },
+    "pollBonusXp": {
+      "description": "XP for each voter when a poll closes (plugin polls). 0 disables it.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000,
+      "default": 10
+    },
+    "ignoredChannels": {
+      "description": "Channels where messages earn no XP.",
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true,
+      "default": [],
+      "x-cicord-ref": "channel"
+    },
+    "announce": {
+      "description": "Level-up announcements.",
+      "type": "object",
+      "x-cicord-access": "moderator",
+      "properties": {
+        "channel": {
+          "description": "Where to announce. Without it, the bot replies to the message that levelled up.",
+          "type": "string",
+          "x-cicord-ref": "channel"
+        },
+        "message": {
+          "description": "Placeholders: {member}, {level}.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "default": "GG {member}, you reached **level {level}**! 🎉",
+          "x-cicord-widget": "textarea"
+        },
+        "react": { "description": "React 🎉 to the message.", "type": "boolean", "default": true }
+      },
+      "additionalProperties": false
+    },
+    "rewards": {
+      "description": "Roles given when a level is reached.",
+      "type": "array",
+      "maxItems": 25,
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": ["level", "role"],
+        "properties": {
+          "level": { "type": "integer", "minimum": 1, "maximum": 500 },
+          "role": { "type": "string", "x-cicord-ref": "role" },
+          "keep": {
+            "description": "Keep this role when a higher reward is reached.",
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "recap": {
+      "description": "Daily recap of the most active members (09:00 UTC).",
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "channel": {
+          "description": "Defaults to the announcement channel. No recap without either.",
+          "type": "string",
+          "x-cicord-ref": "channel"
+        },
+        "top": { "type": "integer", "minimum": 1, "maximum": 10, "default": 5 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

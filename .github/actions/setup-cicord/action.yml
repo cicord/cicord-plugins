@@ -1,0 +1,34 @@
+name: Set up cicord
+description: >-
+  Builds the cicord CLI from github.com/cicord/cicord at the version in the CICORD_VERSION
+  repository variable (a tag or branch; default main) and puts it on PATH.
+inputs:
+  version:
+    description: cicord/cicord ref to build
+    required: false
+    default: main
+  token:
+    description: token able to read cicord/cicord (only needed while it is private)
+    required: false
+    default: ${{ github.token }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: cicord/cicord
+        ref: ${{ inputs.version }}
+        token: ${{ inputs.token }}
+        path: .cicord-src
+        persist-credentials: false
+    - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+      with:
+        go-version-file: .cicord-src/go.mod
+        cache-dependency-path: .cicord-src/go.sum
+    - shell: bash
+      run: |
+        mkdir -p "$RUNNER_TEMP/bin"
+        (cd .cicord-src && go build -o "$RUNNER_TEMP/bin/cicord" ./cmd/cicord)
+        rm -rf .cicord-src
+        echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+        "$RUNNER_TEMP/bin/cicord" version || true

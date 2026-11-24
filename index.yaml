@@ -1,0 +1,7 @@
+# The official Cicord plugin registry (https://github.com/cicord/cicord-plugins).
+#
+# Each entry is a directory of this repository (path), released with the tags
+# <name>/v<version>. Entries are written by `cicord plugin publish plugins/<name> --registry .`;
+# `verified` is set by the maintainers. index.yaml.sig is written by the sign workflow
+# (`cicord registry sign`): never edit it by hand.
+plugins:

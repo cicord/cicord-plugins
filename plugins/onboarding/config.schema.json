@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Onboarding plugin config",
+  "description": "Steps shown on the portal's /onboarding page. Members only ever get or lose the roles listed here (and completedRole).",
+  "type": "object",
+  "required": ["steps"],
+  "properties": {
+    "title": {
+      "description": "Heading of the onboarding page.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "default": "Welcome!",
+      "x-cicord-access": "moderator"
+    },
+    "intro": {
+      "description": "Short text shown before the first step.",
+      "type": "string",
+      "maxLength": 1000,
+      "default": "",
+      "x-cicord-widget": "textarea",
+      "x-cicord-access": "moderator"
+    },
+    "steps": {
+      "description": "Questions, in order. Each one offers roles to pick.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "x-cicord-access": "moderator",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "options"],
+        "properties": {
+          "id": {
+            "description": "Stable identifier of the step (used in answers).",
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "title": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "description": { "type": "string", "maxLength": 300, "default": "" },
+          "multiple": {
+            "description": "Several roles can be picked in this step.",
+            "type": "boolean",
+            "default": false
+          },
+          "required": {
+            "description": "At least one role must be picked to finish.",
+            "type": "boolean",
+            "default": false
+          },
+          "options": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 25,
+            "items": {
+              "type": "object",
+              "required": ["role"],
+              "properties": {
+                "role": { "description": "Role given when picked.", "type": "string", "x-cicord-ref": "role" },
+                "label": { "description": "Defaults to the role name.", "type": "string", "maxLength": 80 },
+                "emoji": { "type": "string", "maxLength": 16 },
+                "description": { "type": "string", "maxLength": 150 }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "completedRole": {
+      "description": "Role given to members who complete the onboarding.",
+      "type": "string",
+      "x-cicord-ref": "role"
+    },
+    "successMessage": {
+      "description": "Shown on the portal once the onboarding is complete.",
+      "type": "string",
+      "maxLength": 500,
+      "default": "You're all set!",
+      "x-cicord-widget": "textarea",
+      "x-cicord-access": "moderator"
+    },
+    "linkMessage": {
+      "description": "Ephemeral reply of the /onboarding command, above the link button.",
+      "type": "string",
+      "maxLength": 500,
+      "default": "Pick your roles on the community portal:",
+      "x-cicord-access": "moderator"
+    },
+    "buttonLabel": {
+      "description": "Label of the link button.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "default": "Open onboarding",
+      "x-cicord-access": "moderator"
+    }
+  },
+  "additionalProperties": false
+}

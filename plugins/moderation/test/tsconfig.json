@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    // Vitest's types need the DOM lib, which clashes with the plugin-host globals declared by
+    // the SDK contract (`console`): library declarations are not re-checked for the tests.
+    // The plugin sources themselves are checked strictly by ../tsconfig.json.
+    "lib": ["ES2023", "DOM"],
+    "skipLibCheck": false,
+    "resolveJsonModule": true,
+    // One copy of the SDK types: the installed @cicord/sdk, which @cicord/sdk/testing also
+    // references (not .cicord/, which only serves the plugin sources).
+    "paths": { "@cicord/sdk": ["../../../node_modules/@cicord/sdk/dist/index.d.ts"] }
+  },
+  "include": ["../src", "."]
+}

@@ -1,0 +1,20 @@
+# Config of `cicord plugin test plugins/onboarding --config plugins/onboarding/test/config.yaml`
+# (steps is required). Role keys are created on the simulator's test server.
+title: Welcome!
+intro: Three short questions to tailor the server to you.
+steps:
+  - id: games
+    title: What do you play?
+    multiple: true
+    options:
+      - role: minecraft
+        emoji: "⛏️"
+      - role: valorant
+        emoji: "🎯"
+  - id: platform
+    title: Where do you mostly play?
+    required: true
+    options:
+      - role: pc
+      - role: console
+completedRole: member

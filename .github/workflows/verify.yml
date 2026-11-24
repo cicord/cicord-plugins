@@ -1,0 +1,35 @@
+# Verifies index.yaml.sig with the official public keys (keys/official.pub): signature,
+# index hash, registry URL and expiry. Runs daily, so that a signature about to lapse (the
+# sign workflow failed, the secret was rotated…) is noticed before runtimes stop listing the
+# registry's plugins. Pull requests are not verified: they cannot carry a valid signature
+# (the sign workflow signs main after the merge).
+name: verify
+on:
+  push:
+    branches: [main]
+    paths: [index.yaml.sig, keys/**]
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-cicord
+        with:
+          version: ${{ vars.CICORD_VERSION || 'main' }}
+          token: ${{ secrets.CICORD_SOURCE_TOKEN || github.token }}
+      - name: Verify index.yaml.sig
+        run: bash scripts/verify.sh
+      - name: Expires within 10 days?
+        run: |
+          expires="$(sed -n 's/^expires: //p' index.yaml.sig)"
+          if (( $(date -d "$expires" +%s) - $(date +%s) < 10 * 86400 )); then
+            echo "::error::index.yaml.sig expires on $expires: run the sign workflow"
+            exit 1
+          fi

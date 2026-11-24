@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/cicord/cicord/main/spec/schemas/plugin.schema.json
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: levels
+  version: 0.1.0
+  displayName: Levels
+  description: XP and levels for chatting, receiving reactions and voting in polls. Level-up announcements, role rewards, /rank, /top, a daily recap and a public leaderboard on the community portal.
+  license: Apache-2.0
+  keywords: [xp, levels, leaderboard, roles, portal]
+spec:
+  engine: ">=0.1.0"
+  entry: ./src/index.ts
+  capabilities:
+    - discord.messages.send      # level-up announcements, recap, /top
+    - discord.reactions.manage   # 🎉 on the message that levelled up
+    - discord.channels.read
+    - discord.members.read       # role rewards for poll voters, /top role filter
+    - discord.roles.assign       # role rewards
+    - storage.kv
+    - scheduler                  # daily recap
+    - events.subscribe           # polls.closed → bonus XP
+    - portal.routes              # GET /leaderboard, GET /me
+    - portal.links               # leaderboard link in /rank
+  # MessageContent: short messages ("ok", "lol") earn no XP.
+  intents: [ServerMessages, MessageContent, ServerMessageReactions]
+  config:
+    schema: ./config.schema.json
+  routes:
+    types: ./src/routes.ts       # portal contract (cicord portal typegen)

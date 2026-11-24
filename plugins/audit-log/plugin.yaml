@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/cicord/cicord/main/spec/schemas/plugin.schema.json
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: audit-log
+  version: 0.1.0
+  displayName: Audit log
+  description: Posts server events to a staff log channel in compact batched embeds. Joins and leaves, role and nickname changes, message edits and deletions, moderation cases and closed polls from the other plugins. Each category can be turned off or sent to its own channel.
+  license: Apache-2.0
+  keywords: [audit, logs, moderation, staff, events]
+spec:
+  engine: ">=0.1.0"
+  entry: ./src/index.ts
+  capabilities:
+    - discord.messages.send     # the log messages
+    - discord.channels.read
+    - storage.kv                # the batch queue
+    - scheduler                 # batch flushes
+    - events.subscribe          # moderation.case, polls.closed
+  # ServerMembers: joins, leaves, role and nickname changes. ServerMessages: edits and
+  # deletions; who posted and where is enough, so no MessageContent (the log never
+  # shows what people wrote).
+  intents: [ServerMembers, ServerMessages]
+  config:
+    schema: ./config.schema.json

@@ -1,0 +1,22 @@
+{
+  "name": "cicord-plugins",
+  "private": true,
+  "description": "The official Cicord plugin registry: type checks and unit tests of plugins/*. The Cicord runtime bundles each plugin's src/ itself; nothing here is published to npm.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "test": "vp test",
+    "check": "bash scripts/check-all.sh"
+  },
+  "devDependencies": {
+    "@cicord/sdk": "file:vendor/cicord-sdk-0.1.0.tgz",
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
+    "vite": "npm:@voidzero-dev/vite-plus-core@8.3.8000",
+    "vite-plus": "1.7.0"
+  },
+  "engines": {
+    "node": ">=26"
+  },
+  "packageManager": "pnpm@12.23.0"
+}

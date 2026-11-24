@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/cicord/cicord/main/spec/schemas/plugin.schema.json
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: onboarding
+  version: 0.1.0
+  displayName: Onboarding
+  description: Step-by-step role picking on the community portal (games, platforms, notifications…), with a /onboarding command that links to it.
+  license: Apache-2.0
+  keywords: [onboarding, roles, portal]
+spec:
+  engine: ">=0.1.0"
+  entry: ./src/index.ts
+  capabilities:
+    - discord.roles.assign
+    - storage.kv
+    - portal.routes
+    - portal.links
+  config:
+    schema: ./config.schema.json

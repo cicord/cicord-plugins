@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/cicord/cicord/main/spec/schemas/plugin.schema.json
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: tickets
+  version: 0.1.0
+  displayName: Tickets
+  description: Support tickets in private channels. Members open a ticket from a panel button and a short form; staff and the member talk in a channel only they can see; closing it posts a summary to the staff log.
+  license: Apache-2.0
+  keywords: [tickets, support, helpdesk, portal]
+spec:
+  engine: ">=0.1.0"
+  entry: ./src/index.ts
+  capabilities:
+    - discord.messages.send     # panel, welcome message, log summary
+    - discord.messages.read     # participants and message count for the summary
+    - discord.channels.read
+    - discord.channels.manage   # ticket channels (plugin-owned)
+    - storage.kv
+    - portal.routes             # GET /tickets for the staff portal
+  # Last activity of each ticket. No MessageContent: the plugin never reads what people write.
+  intents: [ServerMessages]
+  config:
+    schema: ./config.schema.json

@@ -1,0 +1,11 @@
+# A single package (the repository root): plugins/* are not npm packages.
+packages: []
+
+overrides:
+  vite: npm:@voidzero-dev/vite-plus-core@8.3.8000
+
+peerDependencyRules:
+  allowAny:
+    - vite
+  allowedVersions:
+    vite: "*"

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Welcome plugin config",
+  "type": "object",
+  "required": ["channel"],
+  "properties": {
+    "channel": {
+      "description": "Channel where welcome messages are posted.",
+      "type": "string",
+      "x-cicord-ref": "channel"
+    },
+    "message": {
+      "description": "Template. Placeholders: {member}, {server}.",
+      "type": "string",
+      "default": "Welcome {member} to {server}!",
+      "x-cicord-widget": "textarea",
+      "x-cicord-access": "moderator"
+    },
+    "autoRole": {
+      "description": "Role given to every new member.",
+      "type": "string",
+      "x-cicord-ref": "role"
+    },
+    "dmOnboarding": {
+      "description": "Send a DM with a link to the onboarding page of the portal.",
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "additionalProperties": false
+}

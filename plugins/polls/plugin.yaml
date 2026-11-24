@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/cicord/cicord/main/spec/schemas/plugin.schema.json
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: polls
+  version: 0.1.0
+  displayName: Polls
+  description: Quick polls with buttons or a select menu, live results, automatic closing and an optional discussion thread. Publishes polls.closed for other plugins.
+  license: Apache-2.0
+  keywords: [polls, votes, community, events]
+spec:
+  engine: ">=0.1.0"
+  entry: ./src/index.ts
+  capabilities:
+    - discord.messages.send     # the poll message
+    - discord.messages.read     # find the poll message again when it closes on its own
+    - discord.channels.read
+    - discord.threads.manage    # optional discussion thread
+    - storage.kv
+    - scheduler                 # automatic closing
+    - events.publish            # polls.closed
+    - portal.routes             # GET /polls/:id
+  config:
+    schema: ./config.schema.json
+  routes:
+    types: ./src/routes.ts       # portal contract (cicord portal typegen)

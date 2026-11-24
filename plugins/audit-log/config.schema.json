@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Audit log plugin config",
+  "type": "object",
+  "required": ["channel"],
+  "properties": {
+    "channel": {
+      "description": "Staff channel of the log. Keep it private: it names members and links to their messages.",
+      "type": "string",
+      "x-cicord-ref": "channel"
+    },
+    "channels": {
+      "description": "Send a category to its own channel instead (members: joins, leaves, roles, nicknames; messages: edits and deletions; plugins: moderation cases and polls).",
+      "type": "object",
+      "properties": {
+        "members": { "type": "string", "x-cicord-ref": "channel" },
+        "messages": { "type": "string", "x-cicord-ref": "channel" },
+        "plugins": { "type": "string", "x-cicord-ref": "channel" }
+      },
+      "additionalProperties": false
+    },
+    "events": {
+      "description": "What is logged.",
+      "type": "object",
+      "properties": {
+        "joins": { "description": "A member joins (with the account age).", "type": "boolean", "default": true },
+        "leaves": { "description": "A member leaves, is kicked or banned.", "type": "boolean", "default": true },
+        "roles": { "description": "Roles added to or removed from a member.", "type": "boolean", "default": true },
+        "nicknames": { "description": "Nickname changes.", "type": "boolean", "default": true },
+        "messageEdits": {
+          "description": "A message is edited. Discord also reports link previews as edits, so this is noisy.",
+          "type": "boolean",
+          "default": false
+        },
+        "messageDeletes": { "description": "A message is deleted (author when known).", "type": "boolean", "default": true },
+        "moderation": {
+          "description": "Cases published by the moderation plugin (moderation.case).",
+          "type": "boolean",
+          "default": true
+        },
+        "polls": { "description": "Polls closed (polls.closed).", "type": "boolean", "default": false }
+      },
+      "additionalProperties": false
+    },
+    "ignoredChannels": {
+      "description": "Message edits and deletions in these channels are not logged.",
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true,
+      "default": [],
+      "x-cicord-ref": "channel",
+      "x-cicord-access": "moderator"
+    },
+    "ignoreBots": {
+      "description": "Ignore bots (their joins, role changes and messages).",
+      "type": "boolean",
+      "default": true,
+      "x-cicord-access": "moderator"
+    },
+    "batchSeconds": {
+      "description": "Events are collected for this long and posted together. 0 posts every event right away (no rate limit).",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 600,
+      "default": 10,
+      "x-cicord-access": "moderator"
+    },
+    "maxPerBatch": {
+      "description": "Most events posted per batch. The rest are counted, not posted, so a raid cannot flood the log.",
+      "type": "integer",
+      "minimum": 5,
+      "maximum": 500,
+      "default": 60,
+      "x-cicord-access": "moderator"
+    }
+  },
+  "additionalProperties": false
+}

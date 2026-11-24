@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/cicord/cicord/main/spec/schemas/plugin.schema.json
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: reaction-roles
+  version: 0.1.0
+  displayName: Reaction roles
+  description: Self-assignable roles from panels defined in the config, with buttons, a select menu or emoji reactions. Single or multiple choice, an optional required role, and panel messages kept up to date in place.
+  license: Apache-2.0
+  keywords: [roles, reaction-roles, self-roles, buttons, onboarding]
+spec:
+  engine: ">=0.1.0"
+  entry: ./src/index.ts
+  capabilities:
+    - discord.messages.send      # the panel messages
+    - discord.messages.read      # find a panel message again to edit it in place
+    - discord.channels.read
+    - discord.roles.assign       # give and take the panel roles
+    - discord.members.read       # reaction panels: the member behind a reaction
+    - discord.reactions.manage   # reaction panels: the bot adds the emojis to pick from
+    - storage.kv                 # where each panel was posted
+  # Reaction panels only. Buttons and select menus need no intent.
+  intents: [ServerMessageReactions]
+  config:
+    schema: ./config.schema.json

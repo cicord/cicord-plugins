@@ -1,0 +1,6 @@
+# Every change is reviewed by the Cicord maintainers. A community plugin may add its
+# authors for plugins/<name>/ (they review changes to it; maintainers still approve).
+*                 @cicord/maintainers
+/index.yaml       @cicord/maintainers
+/keys/            @cicord/maintainers
+/.github/         @cicord/maintainers

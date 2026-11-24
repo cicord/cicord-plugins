@@ -1,0 +1,251 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Announcements plugin config",
+  "type": "object",
+  "$defs": {
+    "timeZone": {
+      "description": "IANA time zone (daylight saving time included).",
+      "enum": [
+        "UTC",
+        "Europe/London",
+        "Europe/Dublin",
+        "Europe/Lisbon",
+        "Europe/Paris",
+        "Europe/Brussels",
+        "Europe/Amsterdam",
+        "Europe/Luxembourg",
+        "Europe/Berlin",
+        "Europe/Zurich",
+        "Europe/Vienna",
+        "Europe/Madrid",
+        "Europe/Rome",
+        "Europe/Stockholm",
+        "Europe/Oslo",
+        "Europe/Copenhagen",
+        "Europe/Warsaw",
+        "Europe/Prague",
+        "Europe/Budapest",
+        "Europe/Athens",
+        "Europe/Helsinki",
+        "Europe/Kyiv",
+        "Europe/Bucharest",
+        "Europe/Istanbul",
+        "Europe/Moscow",
+        "Africa/Algiers",
+        "Africa/Tunis",
+        "Africa/Lagos",
+        "Africa/Dakar",
+        "Africa/Abidjan",
+        "Africa/Johannesburg",
+        "Africa/Nairobi",
+        "Asia/Dubai",
+        "Asia/Karachi",
+        "Asia/Kolkata",
+        "Asia/Dhaka",
+        "Asia/Bangkok",
+        "Asia/Jakarta",
+        "Asia/Ho_Chi_Minh",
+        "Asia/Singapore",
+        "Asia/Shanghai",
+        "Asia/Hong_Kong",
+        "Asia/Manila",
+        "Asia/Seoul",
+        "Asia/Tokyo",
+        "Australia/Perth",
+        "Australia/Brisbane",
+        "Australia/Adelaide",
+        "Australia/Sydney",
+        "Australia/Melbourne",
+        "Pacific/Auckland",
+        "Pacific/Noumea",
+        "Pacific/Tahiti",
+        "Pacific/Honolulu",
+        "America/Anchorage",
+        "America/Los_Angeles",
+        "America/Vancouver",
+        "America/Phoenix",
+        "America/Denver",
+        "America/Chicago",
+        "America/Mexico_City",
+        "America/New_York",
+        "America/Toronto",
+        "America/Montreal",
+        "America/Bogota",
+        "America/Lima",
+        "America/Halifax",
+        "America/Martinique",
+        "America/Guadeloupe",
+        "America/St_Johns",
+        "America/Sao_Paulo",
+        "America/Argentina/Buenos_Aires",
+        "Indian/Reunion"
+      ]
+    }
+  },
+  "properties": {
+    "timeZone": {
+      "$ref": "#/$defs/timeZone",
+      "description": "Time zone of the schedules and of the dates typed in /announce.",
+      "default": "UTC",
+      "x-cicord-access": "moderator"
+    },
+    "announcements": {
+      "description": "Recurring or one-off announcements. Each one sets exactly one of cron, every or at.",
+      "type": "array",
+      "maxItems": 50,
+      "default": [],
+      "x-cicord-access": "moderator",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "channel"
+        ],
+        "properties": {
+          "name": {
+            "description": "Stable key of the announcement (lowercase letters, digits, '-'). It remembers when the announcement last fired.",
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+          },
+          "channel": {
+            "description": "Where it is posted.",
+            "type": "string",
+            "x-cicord-ref": "channel"
+          },
+          "enabled": {
+            "description": "Off: kept in the config but never posted.",
+            "type": "boolean",
+            "default": true
+          },
+          "cron": {
+            "description": "5-field cron in the time zone: minute hour day-of-month month day-of-week (e.g. \"0 18 * * 5\": Fridays at 18:00), or @daily, @weekly…",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "every": {
+            "description": "Interval: 30m, 6h, 1d, 2w (at least 5 minutes), counted from start.",
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,4}[mhdw]$"
+          },
+          "start": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}$",
+            "description": "First occurrence of an interval, \"YYYY-MM-DD HH:MM\" in the time zone (default 2024-01-01 00:00, a Monday)."
+          },
+          "at": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}$",
+            "description": "One-off announcement: \"YYYY-MM-DD HH:MM\" in the time zone."
+          },
+          "timeZone": {
+            "$ref": "#/$defs/timeZone",
+            "description": "Time zone of this announcement (default: the plugin's)."
+          },
+          "content": {
+            "description": "Message text (Markdown; at most 2000 characters with the mentions).",
+            "type": "string",
+            "maxLength": 2000,
+            "x-cicord-widget": "markdown"
+          },
+          "embed": {
+            "description": "Optional embed under the text.",
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "description": {
+                "type": "string",
+                "maxLength": 4000,
+                "x-cicord-widget": "markdown"
+              },
+              "url": {
+                "type": "string",
+                "pattern": "^https?://"
+              },
+              "color": {
+                "type": "string",
+                "pattern": "^#[0-9a-fA-F]{6}$",
+                "x-cicord-widget": "color"
+              },
+              "imageUrl": {
+                "type": "string",
+                "pattern": "^https?://"
+              },
+              "footer": {
+                "type": "string",
+                "maxLength": 2048
+              }
+            },
+            "additionalProperties": false
+          },
+          "mentions": {
+            "description": "Who is pinged. Nothing else in the text pings.",
+            "type": "object",
+            "properties": {
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "uniqueItems": true,
+                "maxItems": 10,
+                "x-cicord-ref": "role"
+              },
+              "everyone": {
+                "description": "@everyone (needs allowEveryone).",
+                "type": "boolean"
+              },
+              "here": {
+                "description": "@here (needs allowEveryone).",
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "allowEveryone": {
+      "description": "Allow @everyone and @here, in the configured announcements and in /announce. Off: they never ping.",
+      "type": "boolean",
+      "default": false
+    },
+    "channels": {
+      "description": "Channels /announce may post to. Empty: any channel the bot can write in.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true,
+      "default": [],
+      "x-cicord-ref": "channel"
+    },
+    "color": {
+      "description": "Embed color of /announce messages.",
+      "type": "string",
+      "pattern": "^#[0-9a-fA-F]{6}$",
+      "default": "#5865f2",
+      "x-cicord-widget": "color",
+      "x-cicord-access": "moderator"
+    },
+    "maxScheduled": {
+      "description": "Most /announce messages waiting at once.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 200,
+      "default": 25
+    },
+    "catchUpMinutes": {
+      "description": "After a restart, recurring announcements missed in the last minutes are still posted (once).",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 60,
+      "default": 10
+    }
+  },
+  "additionalProperties": false
+}

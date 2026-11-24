@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Moderation plugin config",
+  "type": "object",
+  "required": ["logChannel"],
+  "properties": {
+    "logChannel": {
+      "description": "Staff channel of the audit log (every action, joins and leaves).",
+      "type": "string",
+      "x-cicord-ref": "channel"
+    },
+    "warningDays": {
+      "description": "Warnings expire after this many days.",
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 3650,
+      "default": 30,
+      "x-cicord-access": "moderator"
+    },
+    "escalation": {
+      "description": "Automatic action when a member reaches a number of active warnings.",
+      "type": "array",
+      "maxItems": 10,
+      "default": [{ "warnings": 3, "action": "timeout" }],
+      "x-cicord-access": "moderator",
+      "items": {
+        "type": "object",
+        "required": ["warnings", "action"],
+        "properties": {
+          "warnings": { "type": "integer", "minimum": 1, "maximum": 100 },
+          "action": { "enum": ["timeout", "kick", "ban"] },
+          "durationMinutes": {
+            "description": "Timeout length.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 40320,
+            "default": 60
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "dmMembers": {
+      "description": "Tell members by DM why they were warned, timed out, kicked or banned.",
+      "type": "boolean",
+      "default": true
+    },
+    "flood": {
+      "description": "Times out members who post too many messages too fast.",
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "messages": { "type": "integer", "minimum": 2, "maximum": 50, "default": 6 },
+        "seconds": { "type": "integer", "minimum": 1, "maximum": 120, "default": 5 },
+        "timeoutMinutes": { "type": "integer", "minimum": 1, "maximum": 1440, "default": 5 },
+        "exemptRoles": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "default": [],
+          "x-cicord-ref": "role"
+        }
+      },
+      "additionalProperties": false
+    },
+    "log": {
+      "description": "Member events written to the audit log.",
+      "type": "object",
+      "properties": {
+        "joins": { "type": "boolean", "default": true },
+        "leaves": { "type": "boolean", "default": true },
+        "updates": { "description": "Nickname and role changes.", "type": "boolean", "default": true }
+      },
+      "additionalProperties": false
+    },
+    "webhook": {
+      "description": "Also send every action to a Slack or Discord webhook.",
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "url": {
+          "type": "string",
+          "pattern": "^https://(hooks\\.slack\\.com|discord\\.com)/"
+        },
+        "format": { "enum": ["slack", "discord"], "default": "slack" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

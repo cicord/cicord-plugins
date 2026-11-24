@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/cicord/cicord/main/spec/schemas/plugin.schema.json
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: moderation
+  version: 0.1.0
+  displayName: Moderation
+  description: /warn, /timeout, /kick and /ban with an audit log, expiring warnings, automatic escalation, flood protection, member DMs and an optional Slack or Discord webhook.
+  license: Apache-2.0
+  keywords: [moderation, warnings, audit, automod]
+spec:
+  engine: ">=0.1.0"
+  entry: ./src/index.ts
+  capabilities:
+    - discord.messages.send      # audit log
+    - discord.messages.manage    # delete flood messages
+    - discord.channels.read
+    - discord.members.read
+    - discord.members.moderate   # timeout, kick, ban
+    - discord.dm.send            # tell the member why
+    - storage.kv                 # warnings (expiring), case numbers
+    - http.fetch                 # optional webhook
+    - portal.routes              # warnings for the staff portal
+    - events.publish             # moderation.case, for the audit log
+  # ServerMembers: join/leave/update log. ServerMessages: flood protection, which only needs
+  # who posts and when, never the content (no MessageContent).
+  intents: [ServerMembers, ServerMessages]
+  network:
+    allow: [hooks.slack.com, discord.com]
+  config:
+    schema: ./config.schema.json

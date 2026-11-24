@@ -1,0 +1,7 @@
+node_modules/
+# Written by `cicord plugin sdk-types` (scripts/check-plugin.sh): never committed, so that a
+# plugin directory installed from this registry stays self-contained.
+.cicord/
+*.db
+*.db-*
+.env

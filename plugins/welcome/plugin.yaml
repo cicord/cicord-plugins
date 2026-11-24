@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/cicord/cicord/main/spec/schemas/plugin.schema.json
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: welcome
+  version: 0.1.0
+  displayName: Welcome
+  description: Greets new members, gives them a default role and sends an onboarding link.
+  license: Apache-2.0
+  keywords: [welcome, onboarding]
+spec:
+  engine: ">=0.1.0"
+  entry: ./src/index.ts
+  capabilities:
+    - discord.messages.send
+    - discord.channels.read
+    - discord.members.read
+    - discord.roles.assign
+    - discord.dm.send
+    - portal.links
+    - storage.kv
+  intents: [ServerMembers]
+  config:
+    schema: ./config.schema.json
