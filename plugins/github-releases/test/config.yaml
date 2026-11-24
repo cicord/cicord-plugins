@@ -1,0 +1,8 @@
+# Config of `cicord plugin test plugins/github-releases --config plugins/github-releases/test/config.yaml`
+# (feeds is required). Channel and role keys are created on the simulator's test server.
+feeds:
+  - repo: cicord/cicord
+    channel: changelog
+    label: Cicord
+    mentionRole: updates
+pollMinutes: 15

@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/cicord/cicord/main/spec/schemas/plugin.schema.json
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: github-releases
+  version: 0.1.0
+  displayName: GitHub releases
+  description: Announces the releases of public GitHub repositories in your channels, with the release notes, an optional role ping and pre-releases on request. /changelog shows the latest release of a repository or checks now.
+  license: Apache-2.0
+  authors: [Cicord]
+  homepage: https://github.com/cicord/cicord-plugins/tree/main/plugins/github-releases#readme
+  keywords: [github, releases, changelog, announcements]
+spec:
+  engine: ">=0.1.0"
+  entry: ./src/index.ts
+  capabilities:
+    - discord.messages.send     # the release announcements
+    - discord.channels.read     # resolve the configured channels
+    - storage.kv                # per feed: last announced release, ETag; rate-limit backoff
+    - scheduler                 # the polling tick
+    - http.fetch                # GitHub REST API (public releases, unauthenticated)
+  network:
+    allow: [api.github.com]
+  config:
+    schema: ./config.schema.json

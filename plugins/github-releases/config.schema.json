@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GitHub releases plugin config",
+  "type": "object",
+  "required": [
+    "feeds"
+  ],
+  "properties": {
+    "feeds": {
+      "description": "Repositories whose releases are announced, each in its own channel. The same repository may be listed twice (e.g. stable releases in one channel, pre-releases in another).",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": [
+          "repo",
+          "channel"
+        ],
+        "properties": {
+          "repo": {
+            "description": "Public GitHub repository, \"owner/name\" (e.g. cicord/cicord).",
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$",
+            "maxLength": 100,
+            "not": {
+              "pattern": "/\\.{1,2}$"
+            }
+          },
+          "channel": {
+            "description": "Where the releases are announced.",
+            "type": "string",
+            "x-cicord-ref": "channel"
+          },
+          "includePrereleases": {
+            "description": "Also announce pre-releases (marked as such).",
+            "type": "boolean",
+            "default": false
+          },
+          "mentionRole": {
+            "description": "Role pinged with each announcement (nobody else is pinged). Leave empty for no ping.",
+            "type": "string",
+            "x-cicord-ref": "role"
+          },
+          "label": {
+            "description": "Display name in the announcements (default: the repository, owner/name).",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "additionalProperties": false
+      },
+      "x-cicord-access": "moderator"
+    },
+    "pollMinutes": {
+      "description": "How often each feed is checked, in minutes (5 to 1440). Without a GitHub token every check counts against GitHub's limit of 60 requests per hour per IP address: keep feeds × 60 / pollMinutes well under 60.",
+      "type": "integer",
+      "minimum": 5,
+      "maximum": 1440,
+      "default": 15
+    },
+    "announceExisting": {
+      "description": "On the first check of a feed, announce its recent releases (at most 5 per check). Off: they are only recorded as seen, and only releases published afterwards are announced.",
+      "type": "boolean",
+      "default": false
+    },
+    "color": {
+      "description": "Embed color of the announcements.",
+      "type": "string",
+      "pattern": "^#[0-9a-fA-F]{6}$",
+      "default": "#2da44e",
+      "x-cicord-widget": "color",
+      "x-cicord-access": "moderator"
+    }
+  },
+  "additionalProperties": false
+}

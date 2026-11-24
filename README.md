@@ -15,6 +15,7 @@ accepted by review, in one repository, with a **signed** index.
 | [`reaction-roles`](plugins/reaction-roles) | Self-assignable roles from panels defined in the config, with buttons, a select menu or emoji reactions. Single or multiple choice, an optional required role, and panel messages kept up to date in place. |
 | [`audit-log`](plugins/audit-log) | Posts server events to a staff log channel in compact batched embeds. Joins and leaves, role and nickname changes, message edits and deletions, moderation cases and closed polls from the other plugins. Each category can be turned off or sent to its own channel. |
 | [`announcements`](plugins/announcements) | Recurring or one-off announcements from the config (cron, interval or date, in your time zone), and /announce for moderators to schedule, list and cancel their own. Mentions ping only who you say. |
+| [`github-releases`](plugins/github-releases) | Announces the releases of public GitHub repositories in your channels, with the release notes, an optional role ping and pre-releases on request. /changelog shows the latest release of a repository or checks now. |
 
 ## Install a plugin
 
