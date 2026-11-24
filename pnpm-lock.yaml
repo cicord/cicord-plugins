@@ -222,7 +222,7 @@ packages:
     resolution: {integrity: sha512-AOQff0zgR7cGsZL+4E7hVkmujoPUpm0J9xzWGWZj5wCjd3gmxESXAPfKyuzs93VdpQNFhHlBhfOjrcZ+XTERtQ==}
 
   '@cicord/sdk@file:vendor/cicord-sdk-0.1.0.tgz':
-    resolution: {integrity: sha512-AzkHTbDUcsGX7lHRlkKIjQMfQ1GfxSwkiW/WdSFfroig9Gw/8TJCY8l4vE+P3KIXHeIgTGjuR1jnN0fmtI2Jew==, tarball: file:vendor/cicord-sdk-0.1.0.tgz}
+    resolution: {integrity: sha512-RvIvf+yahqLRPn27Ttlm52ntrbWsdkUEMXSGXmP/9fBa4Xi/RL3J+Q/sNEdLfMUO46WLV1oWRqwYkZyx50p6Tg==, tarball: file:vendor/cicord-sdk-0.1.0.tgz}
     version: 0.1.0
 
   '@jridgewell/resolve-uri@3.1.3':
