@@ -3,7 +3,7 @@ apiVersion: cicord.dev/v1alpha1
 kind: Plugin
 metadata:
   name: polls
-  version: 0.1.0
+  version: 0.1.1
   displayName: Polls
   description: Quick polls with buttons or a select menu, live results, automatic closing and an optional discussion thread. Publishes polls.closed for other plugins.
   license: Apache-2.0

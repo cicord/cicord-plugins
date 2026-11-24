@@ -29,7 +29,7 @@
       "x-cicord-access": "moderator"
     },
     "managerRoles": {
-      "description": "Roles that may close any poll (its author always can).",
+      "description": "Poll managers: they may close any poll (its author always can) and ping any role with /poll ping (others only mentionable roles). Members with Administrator or Manage Server are managers too.",
       "type": "array",
       "items": { "type": "string" },
       "uniqueItems": true,

@@ -173,27 +173,39 @@ export function closedEvent(poll: Poll, t: Tally): PollClosed {
   };
 }
 
-/** Adds 1 to a snowflake (decimal string), without BigInt. */
-export function nextSnowflake(id: string): string {
-  const digits = id.split("").map(Number);
-  let i = digits.length - 1;
-  while (i >= 0 && digits[i] === 9) digits[i--] = 0;
-  if (i < 0) digits.unshift(1);
-  else digits[i] = (digits[i] ?? 0) + 1;
-  return digits.join("");
-}
-
-/**
- * Finds a message by id. The SDK has no "get message" call: the newest message strictly
- * before `id + 1` is the message itself when it still exists.
- */
+/** Finds the message of a poll (undefined when it was deleted). */
 export async function findMessage(
   ctx: Context,
   channelId: string,
   messageId: string,
 ): Promise<Message | undefined> {
-  const [m] = await ctx.server
-    .channel({ id: channelId })
-    .messages({ before: nextSnowflake(messageId), limit: 1 });
-  return m?.id === messageId ? m : undefined;
+  return ctx.server.channel({ id: channelId }).message(messageId);
+}
+
+/** Every poll, newest first. */
+export async function listPolls(ctx: Context): Promise<Poll[]> {
+  const polls: Poll[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await ctx.kv.list({
+      prefix: "poll:",
+      limit: 1000,
+      ...(cursor ? { cursor } : {}),
+    });
+    for (const { value } of page.items) polls.push(value as unknown as Poll);
+    cursor = page.cursor;
+  } while (cursor);
+  return polls.toSorted((a, b) => Number(b.id) - Number(a.id));
+}
+
+/**
+ * Autocomplete suggestions: the polls whose number or question contains what was typed
+ * (at most 25, Discord's limit). The value is the poll number.
+ */
+export function suggestPolls(polls: Poll[], typed: string): { name: string; value: string }[] {
+  const q = typed.trim().replace(/^#/, "").toLowerCase();
+  return polls
+    .filter((p) => q === "" || p.id.startsWith(q) || p.question.toLowerCase().includes(q))
+    .slice(0, 25)
+    .map((p) => ({ name: `#${p.id} ${p.question}`.slice(0, 100), value: p.id }));
 }
