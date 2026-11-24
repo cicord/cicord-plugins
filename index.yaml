@@ -5,3 +5,130 @@
 # `verified` is set by the maintainers. index.yaml.sig is written by the sign workflow
 # (`cicord registry sign`): never edit it by hand.
 plugins:
+  welcome:
+    commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
+    description: Greets new members, gives them a default role and sends an onboarding link.
+    displayName: Welcome
+    keywords:
+      - welcome
+      - onboarding
+    path: plugins/welcome
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins
+    version: 0.1.0
+  onboarding:
+    commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
+    description: Step-by-step role picking on the community portal (games, platforms, notifications…), with a /onboarding command that links to it.
+    displayName: Onboarding
+    keywords:
+      - onboarding
+      - roles
+      - portal
+    path: plugins/onboarding
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins
+    version: 0.1.0
+  tickets:
+    commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
+    description: Support tickets in private channels. Members open a ticket from a panel button and a short form; staff and the member talk in a channel only they can see; closing it posts a summary to the staff log.
+    displayName: Tickets
+    keywords:
+      - tickets
+      - support
+      - helpdesk
+      - portal
+    path: plugins/tickets
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins
+    version: 0.1.0
+  polls:
+    commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
+    description: Quick polls with buttons or a select menu, live results, automatic closing and an optional discussion thread. Publishes polls.closed for other plugins.
+    displayName: Polls
+    keywords:
+      - polls
+      - votes
+      - community
+      - events
+    path: plugins/polls
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins
+    version: 0.1.0
+  levels:
+    commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
+    description: XP and levels for chatting, receiving reactions and voting in polls. Level-up announcements, role rewards, /rank, /top, a daily recap and a public leaderboard on the community portal.
+    displayName: Levels
+    keywords:
+      - xp
+      - levels
+      - leaderboard
+      - roles
+      - portal
+    path: plugins/levels
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins
+    version: 0.1.0
+  moderation:
+    commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
+    description: /warn, /timeout, /kick and /ban with an audit log, expiring warnings, automatic escalation, flood protection, member DMs and an optional Slack or Discord webhook.
+    displayName: Moderation
+    keywords:
+      - moderation
+      - warnings
+      - audit
+      - automod
+    path: plugins/moderation
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins
+    version: 0.1.0
+  reaction-roles:
+    commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
+    description: Self-assignable roles from panels defined in the config, with buttons, a select menu or emoji reactions. Single or multiple choice, an optional required role, and panel messages kept up to date in place.
+    displayName: Reaction roles
+    keywords:
+      - roles
+      - reaction-roles
+      - self-roles
+      - buttons
+      - onboarding
+    path: plugins/reaction-roles
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins
+    version: 0.1.0
+  audit-log:
+    commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
+    description: Posts server events to a staff log channel in compact batched embeds. Joins and leaves, role and nickname changes, message edits and deletions, moderation cases and closed polls from the other plugins. Each category can be turned off or sent to its own channel.
+    displayName: Audit log
+    keywords:
+      - audit
+      - logs
+      - moderation
+      - staff
+      - events
+    path: plugins/audit-log
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins
+    version: 0.1.0
+  announcements:
+    commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
+    description: Recurring or one-off announcements from the config (cron, interval or date, in your time zone), and /announce for moderators to schedule, list and cancel their own. Mentions ping only who you say.
+    displayName: Scheduled announcements
+    keywords:
+      - announcements
+      - schedule
+      - reminders
+      - cron
+      - events
+    path: plugins/announcements
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins
+    version: 0.1.0
