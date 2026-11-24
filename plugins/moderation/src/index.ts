@@ -88,6 +88,51 @@ async function sanction(
   return delivered;
 }
 
+/**
+ * Highest role position of a member (0: only @everyone). For the target (`strict`), a role
+ * of unknown position makes the whole answer unknown; for the moderator, such a role
+ * simply does not count. Either way an unknown position never helps the moderator.
+ */
+function topPosition(member: Member, strict: boolean): number | undefined {
+  let top = 0;
+  for (const role of member.roles) {
+    if (role.position === undefined) {
+      if (strict) return undefined;
+    } else if (role.position > top) top = role.position;
+  }
+  return top;
+}
+
+const UNVERIFIABLE =
+  "I cannot check the role hierarchy right now (server roles or owner not loaded yet): try again in a moment.";
+
+/**
+ * Discord only checks the bot's role hierarchy, so the plugin checks the moderator's: the
+ * server owner may moderate anyone; nobody may moderate the owner; members with the
+ * moderator or admin access level (spec.access) can only be moderated by an admin; and the
+ * moderator's highest role must be strictly above the target's. Anything that cannot be
+ * verified (an older engine, roles not cached) is refused.
+ */
+function hierarchyProblem(
+  ownerId: string | undefined,
+  moderator: Member | undefined,
+  member: Member,
+): string | undefined {
+  if (ownerId === undefined) return UNVERIFIABLE;
+  if (member.id === ownerId) return "You cannot moderate the server owner.";
+  if (moderator?.id === ownerId) return undefined;
+  if (!moderator) return "Moderation commands can only be used by members of the server.";
+  if (member.access === undefined || moderator.access === undefined) return UNVERIFIABLE;
+  if (member.access !== "member" && moderator.access !== "admin")
+    return `${member.mention} is staff (${member.access} access): only an admin can moderate them.`;
+  const theirs = topPosition(member, true);
+  if (theirs === undefined) return UNVERIFIABLE;
+  const mine = topPosition(moderator, false) ?? 0;
+  if (mine <= theirs)
+    return `You cannot moderate ${member.mention}: their highest role is not below yours.`;
+  return undefined;
+}
+
 /** Resolves the target of a moderation command, or answers why it cannot be moderated. */
 async function target(
   ctx: Context,
@@ -99,8 +144,9 @@ async function target(
   if (!member) problem = "This user is not a member of the server.";
   else if (member.id === interaction.user.id) problem = "You cannot moderate yourself.";
   else if (member.user.bot) problem = "Bots cannot be moderated with these commands.";
+  else problem = hierarchyProblem(ctx.server.ownerId, interaction.member, member);
   if (problem) {
-    await interaction.reply(problem);
+    await interaction.reply({ content: problem, ephemeral: true });
     return undefined;
   }
   return member;

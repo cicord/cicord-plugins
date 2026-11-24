@@ -3,7 +3,7 @@ apiVersion: cicord.dev/v1alpha1
 kind: Plugin
 metadata:
   name: moderation
-  version: 0.1.0
+  version: 0.1.1
   displayName: Moderation
   description: /warn, /timeout, /kick and /ban with an audit log, expiring warnings, automatic escalation, flood protection, member DMs and an optional Slack or Discord webhook.
   license: Apache-2.0

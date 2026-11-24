@@ -22,18 +22,37 @@ const grants = [
   "events.publish",
 ];
 
-function setup(config: Record<string, unknown> = {}, fetch?: TestContextOptions["fetch"]) {
+function setup(
+  config: Record<string, unknown> = {},
+  fetch?: TestContextOptions["fetch"],
+  server: TestContextOptions["server"] = { ownerId: "100" },
+) {
   return createTestContext({
     schema,
     config: { logChannel: "mod-log", ...config },
     grants,
     plugin: { name: "moderation" },
-    server: { name: "Showcase" },
-    roles: { mod: { name: "Moderator" }, member: { name: "Member" } },
+    server: { name: "Showcase", ...server },
+    // Role hierarchy: admin 10 > senior 7 > mod = vip 5 > member 1.
+    roles: {
+      admin: { name: "Admin", position: 10, permissions: ["Administrator"] },
+      senior: { name: "Senior", position: 7 },
+      mod: { name: "Moderator", position: 5, permissions: ["ModerateMembers", "KickMembers"] },
+      vip: { name: "VIP", position: 5 },
+      member: { name: "Member", position: 1 },
+    },
+    // servers/<server>.yaml spec.access
+    access: { admins: { roles: ["admin"] }, moderators: { roles: ["mod"] } },
     channels: { "mod-log": { name: "mod-log" }, general: { name: "general" } },
     members: [
       { id: "1", username: "mia", roles: ["mod"] },
       { id: "2", username: "troll", roles: ["member"] },
+      { id: "3", username: "max", roles: ["mod", "member"] },
+      { id: "4", username: "sam", roles: ["senior"] },
+      { id: "5", username: "vic", roles: ["vip"] },
+      { id: "6", username: "ada", roles: ["admin"] },
+      { id: "7", username: "abe", roles: ["admin"] },
+      { id: "100", username: "owner" },
       { id: "9", username: "helper-bot", bot: true },
     ],
     ...(fetch ? { fetch } : {}),
@@ -127,13 +146,97 @@ describe("/warn", () => {
       user: "1",
       options: { member: user(t, "1"), reason: "x" },
     });
-    expect(self.replies).toEqual(["You cannot moderate yourself."]);
+    expect(self.replies).toEqual([{ content: "You cannot moderate yourself.", ephemeral: true }]);
     const bot = await runCommand(plugin, t, "warn", {
       user: "1",
       options: { member: user(t, "9"), reason: "x" },
     });
-    expect(bot.replies).toEqual(["Bots cannot be moderated with these commands."]);
+    expect(bot.replies).toEqual([
+      { content: "Bots cannot be moderated with these commands.", ephemeral: true },
+    ]);
     expect(t.sent).toEqual([]);
+  });
+});
+
+describe("role hierarchy and staff", () => {
+  const refused = (content: string) => [{ content, ephemeral: true }];
+  const act = (t: Harness, by: string, command: "warn" | "kick" | "ban" | "timeout", on: string) =>
+    runCommand(plugin, t, command, {
+      user: by,
+      options: {
+        member: user(t, on),
+        reason: "x",
+        ...(command === "timeout" ? { duration: 10 } : {}),
+      },
+    });
+
+  test("a moderator cannot act on a member ranked above them or at the same height", async () => {
+    const t = setup();
+    for (const command of ["warn", "timeout", "kick", "ban"] as const) {
+      expect((await act(t, "1", command, "4")).replies).toEqual(
+        refused("You cannot moderate <@4>: their highest role is not below yours."),
+      );
+      expect((await act(t, "1", command, "5")).replies).toEqual(
+        refused("You cannot moderate <@5>: their highest role is not below yours."),
+      );
+    }
+    expect(t.moderation).toEqual([]);
+    expect(t.sent).toEqual([]);
+    expect(t.kv.size).toBe(0);
+  });
+
+  test("a moderator cannot act on staff (moderator or admin access), even ranked below", async () => {
+    const t = setup();
+    expect((await act(t, "1", "kick", "3")).replies).toEqual(
+      refused("<@3> is staff (moderator access): only an admin can moderate them."),
+    );
+    expect((await act(t, "1", "ban", "6")).replies).toEqual(
+      refused("<@6> is staff (admin access): only an admin can moderate them."),
+    );
+    expect(t.moderation).toEqual([]);
+  });
+
+  test("a moderator can act on a member ranked below them", async () => {
+    const t = setup({ dmMembers: false });
+    expect((await act(t, "1", "kick", "2")).replies).toEqual(["👢 <@2> was kicked."]);
+    expect(t.moderation).toEqual([{ member: "2", action: "kick", reason: "mia: x" }]);
+  });
+
+  test("an admin can act on members and moderators ranked below, not on an equal admin", async () => {
+    const t = setup({ dmMembers: false });
+    expect((await act(t, "6", "timeout", "1")).replies).toEqual([
+      "⏳ <@1> is timed out for 10 min.",
+    ]);
+    expect((await act(t, "6", "kick", "4")).replies).toEqual(["👢 <@4> was kicked."]);
+    expect((await act(t, "6", "ban", "7")).replies).toEqual(
+      refused("You cannot moderate <@7>: their highest role is not below yours."),
+    );
+    expect(t.moderation.map((m) => [m.member, m.action])).toEqual([
+      ["1", "timeout"],
+      ["4", "kick"],
+    ]);
+  });
+
+  test("the owner can act on anyone (even without roles); nobody can act on the owner", async () => {
+    const t = setup({ dmMembers: false });
+    expect((await act(t, "100", "ban", "6")).replies).toEqual(["🔨 <@6> was banned."]);
+    expect((await act(t, "7", "ban", "100")).replies).toEqual(
+      refused("You cannot moderate the server owner."),
+    );
+    expect((await act(t, "1", "warn", "100")).replies).toEqual(
+      refused("You cannot moderate the server owner."),
+    );
+    expect(t.moderation.map((m) => [m.member, m.action])).toEqual([["6", "ban"]]);
+  });
+
+  test("refuses when the hierarchy cannot be verified (owner unknown)", async () => {
+    const t = setup({}, undefined, {});
+    expect((await act(t, "1", "warn", "2")).replies).toEqual(
+      refused(
+        "I cannot check the role hierarchy right now (server roles or owner not loaded yet): try again in a moment.",
+      ),
+    );
+    expect(t.kv.size).toBe(0);
   });
 });
 
