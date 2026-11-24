@@ -132,3 +132,17 @@ plugins:
     verified: true
     repo: https://github.com/cicord/cicord-plugins
     version: 0.1.0
+  github-releases:
+    commit: 1095d841b81073cfd08725d56f50154b3f5a02a8
+    description: Announces the releases of public GitHub repositories in your channels, with the release notes, an optional role ping and pre-releases on request. /changelog shows the latest release of a repository or checks now.
+    displayName: GitHub releases
+    keywords:
+      - github
+      - releases
+      - changelog
+      - announcements
+    path: plugins/github-releases
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins
+    version: 0.1.0
