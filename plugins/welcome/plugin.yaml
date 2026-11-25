@@ -3,7 +3,7 @@ apiVersion: cicord.dev/v1alpha1
 kind: Plugin
 metadata:
   name: welcome
-  version: 0.1.0
+  version: 0.1.1
   displayName: Welcome
   description: Greets new members, gives them a default role and sends an onboarding link.
   license: Apache-2.0
