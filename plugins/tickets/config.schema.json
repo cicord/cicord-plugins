@@ -15,7 +15,7 @@
       "x-cicord-ref": "category"
     },
     "staffRoles": {
-      "description": "Roles that see every ticket and can close them.",
+      "description": "Roles that see every ticket and can close them (the server owner and Cicord admins count as staff too). To use the staff portal routes they also need the moderator access level (spec.access.moderators of the server).",
       "type": "array",
       "items": { "type": "string" },
       "uniqueItems": true,
@@ -68,6 +68,43 @@
       "minimum": 1,
       "maximum": 10,
       "default": 1,
+      "x-cicord-access": "moderator"
+    },
+    "labels": {
+      "description": "Labels members pick when they open a ticket from the portal, and staff set on tickets. Tickets store the key: renaming a label keeps them, changing its key does not.",
+      "type": "array",
+      "maxItems": 25,
+      "items": {
+        "type": "object",
+        "required": ["key", "name"],
+        "properties": {
+          "key": {
+            "description": "Stable identifier: lowercase letters, digits and dashes.",
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+          },
+          "name": {
+            "description": "Shown to members and staff.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 50
+          },
+          "emoji": {
+            "description": "Optional emoji shown before the name.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          }
+        },
+        "additionalProperties": false
+      },
+      "default": [
+        { "key": "question", "name": "Question", "emoji": "❓" },
+        { "key": "bug", "name": "Bug", "emoji": "🐛" },
+        { "key": "self-hosting", "name": "Self-hosting", "emoji": "🖥️" },
+        { "key": "plugin", "name": "Plugin", "emoji": "🧩" },
+        { "key": "other", "name": "Other" }
+      ],
       "x-cicord-access": "moderator"
     }
   },

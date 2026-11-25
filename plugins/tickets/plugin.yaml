@@ -3,22 +3,31 @@ apiVersion: cicord.dev/v1alpha1
 kind: Plugin
 metadata:
   name: tickets
-  version: 0.1.0
+  version: 0.2.0
   displayName: Tickets
-  description: Support tickets in private channels. Members open a ticket from a panel button and a short form; staff and the member talk in a channel only they can see; closing it posts a summary to the staff log.
+  description: Support tickets in private channels, opened from a panel button or the community portal. Members follow theirs on the portal; staff manage the queue there (assignee, priority, labels, replies) and read ticket channels (MessageContent). Closing posts a summary to the staff log.
   license: Apache-2.0
   keywords: [tickets, support, helpdesk, portal]
 spec:
-  engine: ">=0.1.0"
+  engine: ">=0.1.5"   # role.members(), message.embeds
   entry: ./src/index.ts
   capabilities:
-    - discord.messages.send     # panel, welcome message, log summary
-    - discord.messages.read     # participants and message count for the summary
+    - discord.messages.send     # panel, welcome message, notices, portal replies, log summary
+    - discord.messages.read     # summary (participants, count); last 50 messages for the staff portal
     - discord.channels.read
     - discord.channels.manage   # ticket channels (plugin-owned)
+    - discord.members.read      # check that an assignee is staff; GET /staff lists the staff roles' members
     - storage.kv
-    - portal.routes             # GET /tickets for the staff portal
-  # Last activity of each ticket. No MessageContent: the plugin never reads what people write.
-  intents: [ServerMessages]
+    - portal.routes             # member and staff routes (src/routes.ts)
+  # ServerMessages: last activity of each ticket (who and when).
+  # MessageContent: the SDK blanks `content` of channel.messages() for a plugin that does not
+  # declare it, even when the bot has it. Only GET /tickets/:id (staff) reads it: the last
+  # 50 messages of a ticket channel, at request time, for the staff portal. Nothing of it is
+  # stored.
+  # ServerMembers (privileged): GET /staff lists the members of the staff roles
+  # (role.members(), which lists the server's members). The community bot has it enabled.
+  intents: [ServerMessages, MessageContent, ServerMembers]
   config:
     schema: ./config.schema.json
+  routes:
+    types: ./src/routes.ts       # portal contract (cicord portal typegen)
