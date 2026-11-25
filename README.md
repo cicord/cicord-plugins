@@ -16,6 +16,7 @@ accepted by review, in one repository, with a **signed** index.
 | [`audit-log`](plugins/audit-log) | Posts server events to a staff log channel in compact batched embeds. Joins and leaves, role and nickname changes, message edits and deletions, moderation cases and closed polls from the other plugins. Each category can be turned off or sent to its own channel. |
 | [`announcements`](plugins/announcements) | Recurring or one-off announcements from the config (cron, interval or date, in your time zone), and /announce for moderators to schedule, list and cancel their own. Mentions ping only who you say. |
 | [`github-releases`](plugins/github-releases) | Announces the releases of public GitHub repositories in your channels, with the release notes, an optional role ping and pre-releases on request. /changelog shows the latest release of a repository or checks now. |
+| [`voice-rooms`](plugins/voice-rooms) | Voice channels on demand ("join to create"): joining a hub channel such as "➕ Create a channel" gives the member a voice channel of their own, deleted once empty. Several hubs, each with its name template, category, user limit and allowed roles. Owners manage their room with `/voice` (rename, limit, lock, permit, kick, transfer, claim). |
 
 ## Install a plugin
 

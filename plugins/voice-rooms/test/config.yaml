@@ -1,0 +1,10 @@
+# Config of `cicord plugin test plugins/voice-rooms --config plugins/voice-rooms/test/config.yaml`
+# (hubs is required). Channel, category and role keys are created on the simulator's test server.
+hubs:
+  - channel: create-room
+  - channel: create-guild-room
+    name: "Guild #{n}"
+    category: guilds
+    userLimit: 5
+    allowedRoles: [guild]
+staffRoles: [staff]
