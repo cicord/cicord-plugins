@@ -8,7 +8,7 @@ accepted by review, in one repository, with a **signed** index.
 |---|---|
 | [`welcome`](plugins/welcome) | Greets new members, gives them a default role and sends an onboarding link. |
 | [`onboarding`](plugins/onboarding) | Step-by-step role picking on the community portal (games, platforms, notifications…), with a /onboarding command that links to it. |
-| [`tickets`](plugins/tickets) | Support tickets in private channels. Members open a ticket from a panel button and a short form; staff and the member talk in a channel only they can see; closing it posts a summary to the staff log. |
+| [`tickets`](plugins/tickets) | Support tickets in private channels. Members open a ticket from a panel button and a short form, or from the community portal, where they follow their tickets; staff and the member talk in a channel only they can see; staff manage the queue on the portal (assignee, priority, labels, replies, close and reopen); closing it posts a summary to the staff log. |
 | [`polls`](plugins/polls) | Quick polls with buttons or a select menu, live results, automatic closing and an optional discussion thread. Publishes polls.closed for other plugins. |
 | [`levels`](plugins/levels) | XP and levels for chatting, receiving reactions and voting in polls. Level-up announcements, role rewards, /rank, /top, a daily recap and a public leaderboard on the community portal. |
 | [`moderation`](plugins/moderation) | /warn, /timeout, /kick and /ban with an audit log, expiring warnings, automatic escalation, flood protection, member DMs and an optional Slack or Discord webhook. |

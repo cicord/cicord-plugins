@@ -14,6 +14,11 @@ declare module "@cicord/sdk" {
     welcomeMessage: string;
     channelName: string;
     maxOpenPerMember: number;
+    labels: {
+      key: string;
+      name: string;
+      emoji?: string;
+    }[];
   }
 }
 export {};

@@ -1,42 +1,48 @@
 import {
   command,
   definePlugin,
+  defineRoutes,
   type ComponentInteraction,
   type Context,
-  type Json,
-  type Permission,
-  type RouteResponse,
+  type Member,
+  type RouteEnvelope,
+  type User,
 } from "@cicord/sdk";
+import type { Person, Priority, Routes } from "./routes.ts";
 import {
+  PRIORITIES,
   activityKey,
+  addEvent,
   channelKey,
-  channelName,
-  closeButton,
+  closeTicket,
+  escapeMarkdown,
   getTicket,
+  isLabel,
   isStaff,
   lastActivityKey,
+  listStaff,
   listTickets,
+  myDetail,
+  myTickets,
+  myView,
+  notice,
   numberOf,
-  openKey,
+  openTicket,
   openTickets,
   panelMessage,
   person,
-  render,
+  postReply,
+  rememberStaff,
+  reopenTicket,
   saveTicket,
-  summaryEmbed,
-  type Person,
+  staffDetail,
+  staffView,
+  ticketChannel,
   type Ticket,
+  type TicketFilters,
 } from "./tickets.ts";
 
-const TICKET_PERMS: Permission[] = [
-  "ViewChannel",
-  "SendMessages",
-  "ReadMessageHistory",
-  "AttachFiles",
-  "EmbedLinks",
-];
-
-/** The opener and the staff roles may close a ticket. */
+/** The opener and the staff may close a ticket. */
 async function closable(
   ctx: Context,
   interaction: ComponentInteraction,
@@ -56,6 +62,77 @@ async function closable(
   }
   return ticket;
 }
+
+// ───────────────────────────────────────────────────────────── route helpers
+
+type Viewer = { readonly user: User; readonly member?: Member } | undefined;
+
+function fail(status: number, code: string, message: string): RouteEnvelope {
+  return { status, body: { error: { code, message } } };
+}
+
+function failed(x: unknown): x is RouteEnvelope {
+  return typeof x === "object" && x !== null && "status" in x && typeof x.status === "number";
+}
+
+/** The viewer when they are staff (actions are attributed to them), else 403. */
+function staffViewer(ctx: Context, viewer: Viewer): Person | RouteEnvelope {
+  if (!viewer?.member || !isStaff(ctx, viewer.member))
+    return fail(403, "forbidden", "only the ticket staff can do this");
+  return person(viewer.user, viewer.member);
+}
+
+/**
+ * Read-only staff routes: a viewer must be staff; a call without a viewer is the runtime's
+ * own token (admin, checked by the runtime), accepted as in 0.1.
+ */
+function staffReader(ctx: Context, viewer: Viewer): Person | null | RouteEnvelope {
+  return viewer ? staffViewer(ctx, viewer) : null;
+}
+
+function memberViewer(viewer: Viewer): { user: User; member: Member } | RouteEnvelope {
+  if (!viewer?.member) return fail(403, "forbidden", "members only");
+  return { user: viewer.user, member: viewer.member };
+}
+
+async function ticketById(ctx: Context, id: string): Promise<Ticket | RouteEnvelope> {
+  const ticket = /^[1-9]\d{0,9}$/.test(id) ? await getTicket(ctx, Number(id)) : undefined;
+  return ticket ?? fail(404, "not_found", "no such ticket");
+}
+
+/** A JSON object with only `allowed` keys (no body counts as `{}` when `optional`). */
+function objectBody(
+  body: unknown,
+  allowed: readonly string[],
+  optional = false,
+): Record<string, unknown> | RouteEnvelope {
+  if (body === undefined && optional) return {};
+  if (typeof body !== "object" || body === null || Array.isArray(body))
+    return fail(400, "invalid", "the body must be a JSON object");
+  const unknown = Object.keys(body).filter((k) => !allowed.includes(k));
+  if (unknown.length > 0) return fail(400, "invalid", `unknown field: ${unknown.join(", ")}`);
+  return body as Record<string, unknown>;
+}
+
+/** A string of `min`..`max` characters once trimmed. */
+function text(value: unknown, field: string, min: number, max: number): string | RouteEnvelope {
+  if (typeof value !== "string") return fail(400, "invalid", `${field} must be a string`);
+  const s = value.trim();
+  if (s.length < min || s.length > max)
+    return fail(400, "invalid", `${field} must be ${min} to ${max} characters`);
+  return s;
+}
+
+function labelValue(ctx: Context, value: unknown): string | null | RouteEnvelope {
+  if (value === null) return null;
+  if (typeof value !== "string" || !isLabel(ctx, value))
+    return fail(400, "invalid", "label must be one of the configured labels, or null");
+  return value;
+}
+
+const isPriority = (v: unknown): v is Priority => PRIORITIES.includes(v as Priority);
+const USER_ID = /^\d{1,20}$/;
+const PRIORITY_LIST = PRIORITIES.join(", ");
 
 export default definePlugin({
   onStart(ctx) {
@@ -158,51 +235,9 @@ export default definePlugin({
       if (!ticket) return;
       // Answer first: the channel (and this message) is about to disappear.
       await interaction.update({ content: `Closing ticket #${ticket.number}…`, components: [] });
-
-      const participants = new Map<string, Person>();
-      let messages = 0;
-      try {
-        const history = await ctx.server.channel({ id: ticket.channelId }).messages({ limit: 100 });
-        for (const m of history) {
-          if (m.author.bot) continue;
-          messages++;
-          participants.set(m.author.id, person(m.author, m.member));
-        }
-      } catch (error) {
-        ctx.log.warn("tickets: could not read the ticket history", {
-          ticket: ticket.number,
-          error: String(error),
-        });
-      }
-
-      const closed: Ticket = {
-        ...ticket,
-        status: "closed",
-        closedAt: new Date().toISOString(),
-        closedBy: person(interaction.user, interaction.member),
-        summary: { messages, participants: [...participants.values()] },
-      };
-      await saveTicket(ctx, closed);
-      await ctx.kv.delete(openKey(ticket.author.id, ticket.number));
-      await ctx.kv.delete(channelKey(ticket.channelId));
-      await ctx.kv.delete(activityKey(ticket.number));
-      await ctx.kv.increment("stats:closed");
-
-      if (ctx.config.logChannel) {
-        await ctx.server.channel(ctx.config.logChannel).send({
-          embeds: [summaryEmbed(closed)],
-          allowedMentions: { users: false, roles: false, everyone: false },
-        });
-      }
-      try {
-        await ctx.server.deleteChannel({ id: ticket.channelId }, `ticket #${ticket.number} closed`);
-      } catch (error) {
-        ctx.log.warn("tickets: could not delete the ticket channel", {
-          ticket: ticket.number,
-          error: String(error),
-        });
-      }
-      ctx.log.info("ticket closed", { ticket: ticket.number, by: interaction.user.id, messages });
+      const by = person(interaction.user, interaction.member);
+      if (isStaff(ctx, interaction.member)) await rememberStaff(ctx, by);
+      await closeTicket(ctx, ticket, by);
     },
   },
 
@@ -215,100 +250,265 @@ export default definePlugin({
         await interaction.reply("You already have an open ticket.");
         return;
       }
-      const subject = (interaction.fields["subject"] ?? "").trim() || "Ticket";
-      const description = (interaction.fields["description"] ?? "").trim();
-      const author = person(user, interaction.member);
-      const number = await ctx.kv.increment("seq");
-
-      // Keys: "@everyone", a role key, "role:<id>" or "member:<id>".
-      const overwrites: Record<string, { allow?: Permission[]; deny?: Permission[] }> = {
-        "@everyone": { deny: ["ViewChannel"] },
-        [`member:${user.id}`]: { allow: [...TICKET_PERMS] },
-        // The bot keeps access even without Administrator.
-        [`member:${ctx.bot.user.id}`]: { allow: [...TICKET_PERMS, "ManageChannels"] },
-      };
-      for (const role of ctx.config.staffRoles) overwrites[role] = { allow: [...TICKET_PERMS] };
-
-      const channel = await ctx.server.createChannel({
-        name: channelName(ctx.config.channelName, number, author.displayName),
-        ...(ctx.config.category ? { category: ctx.config.category } : {}),
-        topic: `#${number} · ${subject} · opened by ${author.displayName}`,
-        overwrites,
-      });
-
-      const ticket: Ticket = {
-        id: String(number),
-        number,
-        subject,
-        description,
-        status: "open",
-        author,
-        channelId: channel.id,
-        createdAt: new Date().toISOString(),
-      };
-      await saveTicket(ctx, ticket);
-      await ctx.kv.set(openKey(user.id, number), true);
-      await ctx.kv.set(channelKey(channel.id), number);
-      await ctx.kv.increment("stats:opened");
-
-      const staff =
-        ctx.config.staffRoles.map((r) => ctx.server.role(r).mention).join(" ") || "The team";
-      await channel.send({
-        content: render(ctx.config.welcomeMessage, {
-          member: user.mention,
-          staff,
-          subject,
-          number: String(number),
-        }),
-        embeds: [
-          {
-            title: `#${number} — ${subject}`,
-            description: description || "_No details._",
-            color: ctx.config.panel.color,
-          },
-        ],
-        components: closeButton(number),
-        allowedMentions: { users: true, roles: true },
+      const { channel } = await openTicket(ctx, {
+        user,
+        member: interaction.member,
+        subject: (interaction.fields["subject"] ?? "").trim() || "Ticket",
+        description: (interaction.fields["description"] ?? "").trim(),
+        label: null,
+        source: "discord",
       });
       await interaction.reply(`Your ticket is open: ${channel.mention}`);
-      ctx.log.info("ticket opened", { ticket: number, member: user.id, channel: channel.id });
     },
   },
 
   events: {
-    /** Activity of ticket channels (no MessageContent needed: only who and when). */
+    /** Activity of ticket channels: who and when, never what (the content is not stored). */
     async messageCreate(ctx, message) {
       if (message.author.bot) return;
       const n = await ctx.kv.get<number>(channelKey(message.channel.id));
       if (n === undefined) return;
       await ctx.kv.increment(activityKey(n));
       await ctx.kv.set(lastActivityKey(n), message.createdAt.toISOString());
+      if (isStaff(ctx, message.member))
+        await rememberStaff(ctx, person(message.author, message.member));
     },
   },
 
-  routes: {
-    /** Tickets for the staff portal, newest first. `?status=open|closed`. */
+  // Literal paths before parameters: the runtime prefers them anyway, the test harness takes
+  // the first route that matches.
+  routes: defineRoutes<Routes>({
+    // ── members: their own tickets
+
+    "GET /tickets/mine": {
+      access: "member",
+      async handler(ctx, request) {
+        const viewer = memberViewer(request.viewer);
+        if (failed(viewer)) return viewer;
+        return { items: await myTickets(ctx, viewer.user.id) };
+      },
+    },
+
+    "GET /tickets/mine/:id": {
+      access: "member",
+      async handler(ctx, request) {
+        const viewer = memberViewer(request.viewer);
+        if (failed(viewer)) return viewer;
+        const ticket = await ticketById(ctx, request.params.id);
+        // Someone else's ticket does not exist for the viewer.
+        if (failed(ticket) || ticket.author.id !== viewer.user.id)
+          return fail(404, "not_found", "no such ticket");
+        return myDetail(ctx, ticket);
+      },
+    },
+
+    "POST /tickets": {
+      access: "member",
+      async handler(ctx, request) {
+        const viewer = memberViewer(request.viewer);
+        if (failed(viewer)) return viewer;
+        const body = objectBody(request.body, ["subject", "description", "label"]);
+        if (failed(body)) return body;
+        const subject = text(body["subject"], "subject", 3, 100);
+        if (failed(subject)) return subject;
+        const description = text(body["description"], "description", 10, 1000);
+        if (failed(description)) return description;
+        const label = body["label"] === undefined ? null : labelValue(ctx, body["label"]);
+        if (failed(label)) return label;
+        const open = await openTickets(ctx, viewer.user.id);
+        if (open.length >= ctx.config.maxOpenPerMember)
+          return fail(409, "limit", `you already have ${open.length} open ticket(s)`);
+        const { ticket } = await openTicket(ctx, {
+          user: viewer.user,
+          member: viewer.member,
+          subject,
+          description,
+          label,
+          source: "portal",
+        });
+        return { status: 201, body: await myView(ctx, ticket) };
+      },
+    },
+
+    // ── staff: a staff role, the server owner or a Cicord admin
+
     "GET /tickets": {
       access: "moderator",
-      async handler(ctx, request): Promise<RouteResponse> {
-        const status = request.query["status"];
-        if (status !== undefined && status !== "open" && status !== "closed") {
-          return {
-            status: 400,
-            body: { error: { code: "invalid", message: "status must be open or closed" } },
-          };
+      async handler(ctx, request) {
+        const reader = staffReader(ctx, request.viewer);
+        if (failed(reader)) return reader;
+        const { status, assignee, priority, label } = request.query;
+        const f: TicketFilters = {};
+        if (status !== undefined) {
+          if (status !== "open" && status !== "closed")
+            return fail(400, "invalid", "status must be open or closed");
+          f.status = status;
         }
-        return { items: (await listTickets(ctx, status)) as unknown as Json };
+        if (assignee !== undefined) {
+          if (assignee === "none") f.assignee = null;
+          else if (assignee === "me") {
+            if (!reader) return fail(400, "invalid", "assignee=me needs a portal viewer");
+            f.assignee = reader.id;
+          } else if (USER_ID.test(assignee)) f.assignee = assignee;
+          else return fail(400, "invalid", "assignee must be a user id, me or none");
+        }
+        if (priority !== undefined) {
+          if (!isPriority(priority))
+            return fail(400, "invalid", `priority must be one of ${PRIORITY_LIST}`);
+          f.priority = priority;
+        }
+        if (label !== undefined) {
+          if (label === "none") f.label = null;
+          else if (isLabel(ctx, label)) f.label = label;
+          else return fail(400, "invalid", "label must be a configured label key or none");
+        }
+        if (reader) await rememberStaff(ctx, reader);
+        return { items: await listTickets(ctx, f) };
       },
     },
+
     "GET /tickets/:id": {
       access: "moderator",
-      async handler(ctx, request): Promise<RouteResponse> {
-        const ticket = await getTicket(ctx, Number(request.params["id"]));
-        if (!ticket)
-          return { status: 404, body: { error: { code: "not_found", message: "no such ticket" } } };
-        return ticket as unknown as Json;
+      async handler(ctx, request) {
+        const reader = staffReader(ctx, request.viewer);
+        if (failed(reader)) return reader;
+        const ticket = await ticketById(ctx, request.params.id);
+        if (failed(ticket)) return ticket;
+        return staffDetail(ctx, ticket);
       },
     },
-  },
+
+    "GET /staff": {
+      access: "moderator",
+      async handler(ctx, request) {
+        const reader = staffReader(ctx, request.viewer);
+        if (failed(reader)) return reader;
+        if (reader) await rememberStaff(ctx, reader);
+        return { items: await listStaff(ctx) };
+      },
+    },
+
+    "POST /tickets/:id/assign": {
+      access: "moderator",
+      async handler(ctx, request) {
+        const me = staffViewer(ctx, request.viewer);
+        if (failed(me)) return me;
+        const ticket = await ticketById(ctx, request.params.id);
+        if (failed(ticket)) return ticket;
+        const body = objectBody(request.body, ["userId"]);
+        if (failed(body)) return body;
+        const userId = body["userId"];
+        let assignee: Person | null;
+        if (userId === null) assignee = null;
+        else if (userId === "me") assignee = me;
+        else if (typeof userId === "string" && USER_ID.test(userId)) {
+          const member = await ctx.server.member(userId);
+          if (!member) return fail(400, "invalid", "no such member");
+          if (!isStaff(ctx, member)) return fail(400, "invalid", "the assignee must be staff");
+          assignee = person(member.user, member);
+        } else return fail(400, "invalid", "userId must be a user id, me or null");
+        await rememberStaff(ctx, me);
+
+        if ((ticket.assignee?.id ?? null) !== (assignee?.id ?? null)) {
+          ticket.assignee = assignee;
+          if (assignee) {
+            await rememberStaff(ctx, assignee);
+            addEvent(ticket, "assigned", me, assignee.displayName);
+          } else addEvent(ticket, "unassigned", me);
+          await saveTicket(ctx, ticket);
+          await notice(
+            ctx,
+            ticket,
+            assignee
+              ? `Assigned to **${escapeMarkdown(assignee.displayName)}**.`
+              : `Unassigned by **${escapeMarkdown(me.displayName)}**.`,
+          );
+        }
+        return staffView(ctx, ticket);
+      },
+    },
+
+    "PATCH /tickets/:id": {
+      access: "moderator",
+      async handler(ctx, request) {
+        const me = staffViewer(ctx, request.viewer);
+        if (failed(me)) return me;
+        const ticket = await ticketById(ctx, request.params.id);
+        if (failed(ticket)) return ticket;
+        const body = objectBody(request.body, ["priority", "label"]);
+        if (failed(body)) return body;
+        if (body["priority"] === undefined && body["label"] === undefined)
+          return fail(400, "invalid", "nothing to change: give priority or label");
+        const priority = body["priority"];
+        if (priority !== undefined && !isPriority(priority))
+          return fail(400, "invalid", `priority must be one of ${PRIORITY_LIST}`);
+        const label = body["label"] === undefined ? undefined : labelValue(ctx, body["label"]);
+        if (failed(label)) return label;
+        await rememberStaff(ctx, me);
+
+        let changed = false;
+        if (priority !== undefined && priority !== ticket.priority) {
+          ticket.priority = priority;
+          addEvent(ticket, "priority", me, priority);
+          changed = true;
+        }
+        if (label !== undefined && label !== ticket.label) {
+          ticket.label = label;
+          addEvent(ticket, "label", me, label ?? "none");
+          changed = true;
+        }
+        if (changed) await saveTicket(ctx, ticket);
+        return staffView(ctx, ticket);
+      },
+    },
+
+    "POST /tickets/:id/close": {
+      access: "moderator",
+      async handler(ctx, request) {
+        const me = staffViewer(ctx, request.viewer);
+        if (failed(me)) return me;
+        const ticket = await ticketById(ctx, request.params.id);
+        if (failed(ticket)) return ticket;
+        const body = objectBody(request.body, ["reason"], true);
+        if (failed(body)) return body;
+        const reason = body["reason"] === undefined ? "" : text(body["reason"], "reason", 0, 500);
+        if (failed(reason)) return reason;
+        if (ticket.status !== "open") return fail(409, "closed", "the ticket is already closed");
+        await rememberStaff(ctx, me);
+        return staffView(ctx, await closeTicket(ctx, ticket, me, reason || undefined));
+      },
+    },
+
+    "POST /tickets/:id/reopen": {
+      access: "moderator",
+      async handler(ctx, request) {
+        const me = staffViewer(ctx, request.viewer);
+        if (failed(me)) return me;
+        const ticket = await ticketById(ctx, request.params.id);
+        if (failed(ticket)) return ticket;
+        if (ticket.status === "open") return fail(409, "open", "the ticket is already open");
+        await rememberStaff(ctx, me);
+        return staffView(ctx, await reopenTicket(ctx, ticket, me));
+      },
+    },
+
+    "POST /tickets/:id/messages": {
+      access: "moderator",
+      async handler(ctx, request) {
+        const me = staffViewer(ctx, request.viewer);
+        if (failed(me)) return me;
+        const ticket = await ticketById(ctx, request.params.id);
+        if (failed(ticket)) return ticket;
+        const body = objectBody(request.body, ["content"]);
+        if (failed(body)) return body;
+        const content = text(body["content"], "content", 1, 2000);
+        if (failed(content)) return content;
+        if (ticket.status !== "open") return fail(409, "closed", "the ticket is closed");
+        if (!ticketChannel(ctx, ticket))
+          return fail(409, "closed", "the ticket channel no longer exists");
+        await rememberStaff(ctx, me);
+        return { status: 201, body: { id: await postReply(ctx, ticket, me, content) } };
+      },
+    },
+  }),
 });
