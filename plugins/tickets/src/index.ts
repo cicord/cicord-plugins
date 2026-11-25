@@ -33,7 +33,6 @@ import {
   panelMessage,
   person,
   postReply,
-  rememberStaff,
   reopenTicket,
   saveTicket,
   staffDetail,
@@ -236,7 +235,6 @@ export default definePlugin({
       // Answer first: the channel (and this message) is about to disappear.
       await interaction.update({ content: `Closing ticket #${ticket.number}…`, components: [] });
       const by = person(interaction.user, interaction.member);
-      if (isStaff(ctx, interaction.member)) await rememberStaff(ctx, by);
       await closeTicket(ctx, ticket, by);
     },
   },
@@ -270,8 +268,6 @@ export default definePlugin({
       if (n === undefined) return;
       await ctx.kv.increment(activityKey(n));
       await ctx.kv.set(lastActivityKey(n), message.createdAt.toISOString());
-      if (isStaff(ctx, message.member))
-        await rememberStaff(ctx, person(message.author, message.member));
     },
   },
 
@@ -362,7 +358,6 @@ export default definePlugin({
           else if (isLabel(ctx, label)) f.label = label;
           else return fail(400, "invalid", "label must be a configured label key or none");
         }
-        if (reader) await rememberStaff(ctx, reader);
         return { items: await listTickets(ctx, f) };
       },
     },
@@ -383,8 +378,7 @@ export default definePlugin({
       async handler(ctx, request) {
         const reader = staffReader(ctx, request.viewer);
         if (failed(reader)) return reader;
-        if (reader) await rememberStaff(ctx, reader);
-        return { items: await listStaff(ctx) };
+        return { items: await listStaff(ctx, reader) };
       },
     },
 
@@ -407,14 +401,11 @@ export default definePlugin({
           if (!isStaff(ctx, member)) return fail(400, "invalid", "the assignee must be staff");
           assignee = person(member.user, member);
         } else return fail(400, "invalid", "userId must be a user id, me or null");
-        await rememberStaff(ctx, me);
 
         if ((ticket.assignee?.id ?? null) !== (assignee?.id ?? null)) {
           ticket.assignee = assignee;
-          if (assignee) {
-            await rememberStaff(ctx, assignee);
-            addEvent(ticket, "assigned", me, assignee.displayName);
-          } else addEvent(ticket, "unassigned", me);
+          if (assignee) addEvent(ticket, "assigned", me, assignee.displayName);
+          else addEvent(ticket, "unassigned", me);
           await saveTicket(ctx, ticket);
           await notice(
             ctx,
@@ -444,7 +435,6 @@ export default definePlugin({
           return fail(400, "invalid", `priority must be one of ${PRIORITY_LIST}`);
         const label = body["label"] === undefined ? undefined : labelValue(ctx, body["label"]);
         if (failed(label)) return label;
-        await rememberStaff(ctx, me);
 
         let changed = false;
         if (priority !== undefined && priority !== ticket.priority) {
@@ -474,7 +464,6 @@ export default definePlugin({
         const reason = body["reason"] === undefined ? "" : text(body["reason"], "reason", 0, 500);
         if (failed(reason)) return reason;
         if (ticket.status !== "open") return fail(409, "closed", "the ticket is already closed");
-        await rememberStaff(ctx, me);
         return staffView(ctx, await closeTicket(ctx, ticket, me, reason || undefined));
       },
     },
@@ -487,7 +476,6 @@ export default definePlugin({
         const ticket = await ticketById(ctx, request.params.id);
         if (failed(ticket)) return ticket;
         if (ticket.status === "open") return fail(409, "open", "the ticket is already open");
-        await rememberStaff(ctx, me);
         return staffView(ctx, await reopenTicket(ctx, ticket, me));
       },
     },
@@ -506,7 +494,6 @@ export default definePlugin({
         if (ticket.status !== "open") return fail(409, "closed", "the ticket is closed");
         const channel = await liveChannel(ctx, ticket);
         if (!channel) return fail(409, "closed", "the ticket channel no longer exists");
-        await rememberStaff(ctx, me);
         return { status: 201, body: { id: await postReply(ctx, ticket, channel, me, content) } };
       },
     },

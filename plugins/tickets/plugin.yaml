@@ -16,7 +16,7 @@ spec:
     - discord.messages.read     # summary (participants, count); last 50 messages for the staff portal
     - discord.channels.read
     - discord.channels.manage   # ticket channels (plugin-owned)
-    - discord.members.read      # check that an assignee (and each GET /staff entry) is staff
+    - discord.members.read      # check that an assignee is staff; GET /staff lists the staff roles' members
     - storage.kv
     - portal.routes             # member and staff routes (src/routes.ts)
   # ServerMessages: last activity of each ticket (who and when).
@@ -24,7 +24,9 @@ spec:
   # declare it, even when the bot has it. Only GET /tickets/:id (staff) reads it: the last
   # 50 messages of a ticket channel, at request time, for the staff portal. Nothing of it is
   # stored.
-  intents: [ServerMessages, MessageContent]
+  # ServerMembers (privileged): GET /staff lists the members of the staff roles
+  # (role.members(), which lists the server's members). The community bot has it enabled.
+  intents: [ServerMessages, MessageContent, ServerMembers]
   config:
     schema: ./config.schema.json
   routes:

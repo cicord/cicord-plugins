@@ -74,8 +74,6 @@ export const lastActivityKey = (n: number): string => `last:${n}`;
 const authorKey = (userId: string, n: number): string => `author:${userId}:${pad(n)}`;
 /** Set once the author index covers the tickets written before 0.2. */
 const AUTHOR_INDEX = "index:authors";
-/** Members seen acting as staff (`GET /staff`): the SDK cannot list a role's members. */
-const staffKey = (userId: string): string => `staff:${userId}`;
 
 const TICKET_PERMS: Permission[] = [
   "ViewChannel",
@@ -215,31 +213,27 @@ export function isStaff(ctx: Context, member: Member | undefined): boolean {
   return ctx.config.staffRoles.some((r) => member.hasRole(r));
 }
 
-/** Remembers a staff member for `GET /staff` (written only when new or renamed). */
-export async function rememberStaff(ctx: Context, p: Person): Promise<void> {
-  const known = await ctx.kv.get<{ id: string; displayName: string }>(staffKey(p.id));
-  if (known?.displayName !== p.displayName)
-    await ctx.kv.set(staffKey(p.id), { id: p.id, displayName: p.displayName });
-}
+/** At most this many holders of each staff role are listed by `GET /staff`. */
+const MAX_STAFF_PER_ROLE = 1000;
 
-/** Staff members seen so far that still are staff (each one checked on Discord). */
-export async function listStaff(ctx: Context): Promise<Person[]> {
-  const { items } = await ctx.kv.list<{ id: string; displayName: string }>({
-    prefix: "staff:",
-    limit: 100,
-  });
-  const out: Person[] = [];
-  for (const { key, value } of items) {
-    const member = await ctx.server.member(value.id);
-    if (!member || !isStaff(ctx, member)) {
-      await ctx.kv.delete(key);
-      continue;
-    }
-    const p = person(member.user, member);
-    if (p.displayName !== value.displayName) await ctx.kv.set(key, { ...p });
-    out.push(p);
+/**
+ * Who can be assigned (`GET /staff`), by display name: the holders of the staff roles (bots
+ * excluded), the server owner, and `viewer` (a Cicord admin without a staff role can assign
+ * themselves). Other Cicord admins cannot be listed (spec.access is not visible to plugins).
+ */
+export async function listStaff(ctx: Context, viewer?: Person | null): Promise<Person[]> {
+  const byId = new Map<string, Person>();
+  for (const key of ctx.config.staffRoles) {
+    for (const m of await ctx.server.role(key).members({ limit: MAX_STAFF_PER_ROLE }))
+      if (!m.user.bot) byId.set(m.id, person(m.user, m));
   }
-  return out.sort((a, b) => a.displayName.localeCompare(b.displayName));
+  const ownerId = ctx.server.ownerId;
+  if (ownerId !== undefined && !byId.has(ownerId)) {
+    const owner = await ctx.server.member(ownerId);
+    if (owner) byId.set(owner.id, person(owner.user, owner));
+  }
+  if (viewer && !byId.has(viewer.id)) byId.set(viewer.id, viewer);
+  return [...byId.values()].sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
 // ───────────────────────────────────────────────────────────── labels

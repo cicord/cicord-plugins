@@ -35,6 +35,8 @@ function setup(config: Record<string, unknown> = {}) {
       ...config,
     },
     grants,
+    // As in plugin.yaml: GET /staff (role.members()) needs ServerMembers.
+    intents: ["ServerMessages", "MessageContent", "ServerMembers"],
     plugin: { name: "tickets" },
     server: { id: "100", ownerId: "9" },
     access: { admins: { users: ["6"] }, moderators: { roles: ["support", "mods"] } },
@@ -204,8 +206,6 @@ describe("closing", () => {
     expect([...t.kv.keys()].filter((k) => k.startsWith("open:"))).toEqual([]);
     // the member can open a new ticket again
     expect((await runComponent(plugin, t, "open", { user: "1" })).modal?.id).toBe("open");
-    // sam is now known as staff
-    expect(t.kv.get("staff:2")).toEqual({ id: "2", displayName: "sam" });
   });
 
   test("only the opener or the staff can close", async () => {
@@ -263,16 +263,6 @@ describe("portal route and activity", () => {
     });
     expect((await route(t, "GET /tickets/9", { viewer: "2" })).status).toBe(404);
     expect((await route(t, "GET /tickets")).status).toBe(401);
-  });
-
-  test("staff messages in a ticket channel make them assignable", async () => {
-    const t = setup();
-    await openTicket(t);
-    const channel = t.createdChannels[0]!.channel;
-    await plugin.events!.messageCreate!(t.ctx, messageIn(t, channel, "4"));
-    await plugin.events!.messageCreate!(t.ctx, messageIn(t, channel, "1"));
-    expect(t.kv.get("staff:4")).toEqual({ id: "4", displayName: "max" });
-    expect(t.kv.has("staff:1")).toBe(false);
   });
 });
 
@@ -565,19 +555,42 @@ describe("staff routes", () => {
     });
   });
 
-  test("GET /staff lists the staff seen so far, checked on Discord", async () => {
+  test("GET /staff lists the staff roles' members, the owner and the viewer", async () => {
     const t = await withTickets();
-    // eve was remembered by mistake (or lost her role): she is dropped
-    t.kv.set("staff:3", { id: "3", displayName: "eve" });
-    await plugin.events!.messageCreate!(t.ctx, messageIn(t, t.createdChannels[0]!.channel, "4"));
+    t.addMember({ id: "7", username: "helper-bot", bot: true, roles: ["support"] });
+    // sam and max (support), olga (owner); the support bot is not assignable
     const res = await route(t, "GET /staff", { viewer: "2" });
     expect(res.body).toEqual({
       items: [
         { id: "4", displayName: "max" },
+        { id: "9", displayName: "olga" },
         { id: "2", displayName: "sam" },
       ],
     });
-    expect(t.kv.has("staff:3")).toBe(false);
+    // a Cicord admin without a staff role sees themselves; a member who left is gone
+    t.removeMember("4");
+    const admin = await route(t, "GET /staff", { viewer: "6" });
+    expect((admin.body as { items: { id: string }[] }).items.map((p) => p.id)).toEqual([
+      "6",
+      "9",
+      "2",
+    ]);
+    // nothing is stored for it
+    expect([...t.kv.keys()].filter((k) => k.startsWith("staff:"))).toEqual([]);
+  });
+
+  test("GET /staff needs the ServerMembers intent", async () => {
+    const t = createTestContext({
+      schema,
+      config: { panelChannel: "help-desk", staffRoles: ["support"] },
+      grants,
+      intents: ["ServerMessages", "MessageContent"],
+      access: { moderators: { roles: ["support"] } },
+      roles: { support: { name: "Support" } },
+      channels: { "help-desk": { name: "help-desk" } },
+      members: [{ id: "2", username: "sam", roles: ["support"] }],
+    });
+    await expect(route(t, "GET /staff", { viewer: "2" })).rejects.toThrow(/ServerMembers/);
   });
 
   test("POST /tickets/:id/assign assigns staff only and posts a notice", async () => {
