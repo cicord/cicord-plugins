@@ -109,5 +109,11 @@ and branch protection on `main` (required reviews) that lets the sign workflow p
 
 ## License
 
-[Apache-2.0](LICENSE). Each plugin is under the same license unless its directory says
-otherwise.
+Copyright 2026 Cicord team. [Apache-2.0](LICENSE). Each plugin is under the same license
+unless its directory says otherwise.
+
+The plugins are provided "AS IS", WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+or implied, including, without limitation, any warranties or conditions of title,
+non-infringement, merchantability or fitness for a particular purpose. In no event shall the
+Cicord team or its contributors be liable for any claim, damages or other liability arising
+from the use of or the inability to use them. See sections 7 and 8 of the [License](LICENSE).
