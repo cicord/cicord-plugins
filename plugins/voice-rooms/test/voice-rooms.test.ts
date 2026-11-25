@@ -348,6 +348,28 @@ describe("/voice", () => {
     expect(text(r.replies[0])).toContain("belongs to <@2>");
   });
 
+  test("a guild room only goes to a member with a role of its hub (or staff)", async () => {
+    const t = setup();
+    const room = await joinHub(t, "3", "create-guild");
+    t.setVoice("2", room.id); // a guest, let in
+    let r = await runCommand(plugin, t, "voice transfer", {
+      user: "3",
+      options: { member: t.member("2")!.user },
+    });
+    expect(text(r.replies[0])).toBe(
+      `<@2> cannot own <#${room.id}>: it is for the roles of its hub.`,
+    );
+    await voice(t, t.setVoice("3", null));
+    r = await runCommand(plugin, t, "voice claim", { user: "2" });
+    expect(text(r.replies[0])).toBe(
+      `You cannot own <#${room.id}>: it is for the roles of its hub.`,
+    );
+    expect(t.kv.get(`room:${room.id}`)).toMatchObject({ owner: "3" });
+    t.setVoice("4", room.id); // staff
+    r = await runCommand(plugin, t, "voice claim", { user: "4" });
+    expect(text(r.replies[0])).toBe(`<#${room.id}> is yours now.`);
+  });
+
   test("claim takes over a room whose owner left", async () => {
     const { t, room } = await withRoom();
     let r = await runCommand(plugin, t, "voice claim", { user: "2" });

@@ -187,6 +187,19 @@ const renames = new Map<string, number[]>();
 const RENAME_WINDOW = 10 * 60 * 1000;
 
 /** Moves ownership of a room to `to` (who must be in it). */
+/**
+ * Whether `member` may own the room: like using its hub, they need one of the hub's allowed
+ * roles (a guest let into a guild room cannot take it over). Staff may.
+ */
+function mayOwn(ctx: Context, t: Target, member: Member): boolean {
+  const { allowedRoles } = roomSettings(ctx, t.room);
+  return (
+    allowedRoles.length === 0 ||
+    allowedRoles.some((role) => member.hasRole(role)) ||
+    isStaff(ctx, member)
+  );
+}
+
 async function setOwner(ctx: Context, t: Target, to: Member, why: string): Promise<void> {
   const { ownerPermissions } = roomSettings(ctx, t.room);
   await ctx.server.editChannel(
@@ -327,6 +340,10 @@ const voice = command({
           await i.reply(`${i.options.member.mention} must be in <#${t.id}> to receive it.`);
           return;
         }
+        if (!mayOwn(ctx, t, to)) {
+          await i.reply(`${to.mention} cannot own <#${t.id}>: it is for the roles of its hub.`);
+          return;
+        }
         await setOwner(ctx, t, to, "transferred");
         await i.reply(`<#${t.id}> now belongs to ${to.mention}.`);
       },
@@ -349,6 +366,10 @@ const voice = command({
           await i.reply(
             `<@${t.room.owner}> is still in <#${t.id}>: ask them for \`/voice transfer\`.`,
           );
+          return;
+        }
+        if (!mayOwn(ctx, t, me)) {
+          await i.reply(`You cannot own <#${t.id}>: it is for the roles of its hub.`);
           return;
         }
         await setOwner(ctx, t, me, "claimed");
