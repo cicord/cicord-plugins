@@ -907,7 +907,7 @@ describe("tickets written by 0.1", () => {
     const r = await runComponent(plugin, t, "close-confirm:2", { user: "2", message: msg });
     expect(r.updates).toEqual([{ content: "Closing ticket #2…", components: [] }]);
     expect(t.kv.get("ticket:00000002")).toMatchObject({ status: "closed", priority: "normal" });
-    expect(t.kv.get("ticket:00000002")).not.toHaveProperty("channelRemoved");
+    expect(t.kv.get("ticket:00000002")).toMatchObject({ channelRemoved: false });
     expect(t.logs.some((l) => l.message === "tickets: could not delete the ticket channel")).toBe(
       true,
     );
@@ -918,5 +918,64 @@ describe("tickets written by 0.1", () => {
       to: "help-desk",
       message: { content: "<@3> Reopened by **sam**." },
     });
+  });
+
+  test("a closed 0.1 ticket gets a new channel even when its old id still resolves", async () => {
+    const t = legacy();
+    // The runtime may still hand out a channel it saw before it was deleted.
+    t.kv.set("ticket:00000001", {
+      ...(t.kv.get("ticket:00000001") as object),
+      channelId: "channel-ticket-log",
+    });
+    await route(t, "POST /tickets/1/reopen", { viewer: "2" });
+    expect(t.createdChannels).toHaveLength(1);
+    expect(t.sent.filter((s) => s.to === "ticket-log")).toEqual([]);
+  });
+});
+
+describe("channels that the runtime still resolves but Discord deleted", () => {
+  const gone = (channel: TextChannel) => {
+    channel.messages = async () => {
+      throw new Error("Unknown Channel");
+    };
+  };
+
+  test("reopen creates a new channel and keeps the ticket closed if that fails", async () => {
+    const t = setup();
+    await openTicket(t);
+    const first = t.createdChannels[0]!.channel;
+    // deleting fails (e.g. missing permission), then the channel is deleted by hand
+    const deleteChannel = t.ctx.server.deleteChannel;
+    (t.ctx.server as { deleteChannel: unknown }).deleteChannel = async () => {
+      throw new Error("Missing Permissions");
+    };
+    await route(t, "POST /tickets/1/close", { viewer: "2" });
+    (t.ctx.server as { deleteChannel: unknown }).deleteChannel = deleteChannel;
+    expect(t.kv.get("ticket:00000001")).toMatchObject({ channelRemoved: false });
+    gone(first);
+    const createChannel = t.ctx.server.createChannel;
+    (t.ctx.server as { createChannel: unknown }).createChannel = async () => {
+      throw new Error("Missing Permissions");
+    };
+    await expect(route(t, "POST /tickets/1/reopen", { viewer: "2" })).rejects.toThrow();
+    expect(t.kv.get("ticket:00000001")).toMatchObject({ status: "closed" });
+    expect(t.kv.has("open:1:1")).toBe(false);
+    (t.ctx.server as { createChannel: unknown }).createChannel = createChannel;
+    const res = await route(t, "POST /tickets/1/reopen", { viewer: "2" });
+    expect(res.status).toBe(200);
+    expect(t.createdChannels).toHaveLength(2);
+    expect(res.body).toMatchObject({ channelId: t.createdChannels[1]!.channel.id });
+  });
+
+  test("a portal reply to a ticket whose channel is gone is a 409", async () => {
+    const t = setup();
+    await openTicket(t);
+    gone(t.createdChannels[0]!.channel);
+    const res = await route(t, "POST /tickets/1/messages", {
+      viewer: "2",
+      body: { content: "hello?" },
+    });
+    expect(res.status).toBe(409);
+    expect(t.sent.filter((s) => s.to === t.createdChannels[0]!.channel.id)).toHaveLength(1);
   });
 });

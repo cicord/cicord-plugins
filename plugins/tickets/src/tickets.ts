@@ -332,11 +332,27 @@ function formatMinutes(m: number): string {
   return `${Math.floor(h / 24)} days`;
 }
 
-/** The ticket channel, or undefined when it is gone (`channel()` throws for unknown ones). */
+/**
+ * A handle on the ticket channel, undefined when it is known to be gone. A closed ticket
+ * without `channelRemoved` was closed by 0.1, which deleted the channel. The runtime may hand
+ * out a handle for a deleted channel it saw earlier: use `liveChannel` before relying on it.
+ */
 export function ticketChannel(ctx: Context, t: Ticket): TextChannel | undefined {
-  if (t.channelRemoved) return undefined;
+  if (t.channelRemoved ?? t.status === "closed") return undefined;
   try {
     return ctx.server.channel({ id: t.channelId });
+  } catch {
+    return undefined;
+  }
+}
+
+/** The ticket channel when it still exists on Discord (checked with a read). */
+export async function liveChannel(ctx: Context, t: Ticket): Promise<TextChannel | undefined> {
+  const channel = ticketChannel(ctx, t);
+  if (!channel) return undefined;
+  try {
+    await channel.messages({ limit: 1 });
+    return channel;
   } catch {
     return undefined;
   }
@@ -487,42 +503,46 @@ export async function closeTicket(
       allowedMentions: NO_MENTIONS,
     });
   }
+  closed.channelRemoved = false;
   try {
     await ctx.server.deleteChannel({ id: ticket.channelId }, `ticket #${ticket.number} closed`);
     closed.channelRemoved = true;
-    await saveTicket(ctx, closed);
   } catch (error) {
     ctx.log.warn("tickets: could not delete the ticket channel", {
       ticket: ticket.number,
       error: String(error),
     });
   }
+  await saveTicket(ctx, closed);
   ctx.log.info("ticket closed", { ticket: ticket.number, by: by.id, messages });
   return closed;
 }
 
-/** Reopens a closed ticket, in a new channel when the old one was deleted. */
+/**
+ * Reopens a closed ticket, in a new channel (same permissions) when the old one is gone. The
+ * channel and its message come first: a failure leaves the ticket closed.
+ */
 export async function reopenTicket(ctx: Context, ticket: Ticket, by: Person): Promise<Ticket> {
-  const channel = ticketChannel(ctx, ticket) ?? (await createTicketChannel(ctx, ticket));
+  const channel = (await liveChannel(ctx, ticket)) ?? (await createTicketChannel(ctx, ticket));
   const reopened: Ticket = { ...ticket, status: "open", channelId: channel.id };
   delete reopened.closedAt;
   delete reopened.closedBy;
   delete reopened.closeReason;
   delete reopened.summary;
   delete reopened.channelRemoved;
-  addEvent(reopened, "reopened", by);
-  await saveTicket(ctx, reopened);
-  await ctx.kv.set(openKey(ticket.author.id, ticket.number), true);
-  await ctx.kv.set(channelKey(channel.id), ticket.number);
-  // Keep counting from the messages of the first round.
-  await ctx.kv.set(activityKey(ticket.number), ticket.summary?.messages ?? 0);
-
   await channel.send({
     content: `<@${ticket.author.id}> Reopened by **${escapeMarkdown(by.displayName)}**.`,
     embeds: [ticketEmbed(ctx, reopened)],
     components: closeButton(ticket.number),
     allowedMentions: { users: [ticket.author.id], roles: false, everyone: false },
   });
+
+  addEvent(reopened, "reopened", by);
+  await saveTicket(ctx, reopened);
+  await ctx.kv.set(openKey(ticket.author.id, ticket.number), true);
+  await ctx.kv.set(channelKey(channel.id), ticket.number);
+  // Keep counting from the messages of the first round.
+  await ctx.kv.set(activityKey(ticket.number), ticket.summary?.messages ?? 0);
   ctx.log.info("ticket reopened", { ticket: ticket.number, by: by.id, channel: channel.id });
   return reopened;
 }
@@ -531,11 +551,10 @@ export async function reopenTicket(ctx: Context, ticket: Ticket, by: Person): Pr
 export async function postReply(
   ctx: Context,
   ticket: Ticket,
+  channel: TextChannel,
   by: Person,
   content: string,
 ): Promise<string> {
-  const channel = ticketChannel(ctx, ticket);
-  if (!channel) throw new Error(`ticket #${ticket.number} has no channel`);
   const message = await channel.send({
     embeds: [
       {

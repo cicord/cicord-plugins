@@ -22,6 +22,7 @@ import {
   lastActivityKey,
   listStaff,
   listTickets,
+  liveChannel,
   myDetail,
   myTickets,
   myView,
@@ -37,7 +38,6 @@ import {
   saveTicket,
   staffDetail,
   staffView,
-  ticketChannel,
   type Ticket,
   type TicketFilters,
 } from "./tickets.ts";
@@ -504,10 +504,10 @@ export default definePlugin({
         const content = text(body["content"], "content", 1, 2000);
         if (failed(content)) return content;
         if (ticket.status !== "open") return fail(409, "closed", "the ticket is closed");
-        if (!ticketChannel(ctx, ticket))
-          return fail(409, "closed", "the ticket channel no longer exists");
+        const channel = await liveChannel(ctx, ticket);
+        if (!channel) return fail(409, "closed", "the ticket channel no longer exists");
         await rememberStaff(ctx, me);
-        return { status: 201, body: { id: await postReply(ctx, ticket, me, content) } };
+        return { status: 201, body: { id: await postReply(ctx, ticket, channel, me, content) } };
       },
     },
   }),
