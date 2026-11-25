@@ -515,6 +515,8 @@ describe("staff routes", () => {
         id: expect.any(String),
         author: { id: "bot", displayName: "TestBot", bot: true },
         content: expect.stringContaining("thanks for reaching out"),
+        embeds: expect.any(Array),
+        repliedBy: null,
         createdAt: expect.any(String),
       },
     ]);
@@ -785,8 +787,16 @@ describe("staff routes", () => {
       events: [{ type: "opened" }, { type: "replied", by: { id: "2" }, detail: id }],
     });
     expect(JSON.stringify([...t.kv.values()])).not.toContain("Restart it");
-    expect((await route(t, "GET /tickets/1", { viewer: "2" })).body).toMatchObject({
-      messageCount: 1,
+    const detail = (await route(t, "GET /tickets/1", { viewer: "2" }))
+      .body as unknown as StaffTicketDetail;
+    expect(detail).toMatchObject({ messageCount: 1 });
+    // The conversation shows the reply's text and who wrote it (the author is the bot).
+    expect(detail.messages?.at(-1)).toMatchObject({
+      id,
+      author: { bot: true },
+      content: "",
+      embeds: [{ title: null, description: "Restart it with @everyone <@1>" }],
+      repliedBy: { id: "2", displayName: "sam" },
     });
     for (const body of [
       { content: "   " },

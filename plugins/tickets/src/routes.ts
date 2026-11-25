@@ -99,11 +99,21 @@ export interface StaffTicket {
   source: TicketSource;
 }
 
+/** The text of an embed of a ticket message (bot messages: replies, notices). */
+export interface TicketEmbed {
+  title: string | null;
+  description: string | null;
+}
+
 /** A message of the ticket channel, read from Discord at request time (never stored). */
 export interface TicketMessage {
   id: string;
   author: Person & { bot: boolean };
   content: string;
+  /** The text of its embeds (a portal reply is an embed posted by the bot). */
+  embeds: TicketEmbed[];
+  /** For a reply sent from the portal: the staff member who wrote it (the author is the bot). */
+  repliedBy: Person | null;
   createdAt: string;
 }
 

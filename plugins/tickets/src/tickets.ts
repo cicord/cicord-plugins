@@ -608,10 +608,20 @@ export async function staffDetail(ctx: Context, t: Ticket): Promise<StaffTicketD
   try {
     const channel = ticketChannel(ctx, t);
     if (channel) {
+      // Portal replies are posted by the bot: the timeline says who wrote each one.
+      const repliedBy = new Map<string, Person>();
+      for (const e of t.events ?? []) {
+        if (e.type === "replied" && e.detail) repliedBy.set(e.detail, e.by);
+      }
       history = (await channel.messages({ limit: 50 })).toReversed().map((m) => ({
         id: m.id,
         author: { ...person(m.author, m.member), bot: m.author.bot },
         content: m.content,
+        embeds: (m.embeds ?? []).map((e) => ({
+          title: e.title ?? null,
+          description: e.description ?? null,
+        })),
+        repliedBy: repliedBy.get(m.id) ?? null,
         createdAt: m.createdAt.toISOString(),
       }));
     }
