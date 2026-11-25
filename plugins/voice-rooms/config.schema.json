@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Voice rooms plugin config",
+  "type": "object",
+  "required": ["hubs"],
+  "properties": {
+    "hubs": {
+      "description": "Voice channels that create a room: a member who joins one gets a voice channel of their own and is moved into it.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": { "$ref": "#/$defs/hub" }
+    },
+    "emptyDelaySeconds": {
+      "description": "How long an empty room is kept before it is deleted (a member who reconnects in time keeps it). 0 deletes it as soon as the last member leaves.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3600,
+      "default": 0
+    },
+    "cooldownSeconds": {
+      "description": "Minimum time between two rooms created by the same member. A member who joins a hub too soon is disconnected from it. 0 turns it off.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3600,
+      "default": 5
+    },
+    "onRestart": {
+      "description": "Rooms that exist when the plugin starts (bot restart, new configuration): adopt keeps them and deletes them once empty; delete deletes them all at once, disconnecting whoever is in them.",
+      "type": "string",
+      "enum": ["adopt", "delete"],
+      "default": "adopt"
+    },
+    "staffRoles": {
+      "description": "Roles that may use the /voice commands on any room, like its owner (Cicord moderators and admins, and the server owner, may too).",
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true,
+      "maxItems": 10,
+      "default": [],
+      "x-cicord-ref": "role"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "hub": {
+      "type": "object",
+      "required": ["channel"],
+      "properties": {
+        "channel": {
+          "description": "The hub: a voice channel, e.g. \"➕ Create a channel\".",
+          "type": "string",
+          "x-cicord-ref": "channel"
+        },
+        "name": {
+          "description": "Name of the rooms. Placeholders: {member} (display name), {username}, {n} (the room's number among the rooms of this hub).",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "default": "🔊 {member}'s channel"
+        },
+        "category": {
+          "description": "Category of the rooms. Without it, the hub's category. A room gets the category's permissions, plus its owner's.",
+          "type": "string",
+          "x-cicord-ref": "category"
+        },
+        "userLimit": {
+          "description": "Members a room holds (its owner can change it with /voice limit). 0 is no limit.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 99,
+          "default": 0
+        },
+        "bitrate": {
+          "description": "Audio bitrate of the rooms, in bits per second (above 96000 needs server boosts). Without it, Discord's default (64000).",
+          "type": "integer",
+          "minimum": 8000,
+          "maximum": 384000
+        },
+        "allowedRoles": {
+          "description": "Only members with one of these roles may use the hub (others are disconnected from it). Empty: whoever can join the hub. /voice lock also denies Connect to these roles.",
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "maxItems": 10,
+          "default": [],
+          "x-cicord-ref": "role"
+        },
+        "ownerPermissions": {
+          "description": "What the owner of a room may do in it, on top of the category's permissions. The bot must hold each of these permissions itself (Mute, Deafen, Priority Speaker and Manage Channels are not part of its grants).",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "ViewChannel", "Connect", "Speak", "Stream", "UseVAD", "PrioritySpeaker", "MuteMembers",
+              "DeafenMembers", "MoveMembers", "ManageChannels", "SendMessages", "ReadMessageHistory",
+              "UseSoundboard", "UseEmbeddedActivities"
+            ]
+          },
+          "uniqueItems": true,
+          "default": ["ViewChannel", "Connect", "Speak", "Stream", "MoveMembers"]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

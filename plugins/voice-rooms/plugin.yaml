@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/cicord/cicord/main/spec/schemas/plugin.schema.json
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: voice-rooms
+  version: 0.1.0
+  displayName: Voice rooms
+  description: 'Voice channels on demand. Joining a hub such as "➕ Create a channel" gives the member a voice channel of their own, deleted once empty. Several hubs (name, category, limit, allowed roles). Owners manage their room with /voice (rename, limit, lock, permit, kick, transfer, claim).'
+  license: Apache-2.0
+  keywords: [voice, channels, rooms, join-to-create]
+spec:
+  engine: ">=0.1.9"
+  entry: ./src/index.ts
+  capabilities:
+    - discord.channels.read     # resolve the hubs
+    - discord.channels.manage   # create, edit and delete the rooms (plugin-owned)
+    - discord.voice.move        # move members into their room, disconnect them
+    - discord.members.read      # who is in a room (server.voiceMembers), members of /voice options
+    - storage.kv                # rooms and their owners
+    - scheduler                 # empty-room grace delay, periodic check of the rooms
+  # ServerVoiceStates: who joins, leaves or moves between voice channels, and who is in a room.
+  intents: [ServerVoiceStates]
+  config:
+    schema: ./config.schema.json
