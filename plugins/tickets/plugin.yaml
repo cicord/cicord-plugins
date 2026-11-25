@@ -3,7 +3,7 @@ apiVersion: cicord.dev/v1alpha1
 kind: Plugin
 metadata:
   name: tickets
-  version: 0.2.0
+  version: 0.2.1
   displayName: Tickets
   description: Support tickets in private channels, opened from a panel button or the community portal. Members follow theirs on the portal; staff manage the queue there (assignee, priority, labels, replies) and read ticket channels (MessageContent). Closing posts a summary to the staff log.
   license: Apache-2.0
