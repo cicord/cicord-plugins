@@ -9,7 +9,7 @@ metadata:
   license: Apache-2.0
   keywords: [tickets, support, helpdesk, portal]
 spec:
-  engine: ">=0.1.0"
+  engine: ">=0.1.5"   # role.members(), message.embeds
   entry: ./src/index.ts
   capabilities:
     - discord.messages.send     # panel, welcome message, notices, portal replies, log summary
