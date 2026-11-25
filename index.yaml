@@ -146,3 +146,16 @@ plugins:
     verified: true
     repo: https://github.com/cicord/cicord-plugins
     version: 0.1.0
+  voice-rooms:
+    commit: 6ee54eb689ff15d487ed8398b3948f31036d0093
+    description: Voice channels on demand. Joining a hub such as "➕ Create a channel" gives the member a voice channel of their own, deleted once empty. Several hubs (name, category, limit, allowed roles). Owners manage their room with /voice (rename, limit, lock, permit, kick, transfer, claim).
+    displayName: Voice rooms
+    keywords:
+      - voice
+      - channels
+      - rooms
+      - join-to-create
+    path: plugins/voice-rooms
+    publisher: Cicord
+    repo: https://github.com/cicord/cicord-plugins.git
+    version: 0.1.0
