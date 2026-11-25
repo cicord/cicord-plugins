@@ -6,7 +6,7 @@
 # (`cicord registry sign`): never edit it by hand.
 plugins:
   welcome:
-    commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
+    commit: bc3f6471beed6176282c838723e8812e4a78b107
     description: Greets new members, gives them a default role and sends an onboarding link.
     displayName: Welcome
     keywords:
@@ -16,7 +16,7 @@ plugins:
     publisher: Cicord
     verified: true
     repo: https://github.com/cicord/cicord-plugins
-    version: 0.1.0
+    version: 0.1.1
   onboarding:
     commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
     description: Step-by-step role picking on the community portal (games, platforms, notifications…), with a /onboarding command that links to it.
@@ -31,7 +31,7 @@ plugins:
     repo: https://github.com/cicord/cicord-plugins
     version: 0.1.0
   tickets:
-    commit: 3769884c5d56cedefe9bfdcb6431f6dc80ef5e85
+    commit: bc3f6471beed6176282c838723e8812e4a78b107
     description: Support tickets in private channels, opened from a panel button or the community portal. Members follow theirs on the portal; staff manage the queue there (assignee, priority, labels, replies) and read ticket channels (MessageContent). Closing posts a summary to the staff log.
     displayName: Tickets
     keywords:
@@ -43,7 +43,7 @@ plugins:
     publisher: Cicord
     verified: true
     repo: https://github.com/cicord/cicord-plugins
-    version: 0.2.0
+    version: 0.2.1
   polls:
     commit: 448db6cdc70f6763aea8de644b74334ceb458d2d
     description: Quick polls with buttons or a select menu, live results, automatic closing and an optional discussion thread. Publishes polls.closed for other plugins.
@@ -88,7 +88,7 @@ plugins:
     repo: https://github.com/cicord/cicord-plugins
     version: 0.1.1
   reaction-roles:
-    commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
+    commit: bc3f6471beed6176282c838723e8812e4a78b107
     description: Self-assignable roles from panels defined in the config, with buttons, a select menu or emoji reactions. Single or multiple choice, an optional required role, and panel messages kept up to date in place.
     displayName: Reaction roles
     keywords:
@@ -101,7 +101,7 @@ plugins:
     publisher: Cicord
     verified: true
     repo: https://github.com/cicord/cicord-plugins
-    version: 0.1.0
+    version: 0.1.1
   audit-log:
     commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
     description: Posts server events to a staff log channel in compact batched embeds. Joins and leaves, role and nickname changes, message edits and deletions, moderation cases and closed polls from the other plugins. Each category can be turned off or sent to its own channel.
