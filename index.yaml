@@ -31,8 +31,8 @@ plugins:
     repo: https://github.com/cicord/cicord-plugins
     version: 0.1.0
   tickets:
-    commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
-    description: Support tickets in private channels. Members open a ticket from a panel button and a short form; staff and the member talk in a channel only they can see; closing it posts a summary to the staff log.
+    commit: 3769884c5d56cedefe9bfdcb6431f6dc80ef5e85
+    description: Support tickets in private channels, opened from a panel button or the community portal. Members follow theirs on the portal; staff manage the queue there (assignee, priority, labels, replies) and read ticket channels (MessageContent). Closing posts a summary to the staff log.
     displayName: Tickets
     keywords:
       - tickets
@@ -43,7 +43,7 @@ plugins:
     publisher: Cicord
     verified: true
     repo: https://github.com/cicord/cicord-plugins
-    version: 0.1.0
+    version: 0.2.0
   polls:
     commit: 448db6cdc70f6763aea8de644b74334ceb458d2d
     description: Quick polls with buttons or a select menu, live results, automatic closing and an optional discussion thread. Publishes polls.closed for other plugins.
