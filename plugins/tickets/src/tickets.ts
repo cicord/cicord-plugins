@@ -233,7 +233,7 @@ export async function listStaff(ctx: Context, viewer?: Person | null): Promise<P
     if (owner) byId.set(owner.id, person(owner.user, owner));
   }
   if (viewer && !byId.has(viewer.id)) byId.set(viewer.id, viewer);
-  return [...byId.values()].sort((a, b) => a.displayName.localeCompare(b.displayName));
+  return [...byId.values()].toSorted((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
 // ───────────────────────────────────────────────────────────── labels
@@ -680,7 +680,7 @@ export async function myDetail(ctx: Context, t: Ticket): Promise<MyTicketDetail>
 
 /** The member's tickets: open ones first, then newest first. */
 export async function myTickets(ctx: Context, userId: string): Promise<MyTicket[]> {
-  const tickets = (await authorTickets(ctx, userId)).sort(
+  const tickets = (await authorTickets(ctx, userId)).toSorted(
     (a, b) => Number(b.status === "open") - Number(a.status === "open") || b.number - a.number,
   );
   const out: MyTicket[] = [];

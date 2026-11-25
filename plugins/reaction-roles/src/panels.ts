@@ -167,29 +167,13 @@ export function fingerprint(panel: Panel, message: MessagePayload): string {
   return `${s.length}:${h.toString(16)}`;
 }
 
-/** Adds 1 to a snowflake (decimal string), without BigInt. */
-function nextSnowflake(id: string): string {
-  const digits = id.split("").map(Number);
-  let i = digits.length - 1;
-  while (i >= 0 && digits[i] === 9) digits[i--] = 0;
-  if (i < 0) digits.unshift(1);
-  else digits[i] = (digits[i] ?? 0) + 1;
-  return digits.join("");
-}
-
-/**
- * Fetches a message by id: the SDK has no "get message", but the newest message strictly
- * before `id + 1` is the message itself, if it still exists.
- */
+/** Fetches the message of a panel (undefined when it was deleted). */
 export async function findMessage(
   ctx: Context,
   channelId: string,
   messageId: string,
 ): Promise<Message | undefined> {
-  const [m] = await ctx.server
-    .channel({ id: channelId })
-    .messages({ before: nextSnowflake(messageId), limit: 1 });
-  return m?.id === messageId ? m : undefined;
+  return ctx.server.channel({ id: channelId }).message(messageId);
 }
 
 /** True when a Discord error is a missing permission (403), e.g. the role hierarchy. */

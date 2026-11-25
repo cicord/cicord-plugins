@@ -4,12 +4,12 @@ import schema from "../config.schema.json" with { type: "json" };
 import plugin from "../src/index.ts";
 
 const config = {
-  title: "Bienvenue !",
+  title: "Welcome!",
   intro: "Intro",
   steps: [
     {
-      id: "jeux",
-      title: "À quoi tu joues ?",
+      id: "games",
+      title: "What do you play?",
       multiple: true,
       options: [
         { role: "minecraft", emoji: "⛏️" },
@@ -17,17 +17,17 @@ const config = {
       ],
     },
     {
-      id: "plateforme",
-      title: "Plateforme",
+      id: "platform",
+      title: "Platform",
       required: true,
       options: [{ role: "pc" }, { role: "console" }],
     },
-    { id: "notifs", title: "Notifs", options: [{ role: "ping-events" }] },
+    { id: "notifications", title: "Notifications", options: [{ role: "ping-events" }] },
   ],
   completedRole: "member",
-  successMessage: "C'est tout bon !",
-  linkMessage: "Choisis tes rôles :",
-  buttonLabel: "Choisir",
+  successMessage: "All done!",
+  linkMessage: "Pick your roles:",
+  buttonLabel: "Pick",
 };
 
 const grants = ["discord.roles.assign", "storage.kv", "portal.routes", "portal.links"];
@@ -40,12 +40,12 @@ function setup(memberRoles: string[] = []) {
     plugin: { name: "onboarding", instance: "onboarding" },
     roles: {
       admin: { name: "Admin", color: "#e74c3c" },
-      member: { name: "Membre", color: "#3498db" },
+      member: { name: "Member", color: "#3498db" },
       minecraft: { name: "Minecraft", color: "#5b8731" },
       valorant: { name: "Valorant", color: "#ff4655" },
       pc: { name: "PC" },
       console: { name: "Console" },
-      "ping-events": { name: "Notifs" },
+      "ping-events": { name: "Notifications" },
     },
     members: [{ id: "1", username: "alice", roles: memberRoles }],
   });
@@ -57,13 +57,13 @@ describe("GET /steps", () => {
     const res = await callRoute(plugin, t, "GET /steps", { viewer: "1" });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
-      title: "Bienvenue !",
+      title: "Welcome!",
       completed: false,
       completedAt: null,
-      completedRole: { key: "member", name: "Membre", color: "#3498db" },
+      completedRole: { key: "member", name: "Member", color: "#3498db" },
       steps: [
         {
-          id: "jeux",
+          id: "games",
           multiple: true,
           required: false,
           description: "",
@@ -79,8 +79,8 @@ describe("GET /steps", () => {
           ],
           selected: ["valorant"],
         },
-        { id: "plateforme", multiple: false, required: true, selected: ["pc"] },
-        { id: "notifs", selected: [] },
+        { id: "platform", multiple: false, required: true, selected: ["pc"] },
+        { id: "notifications", selected: [] },
       ],
     });
   });
@@ -96,14 +96,14 @@ describe("POST /complete", () => {
     const t = setup(["valorant", "console", "admin"]);
     const res = await callRoute(plugin, t, "POST /complete", {
       viewer: "1",
-      body: { answers: { jeux: ["minecraft"], plateforme: ["pc"] } },
+      body: { answers: { games: ["minecraft"], platform: ["pc"] } },
     });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       completed: true,
       added: ["minecraft", "pc", "member"],
       removed: ["valorant", "console"],
-      message: "C'est tout bon !",
+      message: "All done!",
     });
     const roles = (res.body as { roles: { key: string }[] }).roles.map((r) => r.key).toSorted();
     expect(roles).toEqual(["admin", "member", "minecraft", "pc"]);
@@ -111,7 +111,7 @@ describe("POST /complete", () => {
     const member = t.member("1");
     expect(member?.roles.map((r) => r.key).toSorted()).toEqual(roles);
     expect(t.kv.get("completed:1")).toMatchObject({
-      answers: { jeux: ["minecraft"], plateforme: ["pc"], notifs: [] },
+      answers: { games: ["minecraft"], platform: ["pc"], notifications: [] },
     });
     expect(t.kv.get("stats:completed")).toBe(1);
 
@@ -119,7 +119,7 @@ describe("POST /complete", () => {
     expect(again.body).toMatchObject({ completed: true });
     await callRoute(plugin, t, "POST /complete", {
       viewer: "1",
-      body: { answers: { plateforme: ["pc"] } },
+      body: { answers: { platform: ["pc"] } },
     });
     expect(t.kv.get("stats:completed")).toBe(1);
   });
@@ -137,7 +137,7 @@ describe("POST /complete", () => {
     const t = setup();
     const res = await callRoute(plugin, t, "POST /complete", {
       viewer: "1",
-      body: { answers: { jeux: ["admin"], plateforme: ["pc", "console"], ghost: [] } },
+      body: { answers: { games: ["admin"], platform: ["pc", "console"], ghost: [] } },
     });
     expect(res.status).toBe(422);
     const error = (
@@ -145,9 +145,9 @@ describe("POST /complete", () => {
     ).error;
     expect(error.code).toBe("invalid");
     expect(error.diagnostics.map((d) => d.path).toSorted()).toEqual([
+      "/answers/games",
       "/answers/ghost",
-      "/answers/jeux",
-      "/answers/plateforme",
+      "/answers/platform",
     ]);
     expect(t.roleChanges).toEqual([]);
     expect(t.kv.size).toBe(0);
@@ -159,7 +159,7 @@ describe("POST /complete", () => {
       body: { answers: {} },
     });
     expect(res.status).toBe(422);
-    expect(JSON.stringify(res.body)).toContain('step \\"plateforme\\" is required');
+    expect(JSON.stringify(res.body)).toContain('step \\"platform\\" is required');
   });
 });
 
@@ -177,14 +177,14 @@ describe("/onboarding command", () => {
     expect(result.replies).toEqual([
       {
         ephemeral: true,
-        content: "Choisis tes rôles :",
+        content: "Pick your roles:",
         components: [
           {
             type: "row",
             components: [
               {
                 type: "link",
-                label: "Choisir",
+                label: "Pick",
                 emoji: "✨",
                 url: "https://portal.test/onboarding?cicord_token=test-1",
               },

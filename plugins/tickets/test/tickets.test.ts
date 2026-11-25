@@ -968,7 +968,7 @@ describe("channels that the runtime still resolves but Discord deleted", () => {
     await openTicket(t);
     const first = t.createdChannels[0]!.channel;
     // deleting fails (e.g. missing permission), then the channel is deleted by hand
-    const deleteChannel = t.ctx.server.deleteChannel;
+    const deleteChannel = t.ctx.server.deleteChannel.bind(t.ctx.server);
     (t.ctx.server as { deleteChannel: unknown }).deleteChannel = async () => {
       throw new Error("Missing Permissions");
     };
@@ -976,7 +976,7 @@ describe("channels that the runtime still resolves but Discord deleted", () => {
     (t.ctx.server as { deleteChannel: unknown }).deleteChannel = deleteChannel;
     expect(t.kv.get("ticket:00000001")).toMatchObject({ channelRemoved: false });
     gone(first);
-    const createChannel = t.ctx.server.createChannel;
+    const createChannel = t.ctx.server.createChannel.bind(t.ctx.server);
     (t.ctx.server as { createChannel: unknown }).createChannel = async () => {
       throw new Error("Missing Permissions");
     };

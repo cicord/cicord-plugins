@@ -3,7 +3,7 @@ apiVersion: cicord.dev/v1alpha1
 kind: Plugin
 metadata:
   name: reaction-roles
-  version: 0.1.0
+  version: 0.1.1
   displayName: Reaction roles
   description: Self-assignable roles from panels defined in the config, with buttons, a select menu or emoji reactions. Single or multiple choice, an optional required role, and panel messages kept up to date in place.
   license: Apache-2.0

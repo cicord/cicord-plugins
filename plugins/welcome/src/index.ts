@@ -20,8 +20,8 @@ export default definePlugin({
       if (dmOnboarding) {
         const url = await ctx.portal.link("/onboarding", { member });
         await member.send({
-          content: `Bienvenue sur **${ctx.server.name}** ! Choisis tes rôles en 30 secondes :`,
-          components: [{ type: "row", components: [{ type: "link", label: "Commencer", url }] }],
+          content: `Welcome to **${ctx.server.name}**! Pick your roles in 30 seconds:`,
+          components: [{ type: "row", components: [{ type: "link", label: "Get started", url }] }],
         });
       }
 
@@ -52,7 +52,7 @@ export default definePlugin({
       ephemeral: true,
       async run(ctx, interaction) {
         const total = (await ctx.kv.get<number>("stats:joined")) ?? 0;
-        await interaction.reply(`${total} membres accueillis.`);
+        await interaction.reply(`${total} ${total === 1 ? "member" : "members"} welcomed.`);
       },
     }),
   },
