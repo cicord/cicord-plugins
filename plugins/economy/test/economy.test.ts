@@ -9,11 +9,24 @@ test("1,000 simultaneous payments conserve balances, including tax, with idempot
   const h = createTestContext({
     schema,
     config: { enabled: true, taxPercent: 10 },
+    members: [{ id: "1" }, { id: "2" }],
     locales: { en },
   });
   await transact(h.ctx, "opening", [{ userId: "1", amount: 10000 }], "opening");
   const ids = Array.from({ length: 1000 }, (_, i) => String(i));
-  await Promise.all(ids.map((id) => pay(h.ctx, id, "1", "2", 10)));
+  const declared = plugin.commands!.pay!;
+  if (!declared.run) throw new Error("Expected /pay command");
+  const run = declared.run;
+  await Promise.all(
+    ids.map((id) =>
+      runCommand(
+        { commands: { pay: { ...declared, run: (ctx, i) => run(ctx, { ...i, id }) } } },
+        h,
+        "pay",
+        { user: "1", options: { member: h.member("2")!.user, amount: 10 } },
+      ),
+    ),
+  );
   expect(h.kv.get("balance:1")).toBe(0);
   expect(h.kv.get("balance:2")).toBe(9000);
   expect(h.kv.get("balance:treasury")).toBe(1000);
