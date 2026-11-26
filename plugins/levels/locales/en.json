@@ -1,0 +1,23 @@
+{
+  "rank": "**{name}** — level **{level}** · {xp} XP{rank}",
+  "place": " · rank #{rank} of {count}",
+  "next": "{bar} {current}/{needed} XP to level {level}",
+  "none": "**{name}** has no XP yet. Say hi in the chat!",
+  "leaderboard": "Leaderboard",
+  "row": "**#{rank}** <@{id}> — level {level} · {xp} XP",
+  "title": "🏆 Top members",
+  "empty": "Nobody has XP yet.",
+  "recap": "Yesterday's most active members ({date})",
+  "off": "Levels are disabled.",
+  "denied": "A server manager is required.",
+  "updated": "{xp} XP",
+  "confirmation": "Reset this member’s XP to zero?",
+  "reset": "Reset XP",
+  "commands.rank.description": "Member rank and XP",
+  "commands.top.description": "Top members",
+  "commands.xp.description": "Manage member XP",
+  "commands.xp.give.description": "Give XP",
+  "commands.xp.remove.description": "Take XP",
+  "commands.xp.set.description": "Set a member’s XP",
+  "commands.xp.reset.description": "Reset one account"
+}

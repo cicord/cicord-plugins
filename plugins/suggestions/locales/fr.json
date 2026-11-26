@@ -1,0 +1,16 @@
+{
+  "off": "Les suggestions sont désactivées.",
+  "missing": "Le salon de dépôt est indisponible.",
+  "submit": "Proposer une suggestion",
+  "body": "Proposition",
+  "created": "Suggestion enregistrée.",
+  "decision": "{status} · {reason}",
+  "saved": "Vote enregistré.",
+  "anonymous": "Anonyme",
+  "score": "Score",
+  "similar": "Suggestions proches",
+  "restricted": "Vous ne pouvez pas voir cette suggestion.",
+  "thread": "Suggestion {id}",
+  "empty": "Aucune proposition.",
+  "commands.suggest.description": "Proposer une idée pour le serveur"
+}

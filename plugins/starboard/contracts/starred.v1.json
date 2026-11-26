@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "properties": {
+    "messageId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "authorId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "stars": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": ["messageId", "authorId", "stars"]
+}

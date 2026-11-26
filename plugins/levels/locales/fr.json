@@ -1,0 +1,23 @@
+{
+  "rank": "**{name}** — niveau **{level}** · {xp} XP{rank}",
+  "place": " · rang nº {rank} sur {count}",
+  "next": "{bar} {current}/{needed} XP pour le niveau {level}",
+  "none": "**{name}** n’a pas encore d’XP. Dites bonjour dans le salon !",
+  "leaderboard": "Classement",
+  "row": "**#{rank}** <@{id}> — niveau {level} · {xp} XP",
+  "title": "🏆 Membres les plus actifs",
+  "empty": "Personne n’a encore d’XP.",
+  "recap": "Membres les plus actifs hier ({date})",
+  "off": "Les niveaux sont désactivés.",
+  "denied": "Un gestionnaire du serveur est requis.",
+  "updated": "{xp} XP",
+  "confirmation": "Réinitialiser l’XP de ce membre ?",
+  "reset": "Réinitialiser",
+  "commands.rank.description": "Consulter le rang et l’XP",
+  "commands.top.description": "Voir les membres les plus actifs",
+  "commands.xp.description": "Gérer l’XP des membres",
+  "commands.xp.give.description": "Ajouter de l’XP",
+  "commands.xp.remove.description": "Retirer de l’XP",
+  "commands.xp.set.description": "Définir l’XP d’un membre",
+  "commands.xp.reset.description": "Réinitialiser un compte"
+}

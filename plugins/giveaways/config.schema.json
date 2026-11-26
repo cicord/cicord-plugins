@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "giveaways configuration",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "description": "Enable this plugin instance.",
+      "default": false
+    },
+    "locale": {
+      "type": "string",
+      "enum": ["en", "fr"],
+      "description": "Override the server language."
+    },
+    "managerRoles": {
+      "type": "array",
+      "description": "Roles allowed to manage giveaways",
+      "items": {
+        "type": "string",
+        "description": "Managed role key",
+        "minLength": 1,
+        "maxLength": 100,
+        "x-cicord-ref": "role"
+      },
+      "maxItems": 50,
+      "default": []
+    },
+    "channels": {
+      "type": "array",
+      "description": "Allowed giveaway channels; empty permits all",
+      "items": {
+        "type": "string",
+        "description": "Managed channel key",
+        "minLength": 1,
+        "maxLength": 100,
+        "x-cicord-ref": "channel"
+      },
+      "maxItems": 50,
+      "default": []
+    },
+    "defaultDurationHours": {
+      "type": "integer",
+      "description": "Default duration in hours",
+      "minimum": 1,
+      "maximum": 720,
+      "default": 24
+    },
+    "maxWinners": {
+      "type": "integer",
+      "description": "Maximum winners per draw",
+      "minimum": 1,
+      "maximum": 100,
+      "default": 10
+    },
+    "publishEntrants": {
+      "type": "boolean",
+      "description": "Publish the canonical verification list after the draw",
+      "default": true
+    },
+    "claim": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Require a claim before granting rewards",
+          "default": false
+        },
+        "hours": {
+          "type": "integer",
+          "description": "Time to claim prizes",
+          "minimum": 1,
+          "maximum": 720,
+          "default": 24
+        }
+      },
+      "additionalProperties": false
+    },
+    "bonus": {
+      "type": "array",
+      "description": "Additional immutable entry weight by role",
+      "items": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "Managed role key",
+            "minLength": 1,
+            "maxLength": 100,
+            "x-cicord-ref": "role"
+          },
+          "entries": {
+            "type": "integer",
+            "description": "Additional weight",
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        "additionalProperties": false,
+        "required": ["role", "entries"]
+      },
+      "maxItems": 50,
+      "default": []
+    },
+    "conditions": {
+      "type": "object",
+      "properties": {
+        "requiredRole": {
+          "type": "string",
+          "description": "Managed role key",
+          "minLength": 1,
+          "maxLength": 100,
+          "x-cicord-ref": "role"
+        },
+        "excludedRoles": {
+          "type": "array",
+          "description": "Ineligible roles",
+          "items": {
+            "type": "string",
+            "description": "Managed role key",
+            "minLength": 1,
+            "maxLength": 100,
+            "x-cicord-ref": "role"
+          },
+          "maxItems": 50,
+          "default": []
+        },
+        "accountDays": {
+          "type": "integer",
+          "description": "Minimum age of account in days",
+          "minimum": 0,
+          "maximum": 1000000,
+          "default": 0
+        },
+        "memberDays": {
+          "type": "integer",
+          "description": "Minimum server membership in days",
+          "minimum": 0,
+          "maximum": 1000000,
+          "default": 0
+        },
+        "level": {
+          "type": "integer",
+          "description": "Minimum XP level",
+          "minimum": 0,
+          "maximum": 1000000,
+          "default": 0
+        },
+        "invites": {
+          "type": "integer",
+          "description": "Minimum valid invites",
+          "minimum": 0,
+          "maximum": 1000000,
+          "default": 0
+        },
+        "noWarnings": {
+          "type": "boolean",
+          "description": "Require clean standing",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "rewards": {
+      "type": "object",
+      "properties": {
+        "xp": {
+          "type": "integer",
+          "description": "Winner XP",
+          "minimum": 0,
+          "maximum": 1000000,
+          "default": 0
+        },
+        "coins": {
+          "type": "integer",
+          "description": "Winner currency",
+          "minimum": 0,
+          "maximum": 1000000,
+          "default": 0
+        },
+        "role": {
+          "type": "string",
+          "description": "Managed role key",
+          "minLength": 1,
+          "maxLength": 100,
+          "x-cicord-ref": "role"
+        },
+        "durationSeconds": {
+          "type": "integer",
+          "description": "Temporary role duration",
+          "minimum": 1,
+          "maximum": 31536000,
+          "default": 86400
+        }
+      },
+      "additionalProperties": false
+    },
+    "historyDays": {
+      "type": "integer",
+      "minimum": 31,
+      "maximum": 3650,
+      "default": 365,
+      "description": "Days after the final draw or cancellation to retain verification data (at least 31 days)."
+    }
+  },
+  "additionalProperties": false
+}

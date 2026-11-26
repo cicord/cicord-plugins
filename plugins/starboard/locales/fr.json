@@ -1,0 +1,8 @@
+{
+  "off": "Le tableau des étoiles est désactivé.",
+  "empty": "Aucun message mis en avant visible.",
+  "stars": "{count} {emoji}",
+  "source": "Message d’origine",
+  "commands.starboard.description": "Messages mis en avant",
+  "commands.starboard.top.description": "Voir les messages les plus étoilés"
+}

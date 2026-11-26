@@ -73,13 +73,42 @@ export async function standings(ctx: Context, prefix = "xp:"): Promise<Standing[
   return out.toSorted((a, b) => b.xp - a.xp || a.userId.localeCompare(b.userId));
 }
 
-export async function leaderboard(ctx: Context, limit: number): Promise<LeaderboardEntry[]> {
-  const top = (await standings(ctx)).slice(0, limit);
+export async function position(ctx: Context, userId: string) {
+  if ((await ctx.kv.get("meta:schema")) === 2) {
+    const board = ctx.kv.ranking("xp");
+    const [score, rank, count] = await Promise.all([
+      board.score(userId),
+      board.rank(userId),
+      board.count(),
+    ]);
+    return { xp: score ?? 0, rank: rank ?? null, count };
+  }
+  const all = await standings(ctx),
+    index = all.findIndex((e) => e.userId === userId);
+  return { xp: all[index]?.xp ?? 0, rank: index < 0 ? null : index + 1, count: all.length };
+}
+export async function leaders(ctx: Context, limit: number, offset = 0) {
+  if ((await ctx.kv.get("meta:schema")) === 2)
+    return (await ctx.kv.ranking("xp").top({ limit, offset })).map((e) => ({
+      userId: e.member,
+      xp: e.score,
+      rank: e.rank,
+    }));
+  return (await standings(ctx))
+    .slice(offset, offset + limit)
+    .map((e, i) => ({ ...e, rank: offset + i + 1 }));
+}
+export async function leaderboard(
+  ctx: Context,
+  limit: number,
+  offset = 0,
+): Promise<LeaderboardEntry[]> {
+  const top = await leaders(ctx, limit, offset);
   const items: LeaderboardEntry[] = [];
-  for (const [i, s] of top.entries()) {
+  for (const s of top) {
     const p = (await ctx.kv.get(profileKey(s.userId))) as Profile | undefined;
     items.push({
-      rank: i + 1,
+      rank: s.rank,
       userId: s.userId,
       displayName: p?.displayName ?? `User ${s.userId}`,
       avatarUrl: p?.avatarUrl ?? null,

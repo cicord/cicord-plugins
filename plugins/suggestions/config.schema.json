@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "suggestions configuration",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "description": "Enable this plugin instance.",
+      "default": true
+    },
+    "locale": {
+      "type": "string",
+      "enum": ["en", "fr"],
+      "description": "Override the server language."
+    },
+    "channel": {
+      "type": "string",
+      "description": "Destination channel for slash submissions",
+      "minLength": 1,
+      "maxLength": 100,
+      "x-cicord-ref": "channel"
+    },
+    "forum": {
+      "type": "string",
+      "description": "Optional forum for direct suggestions",
+      "minLength": 1,
+      "maxLength": 100,
+      "x-cicord-ref": "channel"
+    },
+    "archive": {
+      "type": "string",
+      "description": "Optional archive of completed suggestions",
+      "minLength": 1,
+      "maxLength": 100,
+      "x-cicord-ref": "channel"
+    },
+    "anonymous": {
+      "type": "boolean",
+      "description": "Hide authors from the public",
+      "default": false
+    },
+    "retainText": {
+      "type": "boolean",
+      "description": "Store submitted proposal text for the portal and duplicate search",
+      "default": false
+    },
+    "managerRoles": {
+      "type": "array",
+      "description": "Roles allowed to decide on suggestions",
+      "items": {
+        "type": "string",
+        "description": "Managed role key",
+        "minLength": 1,
+        "maxLength": 100,
+        "x-cicord-ref": "role"
+      },
+      "maxItems": 50,
+      "default": []
+    }
+  },
+  "additionalProperties": false,
+  "anyOf": [
+    {
+      "properties": {
+        "enabled": {
+          "const": false
+        }
+      },
+      "required": ["enabled"]
+    },
+    {
+      "required": ["channel"]
+    },
+    {
+      "required": ["forum"]
+    }
+  ]
+}

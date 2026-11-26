@@ -28,6 +28,7 @@ export interface Standing {
 }
 
 export interface Routes {
+  "GET /seasons/:id": { response: { entries: { userId: string; xp: number; rank: number }[] } };
   /** Public leaderboard. `limit`: 1-100 (default 25). */
   "GET /leaderboard": {
     query: { limit?: number };

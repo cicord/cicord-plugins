@@ -1,0 +1,213 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "economy configuration",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "description": "Enable this plugin instance.",
+      "default": false
+    },
+    "locale": {
+      "type": "string",
+      "enum": ["en", "fr"],
+      "description": "Override the server language."
+    },
+    "daily": {
+      "type": "integer",
+      "description": "Daily points",
+      "minimum": 0,
+      "maximum": 1000000,
+      "default": 20
+    },
+    "weekly": {
+      "type": "integer",
+      "description": "Weekly points",
+      "minimum": 0,
+      "maximum": 1000000,
+      "default": 100
+    },
+    "streakBonus": {
+      "type": "integer",
+      "description": "Additional daily points per consecutive day",
+      "minimum": 0,
+      "maximum": 1000000,
+      "default": 2
+    },
+    "streakLimit": {
+      "type": "integer",
+      "description": "Maximum rewarded streak days",
+      "minimum": 1,
+      "maximum": 365,
+      "default": 7
+    },
+    "dailyCap": {
+      "type": "integer",
+      "description": "Maximum event earnings per local day (0 disables)",
+      "minimum": 0,
+      "maximum": 1000000,
+      "default": 5000
+    },
+    "taxPercent": {
+      "type": "integer",
+      "description": "Transfer percentage deposited in the treasury",
+      "minimum": 0,
+      "maximum": 100,
+      "default": 0
+    },
+    "minimumDays": {
+      "type": "integer",
+      "description": "Sender must have been a member this many days",
+      "minimum": 0,
+      "maximum": 1000000,
+      "default": 0
+    },
+    "timezone": {
+      "type": "string",
+      "enum": [
+        "UTC",
+        "Europe/Paris",
+        "Europe/London",
+        "America/New_York",
+        "America/Los_Angeles",
+        "Asia/Tokyo",
+        "Australia/Sydney"
+      ],
+      "default": "UTC"
+    },
+    "cooldownSeconds": {
+      "type": "integer",
+      "description": "Message reward cooldown",
+      "minimum": 1,
+      "maximum": 86400,
+      "default": 60
+    },
+    "earnings": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "integer",
+          "description": "message reward",
+          "minimum": 0,
+          "maximum": 1000000,
+          "default": 0
+        },
+        "voice": {
+          "type": "integer",
+          "description": "voice reward",
+          "minimum": 0,
+          "maximum": 1000000,
+          "default": 0
+        },
+        "level": {
+          "type": "integer",
+          "description": "level reward",
+          "minimum": 0,
+          "maximum": 1000000,
+          "default": 0
+        },
+        "poll": {
+          "type": "integer",
+          "description": "poll reward",
+          "minimum": 0,
+          "maximum": 1000000,
+          "default": 0
+        },
+        "suggestion": {
+          "type": "integer",
+          "description": "suggestion reward",
+          "minimum": 0,
+          "maximum": 1000000,
+          "default": 0
+        },
+        "star": {
+          "type": "integer",
+          "description": "star reward",
+          "minimum": 0,
+          "maximum": 1000000,
+          "default": 0
+        },
+        "birthday": {
+          "type": "integer",
+          "description": "birthday reward",
+          "minimum": 0,
+          "maximum": 1000000,
+          "default": 0
+        },
+        "attendee": {
+          "type": "integer",
+          "description": "attendee reward",
+          "minimum": 0,
+          "maximum": 1000000,
+          "default": 0
+        },
+        "ticket": {
+          "type": "integer",
+          "description": "ticket reward",
+          "minimum": 0,
+          "maximum": 1000000,
+          "default": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "shop": {
+      "type": "array",
+      "description": "Available shop products",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique product ID",
+            "minLength": 1,
+            "maxLength": 32,
+            "pattern": "^[a-z0-9-]+$"
+          },
+          "label": {
+            "type": "string",
+            "description": "Product name",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "price": {
+            "type": "integer",
+            "description": "Price in server points",
+            "minimum": 1,
+            "maximum": 100000000
+          },
+          "type": {
+            "enum": ["role", "temporary", "perk"],
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "description": "Managed role key",
+            "minLength": 1,
+            "maxLength": 100,
+            "x-cicord-ref": "role"
+          },
+          "durationSeconds": {
+            "type": "integer",
+            "description": "Temporary role duration",
+            "minimum": 1,
+            "maximum": 31536000,
+            "default": 86400
+          }
+        },
+        "additionalProperties": false,
+        "required": ["id", "label", "price", "type"]
+      },
+      "maxItems": 100,
+      "default": []
+    },
+    "journalDays": {
+      "type": "integer",
+      "minimum": 31,
+      "maximum": 3650,
+      "default": 365,
+      "description": "Days to retain append-only journal rows and transfer receipts."
+    }
+  },
+  "additionalProperties": false
+}

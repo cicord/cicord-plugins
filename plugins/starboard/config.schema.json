@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "starboard configuration",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "description": "Enable this plugin instance.",
+      "default": true
+    },
+    "locale": {
+      "type": "string",
+      "enum": ["en", "fr"],
+      "description": "Override the server language."
+    },
+    "channel": {
+      "type": "string",
+      "description": "Default board for publicly readable sources",
+      "minLength": 1,
+      "maxLength": 100,
+      "x-cicord-ref": "channel"
+    },
+    "boards": {
+      "type": "array",
+      "description": "Explicit source to destination mappings",
+      "items": {
+        "type": "object",
+        "properties": {
+          "sources": {
+            "type": "array",
+            "description": "Source channel keys",
+            "items": {
+              "type": "string",
+              "description": "Managed channel key",
+              "minLength": 1,
+              "maxLength": 100,
+              "x-cicord-ref": "channel"
+            },
+            "maxItems": 50,
+            "default": [],
+            "minItems": 1
+          },
+          "channel": {
+            "type": "string",
+            "description": "Destination channel key",
+            "minLength": 1,
+            "maxLength": 100,
+            "x-cicord-ref": "channel"
+          }
+        },
+        "additionalProperties": false,
+        "required": ["sources", "channel"]
+      },
+      "maxItems": 50,
+      "default": []
+    },
+    "emoji": {
+      "type": "string",
+      "description": "The reaction that counts",
+      "minLength": 1,
+      "maxLength": 100,
+      "default": "⭐"
+    },
+    "threshold": {
+      "type": "integer",
+      "description": "Minimum eligible stars",
+      "minimum": 1,
+      "maximum": 100000,
+      "default": 3
+    },
+    "includeBots": {
+      "type": "boolean",
+      "description": "Allow source messages written by bots",
+      "default": false
+    },
+    "removeBelow": {
+      "type": "boolean",
+      "description": "Remove posted highlights below the threshold",
+      "default": true
+    },
+    "historyDays": {
+      "type": "integer",
+      "minimum": 31,
+      "maximum": 3650,
+      "default": 365,
+      "description": "Maximum age of a source message and its highlight."
+    }
+  },
+  "additionalProperties": false,
+  "anyOf": [
+    {
+      "properties": {
+        "enabled": {
+          "const": false
+        }
+      },
+      "required": ["enabled"]
+    },
+    {
+      "required": ["channel"]
+    },
+    {
+      "required": ["boards"],
+      "properties": {
+        "boards": {
+          "minItems": 1
+        }
+      }
+    }
+  ]
+}

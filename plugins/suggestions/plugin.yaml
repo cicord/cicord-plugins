@@ -1,0 +1,41 @@
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: suggestions
+  version: 0.1.0
+  displayName: Suggestions
+  description: Member proposals, changeable votes and a moderated decision board.
+  license: Apache-2.0
+spec:
+  engine: ">=0.2.0"
+  entry: ./src/index.ts
+  config: {schema: ./config.schema.json}
+  locales: ./locales
+  delivery: at-least-once
+  capabilities:
+    - storage.kv # proposals, individual votes and ranking
+    - portal.routes # moderated status and audience-aware board
+    - discord.messages.send # publish proposals and update cards
+    - discord.messages.read # reopen the original card
+    - discord.channels.read # audience checks for archive copies
+    - discord.members.read # send author decisions
+    - events.publish # creation and status transitions
+    - scheduler # render score changes in batches
+  optional:
+    - feature: discussion
+      capabilities: [discord.threads.manage]
+    - feature: authorNotice
+      capabilities: [discord.dm.send]
+    - feature: duplicateSearch
+      capabilities: [storage.index]
+    - feature: forumInput
+      intents: [ServerMessages, MessageContent]
+  interop:
+    types: ./src/contracts.ts
+    publishes:
+      - {topic: created, version: 1, scope: server}
+      - {topic: statusChanged, version: 1, scope: server}
+  privacy:
+    records:
+      - {name: suggestions, policy: erase, description: "Erase original proposals, copied cards, search documents and member votes."}
+  routes: {types: ./src/routes.ts}

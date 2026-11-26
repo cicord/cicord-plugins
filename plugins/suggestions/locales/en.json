@@ -1,0 +1,16 @@
+{
+  "off": "Suggestions are disabled.",
+  "missing": "The submission channel is unavailable.",
+  "submit": "Submit a suggestion",
+  "body": "Proposal",
+  "created": "Suggestion recorded.",
+  "decision": "{status} · {reason}",
+  "saved": "Vote saved.",
+  "anonymous": "Anonymous",
+  "score": "Score",
+  "similar": "Similar suggestions",
+  "restricted": "You cannot view this suggestion.",
+  "thread": "Suggestion {id}",
+  "empty": "No proposals.",
+  "commands.suggest.description": "Submit a community suggestion"
+}

@@ -1,5 +1,9 @@
 import {
+  action,
   command,
+  query,
+  subcommand,
+  type Json,
   definePlugin,
   defineRoutes,
   type Context,
@@ -10,17 +14,19 @@ import {
   authorKey,
   bar,
   cooldownKey,
-  dayKey,
   dayOf,
   leaderboard,
   levelOf,
+  leaders,
+  position,
   progress,
   reactionKey,
   render,
   saveProfile,
   standings,
-  xpKey,
 } from "./levels.ts";
+import { credit, migrate, personal, seasonBatch, importCsv } from "./storage.ts";
+import type { GrantXp } from "./contracts.ts";
 import type { Routes } from "./routes.ts";
 
 const WEEK = 7 * 24 * 3600;
@@ -37,14 +43,31 @@ async function award(
   userId: string,
   amount: number,
   from: AwardContext = {},
+  id: string = crypto.randomUUID(),
+  absolute = false,
 ): Promise<number> {
-  if (amount === 0) return (await ctx.kv.get<number>(xpKey(userId))) ?? 0;
-  const total = await ctx.kv.increment(xpKey(userId), amount);
-  if (amount > 0) await ctx.kv.increment(dayKey(dayOf(new Date()), userId), amount);
-  const before = levelOf(total - amount);
-  const after = levelOf(total);
-  if (after > before) await levelUp(ctx, userId, after, from);
-  return total;
+  const { xp, previous, level } = await credit(ctx, userId, amount, id, absolute);
+  if (level > previous) {
+    if (ctx.features.enabled("levelEvents"))
+      await ctx.events.publish(
+        "levelUp",
+        { userId, level, previous, xp },
+        { idempotencyKey: id + ":" + userId },
+      );
+    // A role transition may be reconciled repeatedly; send at most one public celebration per award.
+    const notice = "notice:" + userId + ":" + id;
+    if (
+      (
+        await ctx.kv
+          .atomic()
+          .check(notice, null)
+          .set(notice, true, { ttlSeconds: 30 * 86400 })
+          .commit()
+      ).ok
+    )
+      await levelUp(ctx, userId, level, from);
+  }
+  return xp;
 }
 
 async function levelUp(ctx: Context, userId: string, level: number, from: AwardContext) {
@@ -76,7 +99,10 @@ async function applyRewards(ctx: Context, member: Member, level: number) {
   const reached = ctx.config.rewards.filter((r) => r.level <= level);
   const highest = Math.max(0, ...reached.map((r) => r.level));
   for (const r of reached) {
-    const wanted = r.keep || r.level === highest;
+    const wanted =
+      ctx.config.rewardMode === "stack" ||
+      (ctx.config.rewardMode === "configured" && r.keep) ||
+      r.level === highest;
     try {
       if (wanted && !member.hasRole(r.role)) await member.addRole(r.role, `levels: level ${level}`);
       else if (!wanted && member.hasRole(r.role))
@@ -91,18 +117,251 @@ async function applyRewards(ctx: Context, member: Member, level: number) {
   }
 }
 
-function rankCard(name: string, xp: number, rank: number, of: number): string {
+const tr = (ctx: Context, key: string, vars: Record<string, string | number> = {}) =>
+  ctx.i18n.t(key, vars);
+function rankCard(ctx: Context, name: string, xp: number, rank: number, of: number) {
   const p = progress(xp);
   return [
-    `**${name}** — level **${p.level}** · ${xp} XP${rank > 0 ? ` · rank #${rank} of ${of}` : ""}`,
-    `${bar(p)} ${p.current}/${p.needed} XP to level ${p.level + 1}`,
+    tr(ctx, "rank", {
+      name,
+      level: p.level,
+      xp,
+      rank: rank ? tr(ctx, "place", { rank, count: of }) : "",
+    }),
+    tr(ctx, "next", { bar: bar(p), current: p.current, needed: p.needed, level: p.level + 1 }),
   ].join("\n");
 }
-
+function multiplier(ctx: Context, m: Member, channel: string) {
+  if (ctx.config.noXpRoles.some((r) => m.hasRole(r))) return 0;
+  const roles = ctx.config.roleMultipliers.filter((r) => m.hasRole(r.role)).map((r) => r.factor);
+  const c = ctx.config.channelMultipliers.find((r) => ctx.server.channel(r.channel).id === channel);
+  const date = Date.now(),
+    boost = ctx.config.boosts
+      .filter((b) => Date.parse(b.start) <= date && date < Date.parse(b.end))
+      .reduce((v, b) => v * b.factor, 1);
+  return (roles.length ? Math.max(...roles) : 1) * (c?.factor ?? 1) * boost;
+}
+const adminXp = (mode: "give" | "remove" | "set" | "reset") =>
+  subcommand({
+    description: mode + " member XP",
+    options: {
+      member: { type: "user", required: true, description: "Member" },
+      amount: {
+        type: "integer",
+        description: "XP amount",
+        min: 0,
+        max: 1000000000,
+        required: mode !== "reset",
+      },
+    },
+    async run(ctx, i) {
+      if (
+        !ctx.config.enabled ||
+        !i.member?.permissions?.some((p) => p === "ManageServer" || p === "Administrator")
+      )
+        return i.reply(tr(ctx, "denied"));
+      if (mode === "reset")
+        return i.reply({
+          content: tr(ctx, "confirmation"),
+          components: [
+            {
+              type: "row",
+              components: [
+                {
+                  type: "button",
+                  id: "reset:" + i.user.id + ":" + i.options.member.id,
+                  label: tr(ctx, "reset"),
+                  style: "danger",
+                },
+              ],
+            },
+          ],
+        });
+      const xp = await award(
+        ctx,
+        i.options.member.id,
+        (mode === "remove" ? -1 : 1) * (i.options.amount ?? 0),
+        {},
+        i.id,
+        mode === "set",
+      );
+      await i.reply(tr(ctx, "updated", { xp }));
+    },
+  });
+async function batch(ctx: Context, ids: string[], xp: number, origin: string) {
+  for (let i = 0; i < ids.length; i += 25) {
+    const slice = ids.slice(i, i + 25);
+    if (ids.length <= 25) await voters(ctx, slice, xp, origin);
+    else await ctx.schedule.after(1, "voter-batch", { ids: slice, xp, origin });
+  }
+}
+async function voters(ctx: Context, ids: string[], xp: number, origin: string) {
+  for (const uid of new Set(ids)) {
+    if (typeof uid !== "string") continue;
+    // Populate public profiles lazily for bulk deliveries. Single legacy votes retain their profile.
+    if (ids.length <= 2) {
+      const m = await ctx.server.member(uid);
+      if (m) await saveProfile(ctx, m.user, m.displayName);
+    }
+    await award(ctx, uid, xp, {}, origin);
+  }
+}
+const bonus =
+  (field: "approved" | "attended" | "starred" | "roomClosed", target: string) =>
+  async (ctx: Context, p: Json, meta?: { id: string }) => {
+    if (!ctx.config.enabled || !ctx.config.bonuses[field] || !ctx.features.enabled("pollBonus"))
+      return;
+    const e = p as Record<string, Json>;
+    if (field === "approved" && e.status !== "approved") return;
+    const ids = e[target];
+    if (!meta?.id) throw new Error("Missing event receipt");
+    await batch(
+      ctx,
+      Array.isArray(ids)
+        ? ids.filter((s): s is string => typeof s === "string")
+        : typeof ids === "string"
+          ? [ids]
+          : [],
+      ctx.config.bonuses[field],
+      meta.id,
+    );
+  };
 export default definePlugin({
+  async onStart(ctx) {
+    if (!ctx.config.enabled) return;
+    if ((await ctx.kv.get("meta:schema")) !== 2) await ctx.schedule.after(1, "migrate-ranking");
+    if (ctx.config.importFile && ctx.features.enabled("importCsv"))
+      await ctx.schedule.after(1, "import-csv");
+    if (ctx.config.season?.end)
+      await ctx.schedule.after(
+        Math.max(1, Date.parse(ctx.config.season.end) - Date.now()),
+        "season",
+      );
+  },
+  tasks: {
+    "migrate-ranking": migrate,
+    "import-csv": importCsv,
+    season: seasonBatch,
+    async "voter-batch"(ctx, p) {
+      if (!ctx.config.enabled) return;
+      const v = p as { ids: string[]; xp: number; origin: string };
+      await voters(ctx, v.ids, v.xp, v.origin);
+    },
+    async "voter-page"(ctx, p) {
+      if (!ctx.config.enabled) return;
+      const v = p as { pollId: string; cursor?: string; xp: number; origin: string };
+      const r = (await ctx.plugins.query("polls", "voters", {
+        pollId: v.pollId,
+        ...(v.cursor ? { cursor: v.cursor } : {}),
+      })) as { userIds: string[]; cursor?: string };
+      await batch(ctx, r.userIds, v.xp, v.origin);
+      if (r.cursor) await ctx.schedule.after(1, "voter-page", { ...v, cursor: r.cursor });
+    },
+    async "voice-minute"(ctx, p) {
+      const { uid, channel, token, tick } = p as {
+        uid: string;
+        channel: string;
+        token: string;
+        tick: number;
+      };
+      if (!ctx.config.enabled || !ctx.config.voice.xpPerMinute) return;
+      if ((await ctx.kv.get("voice:" + uid)) !== token) return;
+      const members = (await ctx.server.voiceMembers({ id: channel })).filter((m) => !m.user.bot);
+      const m = members.find((m) => m.id === uid);
+      if (!m) return;
+      if (members.length > 1)
+        await award(
+          ctx,
+          uid,
+          Math.round(ctx.config.voice.xpPerMinute * multiplier(ctx, m, channel)),
+          { member: m },
+          token + ":" + tick,
+        );
+      await ctx.schedule.after(60000, "voice-minute", {
+        uid,
+        channel,
+        token,
+        tick: Math.max(tick + 1, Math.floor(Date.now() / 60000)),
+      });
+    },
+  },
+  queries: {
+    memberLevel: query({
+      async run(ctx, input: { userId: string }) {
+        if (!ctx.config.enabled) return { xp: 0, level: 0, rank: null };
+        const p = await position(ctx, input.userId);
+        return { xp: p.xp, level: levelOf(p.xp), rank: p.rank };
+      },
+    }),
+    leaderboard: query({
+      async run(ctx, input: { limit?: number; offset?: number }) {
+        return {
+          entries: ctx.config.enabled
+            ? await leaderboard(ctx, input.limit ?? 25, input.offset ?? 0)
+            : [],
+        };
+      },
+    }),
+  },
+  actions: {
+    grantXp: action({
+      async run(ctx, input: GrantXp, call) {
+        if (!ctx.config.enabled) throw new Error("Levels disabled");
+        return { xp: await award(ctx, input.userId, input.amount, {}, call.idempotencyKey) };
+      },
+    }),
+  },
+  privacy: {
+    export: (ctx, id) => personal(ctx, id, false),
+    async erase(ctx, id) {
+      return { erased: (await personal(ctx, id, true)).length };
+    },
+  },
+  components: {
+    async reset(ctx, i) {
+      const [, by, uid] = i.componentId.split(":");
+      if (
+        !ctx.config.enabled ||
+        !uid ||
+        by !== i.user.id ||
+        !i.member?.permissions?.some((p) => p === "ManageServer" || p === "Administrator")
+      )
+        return i.reply(tr(ctx, "denied"));
+      await award(ctx, uid, 0, {}, i.id, true);
+      await i.update({ content: tr(ctx, "updated", { xp: 0 }), components: [] });
+    },
+  },
   events: {
+    async voiceStateUpdate(ctx, v) {
+      if (
+        !ctx.config.enabled ||
+        !ctx.config.voice.xpPerMinute ||
+        !ctx.features.enabled("voiceXp") ||
+        v.user.bot
+      )
+        return;
+      if (
+        !v.channel ||
+        (v.selfDeaf && ctx.config.voice.requireUndeafened) ||
+        (ctx.config.voice.afkChannel &&
+          ctx.server.channel(ctx.config.voice.afkChannel).id === v.channel.id)
+      ) {
+        await ctx.kv.delete("voice:" + v.user.id);
+        return;
+      }
+      const current = await ctx.kv.get<string>("voice:" + v.user.id);
+      if (current?.startsWith(v.channel.id + ":")) return;
+      const token = v.channel.id + ":" + crypto.randomUUID();
+      await ctx.kv.set("voice:" + v.user.id, token);
+      await ctx.schedule.after(60000, "voice-minute", {
+        uid: v.user.id,
+        channel: v.channel.id,
+        token,
+        tick: Math.floor(Date.now() / 60000) + 1,
+      });
+    },
     async messageCreate(ctx, message) {
-      if (message.author.bot || !message.member) return;
+      if (!ctx.config.enabled || message.author.bot || !message.member) return;
       if (
         ctx.config.ignoredChannels.some((key) => ctx.server.channel(key).id === message.channel.id)
       )
@@ -112,16 +371,33 @@ export default definePlugin({
       // Remember the author for reactions (the reaction events only carry the message id).
       if (ctx.config.reactionXp > 0)
         await ctx.kv.set(authorKey(message.id), userId, { ttlSeconds: WEEK });
+      const scale = multiplier(ctx, message.member, message.channel.id);
+      if (!scale) return;
       if (await ctx.kv.get(cooldownKey(userId))) return;
       if (ctx.config.cooldownSeconds > 0)
-        await ctx.kv.set(cooldownKey(userId), true, { ttlSeconds: ctx.config.cooldownSeconds });
+        if (
+          !(
+            await ctx.kv
+              .atomic()
+              .check(cooldownKey(userId), null)
+              .set(cooldownKey(userId), true, { ttlSeconds: ctx.config.cooldownSeconds })
+              .commit()
+          ).ok
+        )
+          return;
       await saveProfile(ctx, message.author, message.member.displayName);
-      await award(ctx, userId, ctx.config.xpPerMessage, { message, member: message.member });
+      await award(
+        ctx,
+        userId,
+        Math.round(ctx.config.xpPerMessage * scale),
+        { message, member: message.member },
+        "msg:" + message.id,
+      );
     },
 
     /** `reaction.message` is partial (id + channel): the author comes from our own records. */
     async reactionAdd(ctx, { message, user, emoji }) {
-      if (user.bot || ctx.config.reactionXp === 0) return;
+      if (!ctx.config.enabled || user.bot || ctx.config.reactionXp === 0) return;
       const author = await ctx.kv.get<string>(authorKey(message.id));
       if (!author || author === user.id) return;
       const { items } = await ctx.kv.list({ prefix: `react:${message.id}:${user.id}:`, limit: 1 });
@@ -130,6 +406,7 @@ export default definePlugin({
     },
 
     async reactionRemove(ctx, { message, user, emoji }) {
+      if (!ctx.config.enabled) return;
       const key = reactionKey(message.id, user.id, emoji);
       if (!(await ctx.kv.get(key))) return;
       await ctx.kv.delete(key);
@@ -140,15 +417,25 @@ export default definePlugin({
   },
 
   commands: {
+    xp: command({
+      description: "Manage member XP",
+      ephemeral: true,
+      permissions: ["ManageServer"],
+      subcommands: {
+        give: adminXp("give"),
+        remove: adminXp("remove"),
+        set: adminXp("set"),
+        reset: adminXp("reset"),
+      },
+    }),
     rank: command({
       description: "Your level and XP (or another member's)",
       ephemeral: true,
       options: { member: { type: "user", description: "Member to look up" } },
       async run(ctx, interaction) {
         const target = interaction.options.member ?? interaction.user;
-        const all = await standings(ctx);
-        const i = all.findIndex((s) => s.userId === target.id);
-        const xp = i >= 0 ? (all[i]?.xp ?? 0) : 0;
+        if (!ctx.config.enabled) return interaction.reply(tr(ctx, "off"));
+        const { xp, rank, count } = await position(ctx, target.id);
         const name =
           target.id === interaction.user.id
             ? (interaction.member?.displayName ?? target.displayName)
@@ -157,13 +444,54 @@ export default definePlugin({
           member: interaction.member ?? interaction.user,
         });
         // No `ephemeral` here: the command's `ephemeral: true` is the default.
+        let files;
+        if (ctx.config.rankCard.enabled && ctx.features.enabled("rankCard")) {
+          const p = progress(xp),
+            theme = ctx.config.rankCard;
+          const photo = await ctx.render.image({
+            width: 550,
+            height: 150,
+            background: theme.asset ? { asset: theme.asset } : theme.background,
+            layers: [
+              {
+                type: "text",
+                x: 24,
+                y: 40,
+                size: 28,
+                color: theme.foreground,
+                text: name,
+                maxWidth: 500,
+                ellipsis: true,
+              },
+              {
+                type: "text",
+                x: 24,
+                y: 82,
+                size: 22,
+                color: theme.foreground,
+                text: xp + " XP · #" + (rank ?? "—"),
+              },
+              {
+                type: "progress",
+                x: 24,
+                y: 110,
+                width: 500,
+                height: 12,
+                color: theme.foreground,
+                value: p.current / p.needed,
+              },
+            ],
+          });
+          files = [{ name: "rank.png", ...photo }];
+        }
         await interaction.reply({
-          content:
-            xp > 0
-              ? rankCard(name, xp, i + 1, all.length)
-              : `**${name}** has no XP yet. Say hi in the chat!`,
+          ...(files ? { files } : {}),
+          content: xp > 0 ? rankCard(ctx, name, xp, rank ?? 0, count) : tr(ctx, "none", { name }),
           components: [
-            { type: "row", components: [{ type: "link", label: "Leaderboard", emoji: "🏆", url }] },
+            {
+              type: "row",
+              components: [{ type: "link", label: tr(ctx, "leaderboard"), emoji: "🏆", url }],
+            },
           ],
         });
       },
@@ -178,25 +506,29 @@ export default definePlugin({
       async run(ctx, interaction) {
         const limit = interaction.options.limit ?? 10;
         const role = interaction.options.role;
-        let rows = (await standings(ctx)).map((s, i) => ({ ...s, rank: i + 1 }));
+        if (!ctx.config.enabled) return interaction.reply(tr(ctx, "off"));
+        let rows = await leaders(ctx, limit);
         if (role) {
           const kept: typeof rows = [];
-          for (const s of rows) {
-            if (kept.length >= limit) break;
-            const m = await ctx.server.member(s.userId);
-            if (m?.hasRole({ id: role.id })) kept.push(s);
-          }
+          let offset = 0;
+          do {
+            rows = await leaders(ctx, 100, offset);
+            offset += rows.length;
+            for (const r of rows) {
+              if ((await ctx.server.member(r.userId))?.hasRole({ id: role.id })) kept.push(r);
+              if (kept.length === limit) break;
+            }
+          } while (kept.length < limit && rows.length === 100);
           rows = kept;
         }
-        rows = rows.slice(0, limit);
-        const lines = rows.map(
-          (s) => `**#${s.rank}** <@${s.userId}> — level ${levelOf(s.xp)} · ${s.xp} XP`,
+        const lines = rows.map((s) =>
+          tr(ctx, "row", { rank: s.rank, id: s.userId, level: levelOf(s.xp), xp: s.xp }),
         );
         await interaction.reply({
           embeds: [
             {
-              title: role ? `🏆 Top members — ${role.name}` : "🏆 Top members",
-              description: lines.length > 0 ? lines.join("\n") : "Nobody has XP yet.",
+              title: tr(ctx, "title") + (role ? " — " + role.name : ""),
+              description: lines.length > 0 ? lines.join("\n") : tr(ctx, "empty"),
               color: "#f1c40f",
             },
           ],
@@ -211,6 +543,7 @@ export default definePlugin({
     recap: {
       cron: "0 9 * * *",
       async run(ctx) {
+        if (!ctx.config.enabled) return;
         const yesterday = dayOf(new Date(Date.now() - 24 * 3600 * 1000));
         const prefix = `day:${yesterday}:`;
         const top = await standings(ctx, prefix);
@@ -226,7 +559,7 @@ export default definePlugin({
         await ctx.server.channel(channel).send({
           embeds: [
             {
-              title: `Yesterday's most active members (${yesterday})`,
+              title: tr(ctx, "recap", { date: yesterday }),
               description: lines.join("\n"),
               color: "#f1c40f",
             },
@@ -239,21 +572,42 @@ export default definePlugin({
 
   subscriptions: {
     /** Bonus XP for every voter of a closed poll (plugin polls). */
-    async "polls.closed"(ctx, payload) {
-      const voters = (payload as { voters?: unknown }).voters;
-      if (ctx.config.pollBonusXp === 0 || !Array.isArray(voters)) return;
-      for (const id of voters) {
-        if (typeof id !== "string") continue;
-        // Keep the public leaderboard readable for members who earned XP only by voting.
-        const member = await ctx.server.member(id);
-        if (member) await saveProfile(ctx, member.user, member.displayName);
-        await award(ctx, id, ctx.config.pollBonusXp, member ? { member } : {});
-      }
+    "suggestions.statusChanged": bonus("approved", "authorId"),
+    "starboard.starred": bonus("starred", "authorId"),
+    "community-events.ended": bonus("attended", "attendees"),
+    "voice-rooms.roomClosed": bonus("roomClosed", "ownerId"),
+    async "polls.closed"(ctx, payload, meta) {
+      if (!ctx.config.enabled || !ctx.config.pollBonusXp || !ctx.features.enabled("pollBonus"))
+        return;
+      const e = payload as { pollId: string; voters?: string[]; votersTruncated?: boolean };
+      const origin = meta?.id ?? "legacy-poll:" + e.pollId;
+      if (e.votersTruncated) {
+        if (!ctx.features.enabled("pollPages")) throw new Error("Missing polls.voters grant");
+        await ctx.schedule.after(1, "voter-page", {
+          origin,
+          pollId: e.pollId,
+          xp: ctx.config.pollBonusXp,
+        });
+      } else if (e.voters) await batch(ctx, e.voters, ctx.config.pollBonusXp, origin);
     },
   },
 
   // Checked against the portal contract in routes.ts (copied into portals by `cicord portal typegen`).
   routes: defineRoutes<Routes>({
+    "GET /seasons/:id": {
+      access: "public",
+      async handler(ctx, r) {
+        return {
+          entries: ctx.config.enabled
+            ? (await ctx.kv.ranking("season:" + r.params.id).top({ limit: 100 })).map((e) => ({
+                userId: e.member,
+                xp: e.score,
+                rank: e.rank,
+              }))
+            : [],
+        };
+      },
+    },
     /** Public leaderboard for the community portal. `?limit=` 1-100 (default 25). */
     "GET /leaderboard": {
       access: "public",
@@ -262,7 +616,7 @@ export default definePlugin({
           100,
           Math.max(1, Math.trunc(Number(request.query.limit ?? 25)) || 25),
         );
-        return { items: await leaderboard(ctx, limit) };
+        return { items: ctx.config.enabled ? await leaderboard(ctx, limit) : [] };
       },
     },
     /** The viewer's own standing. */
@@ -275,10 +629,10 @@ export default definePlugin({
             status: 401,
             body: { error: { code: "unauthenticated", message: "login required" } },
           };
-        const all = await standings(ctx);
-        const i = all.findIndex((s) => s.userId === viewer.user.id);
-        const xp = i >= 0 ? (all[i]?.xp ?? 0) : 0;
-        return { userId: viewer.user.id, rank: i >= 0 ? i + 1 : null, xp, ...progress(xp) };
+        const { xp, rank } = ctx.config.enabled
+          ? await position(ctx, viewer.user.id)
+          : { xp: 0, rank: null };
+        return { userId: viewer.user.id, rank, xp, ...progress(xp) };
       },
     },
   }),

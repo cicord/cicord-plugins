@@ -22,6 +22,80 @@ declare module "@cicord/sdk" {
       channel?: string;
       top: number;
     };
+    enabled: boolean;
+    locale?: "en" | "fr";
+    voice: {
+      xpPerMinute: number;
+      requireUndeafened: boolean;
+      afkChannel?: string;
+    };
+    noXpRoles: string[];
+    roleMultipliers: {
+      role: string;
+      factor: number;
+    }[];
+    channelMultipliers: {
+      channel: string;
+      factor: number;
+    }[];
+    boosts: {
+      start: string;
+      end: string;
+      factor: number;
+    }[];
+    rewardMode: "configured" | "stack" | "replace";
+    season?: {
+      id?: string;
+      end?: string;
+    };
+    rankCard: {
+      enabled: boolean;
+      background: string;
+      foreground: string;
+      asset?: string;
+    };
+    importFile?: string;
+    bonuses: {
+      approved: number;
+      starred: number;
+      attended: number;
+      roomClosed: number;
+    };
   }
 }
 export {};
+
+declare module "@cicord/sdk" {
+  interface EventContracts {
+    "levels.levelUp.v1": {
+      level: number;
+      previous: number;
+      userId: string;
+      xp: number;
+    };
+  }
+  interface QueryContracts {
+    "levels.leaderboard": {input: {
+      limit?: number;
+      offset?: number;
+    }; output: {
+      entries: Record<string, unknown>[];
+    }};
+    "levels.memberLevel": {input: {
+      userId: string;
+    }; output: {
+      level: number;
+      rank: number | null;
+      xp: number;
+    }};
+  }
+  interface ActionContracts {
+    "levels.grantXp": {input: {
+      amount: number;
+      reason?: string;
+      userId: string;
+    }; output: {
+      xp: number;
+    }};
+  }
+}

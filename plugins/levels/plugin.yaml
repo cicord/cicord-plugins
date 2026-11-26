@@ -3,13 +3,13 @@ apiVersion: cicord.dev/v1alpha1
 kind: Plugin
 metadata:
   name: levels
-  version: 0.1.0
+  version: 0.2.0
   displayName: Levels
   description: XP and levels for chatting, receiving reactions and voting in polls. Level-up announcements, role rewards, /rank, /top, a daily recap and a public leaderboard on the community portal.
   license: Apache-2.0
   keywords: [xp, levels, leaderboard, roles, portal]
 spec:
-  engine: ">=0.1.0"
+  engine: ">=0.2.0"
   entry: ./src/index.ts
   capabilities:
     - discord.messages.send      # level-up announcements, recap, /top
@@ -19,7 +19,6 @@ spec:
     - discord.roles.assign       # role rewards
     - storage.kv
     - scheduler                  # daily recap
-    - events.subscribe           # polls.closed → bonus XP
     - portal.routes              # GET /leaderboard, GET /me
     - portal.links               # leaderboard link in /rank
   # MessageContent: short messages ("ok", "lol") earn no XP.
@@ -28,3 +27,21 @@ spec:
     schema: ./config.schema.json
   routes:
     types: ./src/routes.ts       # portal contract (cicord portal typegen)
+  delivery: at-least-once
+  locales: ./locales
+  optional:
+    - {feature: pollBonus, capabilities: [events.subscribe]}
+    - {feature: pollPages, capabilities: [plugins.query:polls.voters]}
+    - {feature: levelEvents, capabilities: [events.publish]}
+    - {feature: voiceXp, intents: [ServerVoiceStates]}
+    - {feature: rankCard, capabilities: [render]}
+    - {feature: importCsv, capabilities: [files.read]}
+  interop:
+    types: ./src/contracts.ts
+    publishes: [{topic: levelUp, version: 1, scope: server}]
+    subscribes: [{topic: polls.closed, version: 2}, suggestions.statusChanged, starboard.starred, community-events.ended, voice-rooms.roomClosed]
+    provides: {queries: [memberLevel, leaderboard], actions: [grantXp]}
+    consumes: {queries: [polls.voters]}
+  privacy:
+    records:
+      - {name: xp, policy: erase, description: "Profiles, balances, cooldowns, poll receipts, reaction references and seasonal rankings."}

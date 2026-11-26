@@ -1,0 +1,8 @@
+{
+  "off": "The starboard is disabled.",
+  "empty": "No visible highlights.",
+  "stars": "{count} {emoji}",
+  "source": "Original message",
+  "commands.starboard.description": "Community highlights",
+  "commands.starboard.top.description": "See the most starred messages"
+}

@@ -43,7 +43,9 @@
     "ignoredChannels": {
       "description": "Channels where messages earn no XP.",
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "uniqueItems": true,
       "default": [],
       "x-cicord-ref": "channel"
@@ -66,7 +68,11 @@
           "default": "GG {member}, you reached **level {level}**! 🎉",
           "x-cicord-widget": "textarea"
         },
-        "react": { "description": "React 🎉 to the message.", "type": "boolean", "default": true }
+        "react": {
+          "description": "React 🎉 to the message.",
+          "type": "boolean",
+          "default": true
+        }
       },
       "additionalProperties": false
     },
@@ -79,8 +85,15 @@
         "type": "object",
         "required": ["level", "role"],
         "properties": {
-          "level": { "type": "integer", "minimum": 1, "maximum": 500 },
-          "role": { "type": "string", "x-cicord-ref": "role" },
+          "level": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "role": {
+            "type": "string",
+            "x-cicord-ref": "role"
+          },
           "keep": {
             "description": "Keep this role when a higher reward is reached.",
             "type": "boolean",
@@ -94,13 +107,248 @@
       "description": "Daily recap of the most active members (09:00 UTC).",
       "type": "object",
       "properties": {
-        "enabled": { "type": "boolean", "default": true },
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
         "channel": {
           "description": "Defaults to the announcement channel. No recap without either.",
           "type": "string",
           "x-cicord-ref": "channel"
         },
-        "top": { "type": "integer", "minimum": 1, "maximum": 10, "default": 5 }
+        "top": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 5
+        }
+      },
+      "additionalProperties": false
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Enable XP tracking",
+      "default": true
+    },
+    "locale": {
+      "type": "string",
+      "enum": ["en", "fr"]
+    },
+    "voice": {
+      "type": "object",
+      "properties": {
+        "xpPerMinute": {
+          "type": "integer",
+          "description": "XP per eligible minute",
+          "minimum": 0,
+          "maximum": 1000000,
+          "default": 0
+        },
+        "requireUndeafened": {
+          "type": "boolean",
+          "description": "Require an undeafened listener",
+          "default": true
+        },
+        "afkChannel": {
+          "type": "string",
+          "description": "AFK channel override",
+          "minLength": 1,
+          "maxLength": 100,
+          "x-cicord-ref": "channel"
+        }
+      },
+      "additionalProperties": false
+    },
+    "noXpRoles": {
+      "type": "array",
+      "description": "Excluded earning roles",
+      "items": {
+        "type": "string",
+        "description": "Managed role key",
+        "minLength": 1,
+        "maxLength": 100,
+        "x-cicord-ref": "role"
+      },
+      "maxItems": 50,
+      "default": []
+    },
+    "roleMultipliers": {
+      "type": "array",
+      "description": "Role XP multiplier (highest matching value)",
+      "items": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "Managed role key",
+            "minLength": 1,
+            "maxLength": 100,
+            "x-cicord-ref": "role"
+          },
+          "factor": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          }
+        },
+        "additionalProperties": false,
+        "required": ["role", "factor"]
+      },
+      "maxItems": 50,
+      "default": []
+    },
+    "channelMultipliers": {
+      "type": "array",
+      "description": "Channel XP multiplier",
+      "items": {
+        "type": "object",
+        "properties": {
+          "channel": {
+            "type": "string",
+            "description": "Managed channel key",
+            "minLength": 1,
+            "maxLength": 100,
+            "x-cicord-ref": "channel"
+          },
+          "factor": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          }
+        },
+        "additionalProperties": false,
+        "required": ["channel", "factor"]
+      },
+      "maxItems": 50,
+      "default": []
+    },
+    "boosts": {
+      "type": "array",
+      "description": "Dated XP multipliers (UTC)",
+      "items": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string",
+            "description": "ISO start time",
+            "minLength": 1,
+            "maxLength": 50,
+            "format": "date-time"
+          },
+          "end": {
+            "type": "string",
+            "description": "ISO end time",
+            "minLength": 1,
+            "maxLength": 50,
+            "format": "date-time"
+          },
+          "factor": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          }
+        },
+        "additionalProperties": false,
+        "required": ["start", "end", "factor"]
+      },
+      "maxItems": 50,
+      "default": []
+    },
+    "rewardMode": {
+      "type": "string",
+      "enum": ["configured", "stack", "replace"],
+      "default": "configured"
+    },
+    "season": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique season archive name",
+          "minLength": 1,
+          "maxLength": 50,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "end": {
+          "type": "string",
+          "description": "UTC season cutoff",
+          "minLength": 1,
+          "maxLength": 50,
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "rankCard": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Render PNG rank cards",
+          "default": false
+        },
+        "background": {
+          "type": "string",
+          "description": "Card background",
+          "minLength": 1,
+          "maxLength": 7,
+          "pattern": "^#[A-Fa-f0-9]{6}$",
+          "default": "#202430"
+        },
+        "foreground": {
+          "type": "string",
+          "description": "Card text color",
+          "minLength": 1,
+          "maxLength": 7,
+          "pattern": "^#[A-Fa-f0-9]{6}$",
+          "default": "#ffffff"
+        },
+        "asset": {
+          "type": "string",
+          "description": "Optional background image asset",
+          "minLength": 1,
+          "maxLength": 100
+        }
+      },
+      "additionalProperties": false
+    },
+    "importFile": {
+      "type": "string",
+      "description": "Instance CSV file with userId,xp columns",
+      "minLength": 1,
+      "maxLength": 150
+    },
+    "bonuses": {
+      "type": "object",
+      "properties": {
+        "approved": {
+          "type": "integer",
+          "description": "approved event XP",
+          "minimum": 0,
+          "maximum": 1000000,
+          "default": 0
+        },
+        "starred": {
+          "type": "integer",
+          "description": "starred event XP",
+          "minimum": 0,
+          "maximum": 1000000,
+          "default": 0
+        },
+        "attended": {
+          "type": "integer",
+          "description": "attended event XP",
+          "minimum": 0,
+          "maximum": 1000000,
+          "default": 0
+        },
+        "roomClosed": {
+          "type": "integer",
+          "description": "roomClosed event XP",
+          "minimum": 0,
+          "maximum": 1000000,
+          "default": 0
+        }
       },
       "additionalProperties": false
     }

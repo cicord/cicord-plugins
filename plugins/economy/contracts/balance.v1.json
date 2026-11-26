@@ -1,0 +1,25 @@
+{
+  "input": {
+    "type": "object",
+    "properties": {
+      "userId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      }
+    },
+    "additionalProperties": false,
+    "required": ["userId"]
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "balance": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "additionalProperties": false,
+    "required": ["balance"]
+  }
+}

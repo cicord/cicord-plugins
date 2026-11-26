@@ -1,0 +1,36 @@
+{
+  "input": {
+    "type": "object",
+    "properties": {
+      "userId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "amount": {
+        "type": "integer",
+        "minimum": -1000000000,
+        "maximum": 1000000000
+      },
+      "reason": {
+        "type": "string",
+        "description": "Reason",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "additionalProperties": false,
+    "required": ["userId", "amount"]
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "xp": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "additionalProperties": false,
+    "required": ["xp"]
+  }
+}

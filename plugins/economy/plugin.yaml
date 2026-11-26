@@ -1,0 +1,58 @@
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: economy
+  version: 0.1.0
+  displayName: Economy
+  description: Server points, daily claims, transfers and a community rewards shop.
+  license: Apache-2.0
+spec:
+  engine: ">=0.2.0"
+  entry: ./src/index.ts
+  config: {schema: ./config.schema.json}
+  locales: ./locales
+  delivery: at-least-once
+  capabilities:
+    - storage.kv # balances and append-only journal
+    - discord.messages.send # wallet and shop commands
+    - portal.routes # member wallets and staff ledger
+    - events.publish # financial journal notifications
+    - scheduler # pending shop fulfillment and poll batches
+  optional:
+    - feature: eventRewards
+      capabilities: [events.subscribe]
+    - feature: pollPages
+      capabilities: [plugins.query:polls.voters]
+    - feature: permanentRole
+      capabilities: [discord.roles.assign, discord.members.read]
+    - feature: temporaryRole
+      capabilities: [plugins.call:member-roles.grantTemporary]
+    - feature: perk
+      capabilities: [plugins.call:tickets.open]
+    - feature: messageRewards
+      intents: [ServerMessages]
+    - feature: voiceRewards
+      intents: [ServerVoiceStates]
+      capabilities: [discord.members.read, discord.channels.read]
+  interop:
+    types: ./src/contracts.ts
+    publishes:
+      - {topic: transaction, version: 1, scope: server}
+    subscribes:
+      - {topic: levels.levelUp, version: 1}
+      - {topic: polls.closed, version: 2}
+      - {topic: suggestions.statusChanged, version: 1}
+      - {topic: starboard.starred, version: 1}
+      - {topic: birthdays.today, version: 1}
+      - {topic: community-events.ended, version: 1}
+      - {topic: tickets.closed, version: 1}
+    provides:
+      queries: [balance]
+      actions: [credit, debit]
+    consumes:
+      queries: [polls.voters]
+      actions: [member-roles.grantTemporary, tickets.open]
+  privacy:
+    records:
+      - {name: accounts, policy: erase, description: "Balances, claims, earnings, purchase receipts and journal rows attributable to a member."}
+  routes: {types: ./src/routes.ts}

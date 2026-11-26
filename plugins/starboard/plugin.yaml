@@ -1,0 +1,30 @@
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: starboard
+  version: 0.1.0
+  displayName: Starboard
+  description: Highlight starred messages within their original audience.
+  license: Apache-2.0
+spec:
+  engine: ">=0.2.0"
+  entry: ./src/index.ts
+  config: {schema: ./config.schema.json}
+  locales: ./locales
+  delivery: at-least-once
+  capabilities:
+    - storage.kv # source IDs, copy links and score index
+    - scheduler # coalesce edits and recheck inactive copies
+    - discord.messages.send # publish highlights
+    - discord.messages.read # read source and reaction membership
+    - discord.messages.manage # remove invalidated copies
+    - discord.channels.read # compare live audiences
+    - events.publish # notify once per highlight
+  intents: [ServerMessageReactions, ServerMessages, MessageContent]
+  interop:
+    types: ./src/contracts.ts
+    publishes:
+      - {topic: starred, version: 1, scope: server}
+  privacy:
+    records:
+      - {name: copies, policy: erase, description: "Erase the member’s source references, board copies and ranking entries."}

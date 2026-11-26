@@ -1,6 +1,7 @@
 import type { Message, MessagePayload } from "@cicord/sdk";
 import { callRoute, createTestContext, runCommand } from "@cicord/sdk/testing";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
+import en from "../locales/en.json" with { type: "json" };
 import schema from "../config.schema.json" with { type: "json" };
 import plugin from "../src/index.ts";
 import { levelOf, progress, stepXp } from "../src/levels.ts";
@@ -21,6 +22,8 @@ const grants = [
 function setup(config: Record<string, unknown> = {}) {
   return createTestContext({
     schema,
+    locales: { en },
+    features: ["pollBonus", "pollPages"],
     config: {
       xpPerMessage: 100,
       announce: { channel: "level-ups" },
@@ -224,7 +227,17 @@ describe("recap, poll bonus and routes", () => {
 
   test("polls.closed gives every voter bonus XP", async () => {
     const t = setup({ pollBonusXp: 7 });
-    await plugin.subscriptions!["polls.closed"]!(t.ctx, { pollId: "1", voters: ["1", "2"] });
+    await plugin.subscriptions!["polls.closed"]!(
+      t.ctx,
+      { pollId: "1", voters: ["1", "2"] },
+      {
+        id: "legacy-fixture",
+        topic: "polls.closed",
+        version: 2,
+        at: "2026-11-21T12:00:00Z",
+        publisher: { bot: "bot", instance: "polls", plugin: "polls" },
+      },
+    );
     expect(t.kv.get("xp:1")).toBe(7);
     expect(t.kv.get("xp:2")).toBe(7);
     // voters who never chatted still get a name on the public leaderboard
