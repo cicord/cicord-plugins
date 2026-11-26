@@ -56,6 +56,7 @@ spec:
   intents: [ServerMembers, ServerMessages, ServerModeration]
   secrets:
     - name: WEBHOOK_URL
+      use: webhook.send
       description: Discord or Slack webhook URL for moderation notices
       required: false
       hosts: [discord.com, hooks.slack.com]
