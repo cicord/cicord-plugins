@@ -65,5 +65,6 @@
   "deletedSubject": "Deleted ticket subject",
   "confirmRetain": "Close ticket #{number}? Its channel will be archived.",
   "relayDenied": "Your private message could not be delivered. Contact staff to check the ticket permissions.",
-  "relayPending": "Delivering a private message…"
+  "relayPending": "Delivering a private message…",
+  "removedMessage": "This message was removed."
 }

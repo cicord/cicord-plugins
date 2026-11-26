@@ -2,10 +2,12 @@ import { relay } from "./relay.ts";
 import english from "../locales/en.json";
 import { ordered } from "./ordered.ts";
 import * as sdk from "@cicord/sdk";
-import { renderTranscript, withdrawCopies } from "./transcript.ts";
-import { maintenance, receivedReply } from "./lifecycle.ts";
+import { renderTranscript, requestSweep, sweepCopies } from "./transcript.ts";
+import { ensureIndexed, maintenance, receivedReply, reindex } from "./lifecycle.ts";
 import { privacy } from "./privacy.ts";
+import { appealPendingKey, appealPrefix, ratingCount, ratingSum } from "./indexes.ts";
 import {
+  InteropError,
   command,
   query,
   action,
@@ -27,12 +29,13 @@ import {
   mayReadTranscript,
   relayAllowed,
   publish,
-  allTickets,
   addEvent,
   channelKey,
   closeTicket,
   escapeMarkdown,
+  findRequest,
   getTicket,
+  indexed,
   isLabel,
   isStaff,
   listStaff,
@@ -140,6 +143,45 @@ function labelValue(ctx: Context, value: unknown): string | null | RouteEnvelope
 }
 
 const isPriority = (v: unknown): v is Priority => PRIORITIES.includes(v as Priority);
+
+/** The modmail queue, when the optional feature is granted and its type is configured. */
+function modmailType(ctx: Context) {
+  if (!ctx.features.enabled("modmail")) return undefined;
+  return ticketType(ctx, ctx.config.modmailType);
+}
+
+/** Operator status lines for configuration that degrades a feature (P10). */
+function reportConfig(ctx: Context) {
+  const keys = (ctx.config.types ?? []).map((t) => t.key);
+  const duplicates = [...new Set(keys.filter((k, i) => keys.indexOf(k) !== i))];
+  ctx.status.set(
+    "types",
+    duplicates.length
+      ? "Duplicate ticket type " + duplicates.join(", ") + ": only the first definition is used"
+      : null,
+  );
+  const mail = ctx.config.modmailType;
+  ctx.status.set(
+    "modmail",
+    mail && !ticketType(ctx, mail)
+      ? "Unknown modmailType " + mail + ": direct messages do not open tickets"
+      : mail && !ctx.features.enabled("modmail")
+        ? "Modmail needs discord.dm.send: direct messages do not open tickets"
+        : null,
+  );
+  ctx.status.set(
+    "transcriptFiles",
+    types(ctx).some((t) => t.retainSourceForTranscript && t.logChannel) &&
+      !ctx.features.enabled("managedMessages")
+      ? "Transcript files need discord.messages.manage: log channels receive summaries only"
+      : null,
+  );
+}
+
+function ticketReply(t: Ticket, userId: string) {
+  if (t.author.id !== userId) throw new InteropError("denied", "Idempotency key already used");
+  return { id: t.id, ...(t.channelId ? { channelId: t.channelId } : {}) };
+}
 const USER_ID = /^\d{1,20}$/;
 const PRIORITY_LIST = PRIORITIES.join(", ");
 
@@ -191,6 +233,8 @@ export default definePlugin({
       const t = await getTicket(ctx, payload.number);
       if (t) await provisionTicket(ctx, t);
     }),
+    reindex,
+    sweepCopies,
   },
   queries: {
     openFor: query({
@@ -226,23 +270,39 @@ export default definePlugin({
         typeof status !== "string"
       )
         return;
-      for (const t of await allTickets(ctx)) {
-        if (
-          t.author.id === userId &&
-          t.appeal?.number === caseNumber &&
-          t.appeal.bot === meta.publisher.bot &&
-          t.appeal.instance === meta.publisher.instance &&
-          t.appeal.status !== status
-        ) {
-          t.appeal.status = status;
-          await saveTicket(ctx, t);
+      const appeal = {
+        number: caseNumber,
+        bot: meta.publisher.bot,
+        instance: meta.publisher.instance,
+      };
+      const prefix = appealPrefix(appeal, userId);
+      let cursor: string | undefined;
+      do {
+        const page = await ctx.kv.list({ prefix, limit: 100, ...(cursor ? { cursor } : {}) });
+        for (const item of page.items) {
+          const t = await getTicket(ctx, Number(item.key.slice(prefix.length)));
+          if (
+            t?.author.id === userId &&
+            t.appeal?.number === caseNumber &&
+            t.appeal.bot === appeal.bot &&
+            t.appeal.instance === appeal.instance &&
+            t.appeal.status !== status
+          ) {
+            t.appeal.status = status;
+            await saveTicket(ctx, t);
+          }
         }
-      }
+        cursor = page.cursor;
+      } while (cursor);
+      // Records not indexed yet receive the newest status from the migration task.
+      if (!(await indexed(ctx))) await ctx.kv.set(appealPendingKey(appeal, userId), status);
     }),
   },
   actions: {
+    // Actions run in a fresh realm per call (module state such as `ordered` is not shared):
+    // the request receipt `req:<caller>:<key>` is committed atomically with the ticket.
     open: action({
-      run: ordered(async (ctx, input, call) => {
+      async run(ctx, input, call) {
         const data = input as {
           userId: string;
           subject: string;
@@ -253,7 +313,7 @@ export default definePlugin({
         const isAppeal = call.caller.plugin === "moderation" && data.caseNumber !== undefined;
         const key = data.type ?? (isAppeal ? ctx.config.appealType : undefined);
         if (isAppeal && !key && types(ctx).length > 1)
-          throw new Error("Configure appealType for moderation appeals");
+          throw new InteropError("denied", "Configure appealType for moderation appeals");
         if (
           call.onBehalfOf?.access === "scoped" &&
           (!isAppeal ||
@@ -261,29 +321,24 @@ export default definePlugin({
             call.onBehalfOf.resourceScope.id !== String(data.caseNumber) ||
             data.userId !== call.onBehalfOf.userId)
         )
-          throw new Error("Case scope does not authorize this ticket");
+          throw new InteropError("denied", "Case scope does not authorize this ticket");
         const type = ticketType(ctx, key);
-        if (!type || !call.onBehalfOf) throw new Error("Ticket author required");
+        if (!type) throw new InteropError("denied", "Unknown ticket type");
+        if (!call.onBehalfOf) throw new InteropError("denied", "Ticket author required");
         const viewer = await ctx.server.member(call.onBehalfOf.userId);
         if (call.onBehalfOf.userId !== data.userId && !isStaff(ctx, viewer, type.key))
-          throw new Error("Ticket staff required");
+          throw new InteropError("denied", "Ticket staff required");
+        // Keyed by the calling installation and its key only: a retry from a later
+        // interaction or route returns the same ticket.
         const request = {
           caller: call.caller.bot + "/" + call.caller.instance,
           key: call.idempotencyKey,
         };
-        const previous = (await allTickets(ctx)).find(
-          (t) => t.request?.caller === request.caller && t.request.key === request.key,
-        );
-        if (previous) {
-          if (previous.author.id !== data.userId) throw new Error("Idempotency key already used");
-          return {
-            id: previous.id,
-            ...(previous.channelId ? { channelId: previous.channelId } : {}),
-          };
-        }
+        const previous = await findRequest(ctx, request);
+        if (previous) return ticketReply(previous, data.userId);
+        // The open-ticket limit is checked with the receipt in requestTicket: a concurrent
+        // duplicate must find the committed receipt, not a full quota.
         const member = await ctx.server.member(data.userId);
-        if ((await openTickets(ctx, data.userId)).length >= ctx.config.maxOpenPerMember)
-          throw new Error("Open ticket limit reached");
         const user = member?.user ?? {
           id: data.userId,
           displayName: data.userId,
@@ -295,18 +350,25 @@ export default definePlugin({
           data.caseNumber && call.caller.plugin === "moderation"
             ? { number: data.caseNumber, bot: call.caller.bot, instance: call.caller.instance }
             : undefined;
-        return requestTicket(ctx, {
-          user,
-          member,
-          appeal,
-          request,
-          subject: data.subject,
-          description: data.description ?? "",
-          source: "interop",
-          label: null,
-          type: type.key,
-        });
-      }),
+        try {
+          const t = await requestTicket(ctx, {
+            user,
+            member,
+            appeal,
+            request,
+            subject: data.subject,
+            description: data.description ?? "",
+            source: "interop",
+            label: null,
+            type: type.key,
+          });
+          return ticketReply(t, data.userId);
+        } catch (error) {
+          if (error instanceof OpenLimit)
+            throw new InteropError("denied", "Open ticket limit reached");
+          throw error;
+        }
+      },
     }),
   },
   ...(sdk.sdkFeatures?.contextMenus
@@ -348,20 +410,20 @@ export default definePlugin({
         },
       }
     : {}),
+  // Startup only reports. Log copies are rechecked by serverAvailable and the maintenance
+  // cron; the schema-2 migration runs in bounded `reindex` tasks.
   async onStart(ctx) {
-    await withdrawCopies(ctx);
     ctx.features.report?.(
       "messageContextMenu",
       Boolean(sdk.sdkFeatures?.contextMenus),
       sdk.sdkFeatures?.contextMenus ? undefined : "SDK-13 message context menus unavailable",
     );
-    const keys = new Set<string>();
-    for (const type of types(ctx)) {
-      if (keys.has(type.key)) throw new Error("Duplicate ticket type: " + type.key);
-      keys.add(type.key);
+    try {
+      reportConfig(ctx);
+      await ensureIndexed(ctx);
+    } catch (error) {
+      ctx.log.warn("Startup checks deferred", { error: String(error) });
     }
-    if (ctx.config.modmailType && !keys.has(ctx.config.modmailType))
-      throw new Error("Unknown modmail type");
     ctx.log.info("tickets ready", { staffRoles: ctx.config.staffRoles.length });
   },
 
@@ -547,25 +609,25 @@ export default definePlugin({
 
   events: {
     serverAvailable: ordered(async (ctx) => {
-      await withdrawCopies(ctx);
+      await requestSweep(ctx);
     }),
     serverJoin: ordered(async (ctx) => {
-      await withdrawCopies(ctx);
+      await requestSweep(ctx);
     }),
-    channelUpdate: ordered(async (ctx, e) => {
-      await withdrawCopies(ctx, e.channel.id);
+    channelUpdate: ordered(async (ctx) => {
+      await requestSweep(ctx);
     }),
     roleUpdate: ordered(async (ctx) => {
-      await withdrawCopies(ctx);
+      await requestSweep(ctx);
     }),
     roleDelete: ordered(async (ctx) => {
-      await withdrawCopies(ctx);
+      await requestSweep(ctx);
     }),
     directMessage: ordered(async (ctx, m) => {
       const member = await ctx.server.member(m.author.id);
       if (!member || m.author.bot) return;
       const text = [m.content, ...m.attachments.map((a) => a.url)].filter(Boolean).join("\n");
-      const type = ticketType(ctx, ctx.config.modmailType);
+      const type = modmailType(ctx);
       if (!type) return;
       const open = await openTickets(ctx, member.id);
       for (const id of open) {
@@ -618,7 +680,7 @@ export default definePlugin({
       const t = await getTicket(ctx, n);
       if (!t || t.status !== "open") return;
       const staff = isStaff(ctx, message.member, t.type) && message.author.id !== t.author.id;
-      if (t.source === "modmail" && staff) {
+      if (t.source === "modmail" && staff && ctx.features.enabled("modmail")) {
         const body =
           [message.content, ...message.attachments.map((a) => a.url)]
             .filter(Boolean)
@@ -658,13 +720,19 @@ export default definePlugin({
       async handler(ctx, req) {
         if (!isStaff(ctx, req.viewer?.member))
           return fail(403, "forbidden", "Ticket staff required");
-        const ratings = (await allTickets(ctx))
-          .filter((t) => mayRead(ctx, t, req.viewer?.member) && t.rating !== undefined)
-          .map((t) => t.rating!);
-        return {
-          rated: ratings.length,
-          mean: ratings.length ? ratings.reduce((a, b) => a + b, 0) / ratings.length : null,
-        };
+        // Per-type counters maintained with each record (src/indexes.ts).
+        let rated = 0;
+        let sum = 0;
+        for (const type of types(ctx)) {
+          if (!isStaff(ctx, req.viewer?.member, type.key)) continue;
+          const [count, total] = await ctx.kv.getMany<number>([
+            ratingCount(type.key),
+            ratingSum(type.key),
+          ]);
+          rated += count ?? 0;
+          sum += total ?? 0;
+        }
+        return { rated, mean: rated ? sum / rated : null };
       },
     },
     "GET /tickets/:id/transcript": {
@@ -814,8 +882,10 @@ export default definePlugin({
       async handler(ctx, request) {
         const reader = staffViewer(ctx, request.viewer);
         if (failed(reader)) return reader;
-        const { status, assignee, priority, label } = request.query;
+        const { status, assignee, priority, label, cursor } = request.query;
         const f: TicketFilters = {};
+        if (cursor !== undefined && !/^[1-9]\d{0,7}$/.test(cursor))
+          return fail(400, "invalid", "cursor must come from a previous page");
         if (status !== undefined) {
           if (status !== "open" && status !== "closed")
             return fail(400, "invalid", "status must be open or closed");
@@ -839,7 +909,12 @@ export default definePlugin({
           else if (isLabel(ctx, label)) f.label = label;
           else return fail(400, "invalid", "label must be a configured label key or none");
         }
-        return { items: await listTickets(ctx, f, request.viewer?.member) };
+        return listTickets(
+          ctx,
+          f,
+          request.viewer?.member,
+          cursor === undefined ? undefined : Number(cursor),
+        );
       },
     },
 

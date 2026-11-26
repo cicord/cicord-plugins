@@ -10,8 +10,18 @@ import {
   type VoiceStateUpdate,
 } from "@cicord/sdk";
 import {
+  BLOCKED_SECONDS,
   BOT_PERMISSIONS,
+  PENDING,
+  PENDING_SECONDS,
   PERMIT_PERMISSIONS,
+  STALE_PENDING_MS,
+  blockedKey,
+  missingPermissions,
+  pendingKey,
+  provisionKey,
+  permissionRefusal,
+  permissionsStatus,
   patchRoom,
   deleteIfEmpty,
   deleteRoom,
@@ -25,11 +35,13 @@ import {
   mayUseHub,
   nextNumber,
   reason,
+  reserveRename,
   roomLeft,
   roomName,
   roomSettings,
   saveRoom,
   type Hub,
+  type Pending,
   type Room,
 } from "./rooms.ts";
 
@@ -80,6 +92,15 @@ async function hubJoined(ctx: Context, member: Member, hub: Hub, hubId: string):
   }
 }
 
+/** Records a Discord permission refusal: a status line, and joins wait instead of churning. */
+async function refused(ctx: Context, hub: Hub, hubId: string, what: string, error: unknown) {
+  ctx.status.set(
+    permissionsStatus(hubId),
+    `Hub ${hub.channel}: Discord refused to ${what} (${errorText(error)}). Give the bot Manage Channels, Connect and Move Members on the hub and its room category. Joins wait ${BLOCKED_SECONDS / 60} minutes between attempts.`,
+  );
+  await ctx.kv.set(blockedKey(hubId), Date.now(), { ttlSeconds: BLOCKED_SECONDS });
+}
+
 async function createRoom(
   ctx: Context,
   member: Member,
@@ -89,33 +110,81 @@ async function createRoom(
 ): Promise<void> {
   const categoryId = hubChannel(ctx, hub)?.categoryId;
   const category = hub.category ?? (categoryId ? { id: categoryId } : undefined);
+  // A hub whose bot lacks Discord permissions creates nothing: no channel created then
+  // deleted on every join, one status line instead.
+  const missing = await missingPermissions(ctx, hub, category);
+  if (missing.length) {
+    ctx.status.set(
+      permissionsStatus(hubId),
+      `Hub ${hub.channel}: the bot lacks ${missing.join(", ")} on the hub or its room category. Joins do not create rooms until it has them.`,
+    );
+    return;
+  }
+  if (await ctx.kv.get(blockedKey(hubId))) return;
+  // At-least-once: a redelivered join, or one handled by another realm, finds the marker
+  // and resumes with its provisioning key, so the host returns the same channel.
+  const pending = pendingKey(hubId, member.id);
+  const fresh: Pending = { token: crypto.randomUUID(), at: Date.now() };
+  const claimed = await ctx.kv
+    .atomic()
+    .check(pending, null)
+    .set(pending, fresh, { ttlSeconds: PENDING_SECONDS })
+    .commit();
+  const marker = claimed.ok ? fresh : await ctx.kv.get<Pending>(pending);
+  if (!marker) return; // cleared meanwhile: the other attempt finished
+  if (!claimed.ok)
+    ctx.log.info("resuming an interrupted or concurrent room creation", {
+      hub: hubId,
+      member: member.id,
+    });
   // Created without overwrites, a channel in a category gets the category's: a room of a
   // private category stays private. The owner's and the bot's are added next.
-  const channel = await ctx.server.createChannel({
-    name: roomName(
-      hub.name === "🔊 {member}'s channel"
-        ? ctx.i18n.t("defaultName", { member: "{member}" })
-        : hub.name,
-      member,
+  let channel: Awaited<ReturnType<Context["server"]["createChannel"]>>;
+  try {
+    channel = await ctx.server.createChannel({
+      name: roomName(
+        hub.name === "🔊 {member}'s channel"
+          ? ctx.i18n.t("defaultName", { member: "{member}" })
+          : hub.name,
+        member,
+        n,
+      ),
+      type: "voice",
+      ...(category ? { category } : {}),
+      ...(hub.userLimit > 0 ? { userLimit: hub.userLimit } : {}),
+      ...(hub.bitrate !== undefined ? { bitrate: hub.bitrate } : {}),
+      provisionKey: provisionKey(hubId, member.id, marker.token),
+    });
+  } catch (e) {
+    // Only a refusal proves nothing was created. After an ambiguous failure the marker
+    // stays: a replay resumes with the same key and never creates a second room.
+    if (!permissionRefusal(e)) throw e;
+    await ctx.kv.delete(pending);
+    await refused(ctx, hub, hubId, "create the room", e);
+    return;
+  }
+  if (await getRoom(ctx, channel.id)) {
+    // A concurrent attempt with the same key already recorded the room and moves the member.
+    await ctx.kv.delete(pending);
+    return;
+  }
+  await saveRoom(
+    ctx,
+    channel.id,
+    {
+      opened: "moving",
+      peak: 1,
+      guests: {},
+      ...(/\{member\}|\{username\}/.test(hub.name)
+        ? { name: channel.name, nameOwner: member.id }
+        : {}),
+      hub: hubId,
+      owner: member.id,
       n,
-    ),
-    type: "voice",
-    ...(category ? { category } : {}),
-    ...(hub.userLimit > 0 ? { userLimit: hub.userLimit } : {}),
-    ...(hub.bitrate !== undefined ? { bitrate: hub.bitrate } : {}),
-  });
-  await saveRoom(ctx, channel.id, {
-    opened: "moving",
-    peak: 1,
-    guests: {},
-    ...(/\{member\}|\{username\}/.test(hub.name)
-      ? { name: channel.name, nameOwner: member.id }
-      : {}),
-    hub: hubId,
-    owner: member.id,
-    n,
-    createdAt: new Date().toISOString(),
-  });
+      createdAt: new Date().toISOString(),
+    },
+    pending,
+  );
   try {
     await remember(ctx, channel.id, member.id, { allow: [...hub.ownerPermissions] });
     await ctx.server.editChannel(channel, {
@@ -125,16 +194,27 @@ async function createRoom(
       },
       reason: reason("owner permissions"),
     });
+    ctx.status.set("owner-permissions", null);
   } catch (e) {
     // The room works without them; the bot misses a permission it would give.
     ctx.log.error("could not give the owner their permissions", {
       channel: channel.id,
       error: errorText(e),
     });
+    if (permissionRefusal(e))
+      ctx.status.set(
+        "owner-permissions",
+        `Room owners do not get their permissions: Discord refused the overwrites (${errorText(e)}). The bot needs Manage Permissions and every owner permission on the room category.`,
+      );
   }
   try {
     await member.moveTo(channel, reason("new room"));
   } catch (e) {
+    if (permissionRefusal(e)) {
+      await refused(ctx, hub, hubId, "move the member into their room", e);
+      await deleteIfEmpty(ctx, channel.id, "the bot cannot move members");
+      return;
+    }
     // They left voice meanwhile: nobody will ever join this room.
     ctx.log.info("member left before being moved to their room", {
       channel: channel.id,
@@ -143,6 +223,7 @@ async function createRoom(
     await deleteIfEmpty(ctx, channel.id, "owner left before joining");
     return;
   }
+  ctx.status.set(permissionsStatus(hubId), null);
   const room = await patchRoom(ctx, channel.id, (r) => {
     r.opened = ctx.features.enabled("roomEvents") ? "pending" : "sent";
   });
@@ -221,10 +302,6 @@ async function managed(ctx: Context, i: CommandInteraction): Promise<Target | un
   return t;
 }
 
-// Discord allows two renames of a channel per 10 minutes: the third would wait for minutes.
-const renames = new Map<string, number[]>();
-const RENAME_WINDOW = 10 * 60 * 1000;
-
 /** Moves ownership of a room to `to` (who must be in it). */
 /**
  * Whether `member` may own the room: like using its hub, they need one of the hub's allowed
@@ -285,12 +362,10 @@ const voice = command({
       async run(ctx, i) {
         const t = await managed(ctx, i);
         if (!t) return;
-        const recent = (renames.get(t.id) ?? []).filter((at) => Date.now() - at < RENAME_WINDOW);
-        if (recent.length >= 2) {
+        if (!(await reserveRename(ctx, t.id))) {
           await i.reply(ctx.i18n.t("rate"));
           return;
         }
-        renames.set(t.id, [...recent, Date.now()]);
         await ctx.server.editChannel(
           { id: t.id },
           { name: i.options.name, reason: reason("renamed by " + i.user.id) },
@@ -460,7 +535,47 @@ async function setConnect(ctx: Context, t: Target, how: "deny" | "clear"): Promi
 /** Checks every room: deletes the empty ones (and forgets those deleted by hand). */
 async function sweep(ctx: Context): Promise<void> {
   if (ctx.config.enabled === false) return;
+  await sweepPending(ctx);
   await sweepPage(ctx, undefined, false);
+}
+/**
+ * Creation markers left by an interrupted attempt: the channel its provisioning key created,
+ * if any, was never recorded as a room. It is deleted once empty (a member who rejoins the
+ * hub meanwhile resumes it instead), then the marker is forgotten. One bounded page per run.
+ */
+async function sweepPending(ctx: Context) {
+  const page = await ctx.kv.list<Pending>({ prefix: PENDING, limit: 25 });
+  for (const { key, value } of page.items) {
+    if (!value?.token || Date.now() - value.at < STALE_PENDING_MS) continue;
+    const [hubId, memberId] = key.slice(PENDING.length).split(":");
+    if (!hubId || !memberId) continue;
+    const found = await ctx.server.recoverOwnedChannel({
+      provisionKey: provisionKey(hubId, memberId, value.token),
+    });
+    if (found.status === "owned" && found.id && !(await getRoom(ctx, found.id))) {
+      let humans: Member[];
+      try {
+        humans = await humansIn(ctx, found.id);
+      } catch {
+        continue; // voice states not known yet: next run
+      }
+      if (humans.length) continue;
+      try {
+        await ctx.server.deleteChannel({ id: found.id }, reason("interrupted room creation"));
+      } catch (e) {
+        ctx.log.warn("could not delete an untracked room", {
+          channel: found.id,
+          error: errorText(e),
+        });
+        continue;
+      }
+      ctx.log.info("deleted the channel of an interrupted room creation", { channel: found.id });
+    }
+    // Forget the marker unless a resumed attempt replaced it meanwhile.
+    const entry = await ctx.kv.getEntry<Pending>(key);
+    if (entry?.value.token === value.token)
+      await ctx.kv.atomic().check(key, entry.version).delete(key).commit();
+  }
 }
 async function sweepPage(ctx: Context, cursor: string | undefined, reset: boolean) {
   const page = await ctx.kv.list({ prefix: "room:", limit: 25, cursor });

@@ -8,6 +8,7 @@ declare module "@cicord/sdk" {
       channel: string;
       keywords: string[];
       mentionRole?: string;
+      backlog: number;
       template: string;
     }[];
     pollMinutes: number;

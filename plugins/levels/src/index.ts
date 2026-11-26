@@ -23,19 +23,24 @@ import {
   saveProfile,
 } from "./levels.ts";
 import {
+  authoredIndex,
   credit,
   migrate,
   personal,
+  reactedIndex,
+  receiptKey,
   seasonBatch,
   importCsv,
   ConcurrentReaction,
+  WEEK,
+  peakKey,
+  type Peak,
   type ReactionChange,
+  type Receipt,
 } from "./storage.ts";
 import { collect, prune } from "./recap.ts";
 import type { GrantXp } from "./contracts.ts";
 import type { Routes } from "./routes.ts";
-
-const WEEK = 7 * 24 * 3600;
 
 interface AwardContext {
   /** Message that earned the XP (announce by replying to it, react 🎉). */
@@ -53,41 +58,55 @@ async function award(
   absolute = false,
   reaction?: ReactionChange,
 ): Promise<number> {
-  const { xp, previous, level, eventId } = await credit(
-    ctx,
-    userId,
-    amount,
-    id,
-    absolute,
-    reaction,
-  );
-  if (level > previous) {
-    if (ctx.features.enabled("levelEvents"))
-      await ctx.events.publish(
-        "levelUp",
-        { userId, level, previous, xp },
-        { idempotencyKey: eventId ?? id + ":" + userId },
-      );
-    // A role transition may be reconciled repeatedly; send at most one public celebration per award.
-    const notice = "notice:" + userId + ":" + id;
-    if (
-      (
-        await ctx.kv
-          .atomic()
-          .check(notice, null)
-          .set(notice, true, { ttlSeconds: 30 * 86400 })
-          .commit()
-      ).ok
-    )
-      await levelUp(ctx, userId, level, from);
-  }
-  return xp;
+  const receipt = await credit(ctx, userId, amount, id, absolute, reaction);
+  if (receipt.crossed) await levelUp(ctx, userId, receipt, from);
+  return receipt.xp;
 }
 
-async function levelUp(ctx: Context, userId: string, level: number, from: AwardContext) {
+/**
+ * Re-runs the level-up effects of an award that already committed (a redelivery after a
+ * crash). Never credits: a missing receipt means there is nothing to finish.
+ */
+async function replay(ctx: Context, userId: string, id: string, from: AwardContext) {
+  const receipt = await ctx.kv.get<Receipt>(receiptKey(userId, id));
+  if (receipt?.crossed) await levelUp(ctx, userId, receipt, from);
+}
+
+/**
+ * Effects of crossing a level, safe to repeat: role rewards reconcile, the event has a
+ * stable key per level (and season), and the public celebration is reserved once.
+ */
+async function levelUp(ctx: Context, userId: string, receipt: Receipt, from: AwardContext) {
+  const { level, previous, season } = receipt.crossed!;
+  const fact = userId + ":" + level + (season ? ":" + season : "");
   ctx.log.info("level up", { member: userId, level });
   const member = from.member ?? (await ctx.server.member(userId));
-  if (member) await applyRewards(ctx, member, level);
+  // A late replay must not roll roles back below a level reached since.
+  const peak = await ctx.kv.get<Peak>(peakKey(userId));
+  if (member)
+    await applyRewards(
+      ctx,
+      member,
+      Math.max(level, peak && peak.season === season ? peak.level : 0),
+    );
+  if (ctx.features.enabled("levelEvents"))
+    await ctx.events.publish(
+      "levelUp",
+      { userId, level, previous, xp: receipt.xp },
+      { idempotencyKey: "levelUp:" + fact },
+    );
+  // Reserved before sending: a replay never repeats the public celebration (at most once).
+  const notice = "notice:" + fact;
+  if (
+    !(
+      await ctx.kv
+        .atomic()
+        .check(notice, null)
+        .set(notice, true, { ttlSeconds: 30 * 86400 })
+        .commit()
+    ).ok
+  )
+    return;
 
   const template =
     ctx.config.announce.message === "GG {member}, you reached **level {level}**! 🎉"
@@ -123,6 +142,7 @@ async function levelUp(ctx: Context, userId: string, level: number, from: AwardC
 async function applyRewards(ctx: Context, member: Member, level: number) {
   const reached = ctx.config.rewards.filter((r) => r.level <= level);
   const highest = Math.max(0, ...reached.map((r) => r.level));
+  const failed: string[] = [];
   for (const r of reached) {
     const wanted =
       ctx.config.rewardMode === "stack" ||
@@ -133,6 +153,7 @@ async function applyRewards(ctx: Context, member: Member, level: number) {
       else if (!wanted && member.hasRole(r.role))
         await member.removeRole(r.role, `levels: level ${level}`);
     } catch (error) {
+      failed.push(r.role + " (" + String(error).slice(0, 80) + ")");
       ctx.log.warn("levels: role reward failed", {
         member: member.id,
         role: r.role,
@@ -140,6 +161,16 @@ async function applyRewards(ctx: Context, member: Member, level: number) {
       });
     }
   }
+  if (reached.length)
+    ctx.status.set(
+      "role-rewards",
+      failed.length
+        ? (
+            "Check discord.roles.assign and that the bot's role is above the reward roles. Failed: " +
+            failed.join(", ")
+          ).slice(0, 300)
+        : null,
+    );
 }
 
 const tr = (ctx: Context, key: string, vars: Record<string, string | number> = {}) =>
@@ -168,12 +199,18 @@ function multiplier(ctx: Context, m: Member, channel: string) {
 }
 const adminXp = (mode: "give" | "remove" | "set" | "reset") =>
   subcommand({
-    description: mode + " member XP",
+    // Canonical English; the locale catalogs translate names and descriptions.
+    description: {
+      give: "Give XP",
+      remove: "Take XP",
+      set: "Set a member’s XP",
+      reset: "Reset one account",
+    }[mode],
     options: {
       member: { type: "user", required: true, description: "Member" },
       amount: {
         type: "integer",
-        description: "XP amount",
+        description: mode === "reset" ? "XP amount (ignored for reset)" : "XP amount",
         min: 0,
         max: 1000000000,
         required: mode !== "reset",
@@ -250,8 +287,9 @@ async function reaction(
     : ctx.config.noXpRoles.length
       ? 0
       : ctx.config.reactionXp;
+  const from = member ? { member } : {};
   for (;;) {
-    const old = await ctx.kv.getEntry<{ emojis: string[]; amount: number }>(key);
+    const old = await ctx.kv.getEntry<ReactionChange["value"]>(key);
     let emojis = old?.value.emojis;
     if (!emojis) {
       const prefix = "react:" + message.id + ":" + reactor + ":";
@@ -259,21 +297,22 @@ async function reaction(
         item.key.slice(prefix.length),
       );
     }
-    if (emojis.includes(emoji) === adding) return;
+    // Already recorded: a redelivery. Finish the effects of the award that recorded it.
+    if (emojis.includes(emoji) === adding) {
+      if (old?.value.award) await replay(ctx, author, old.value.award, from);
+      return;
+    }
     const next = adding ? [...emojis, emoji] : emojis.filter((e) => e !== emoji);
     const before = emojis.length ? (old?.value.amount ?? ctx.config.reactionXp) : 0;
     const after = next.length ? (emojis.length ? before : amount) : 0;
-    const change = { key, version: old?.version ?? null, value: { emojis: next, amount: after } };
+    const change: ReactionChange = {
+      key,
+      version: old?.version ?? null,
+      value: { emojis: next, amount: after },
+      index: reactedIndex(reactor, message.id),
+    };
     try {
-      await award(
-        ctx,
-        author,
-        after - before,
-        member ? { member } : {},
-        crypto.randomUUID(),
-        false,
-        change,
-      );
+      await award(ctx, author, after - before, from, crypto.randomUUID(), false, change);
       return;
     } catch (error) {
       if (!(error instanceof ConcurrentReaction)) throw error;
@@ -483,10 +522,17 @@ export default definePlugin({
       const userId = message.author.id;
       // Remember the author for reactions (the reaction events only carry the message id).
       if (ctx.config.reactionXp > 0)
-        await ctx.kv.set(authorKey(message.id), userId, { ttlSeconds: WEEK });
+        await ctx.kv
+          .atomic()
+          .set(authorKey(message.id), userId, { ttlSeconds: WEEK })
+          .set(authoredIndex(userId, message.id), true, { ttlSeconds: WEEK })
+          .commit();
       const scale = multiplier(ctx, message.member, message.channel.id);
       if (!scale) return;
-      if (await ctx.kv.get(cooldownKey(userId))) return;
+      const from = { message, member: message.member };
+      // A redelivery finds its own cooldown: finish that award's level-up instead.
+      if (await ctx.kv.get(cooldownKey(userId)))
+        return replay(ctx, userId, "msg:" + message.id, from);
       if (ctx.config.cooldownSeconds > 0)
         if (
           !(
@@ -503,7 +549,7 @@ export default definePlugin({
         ctx,
         userId,
         Math.round(ctx.config.xpPerMessage * scale),
-        { message, member: message.member },
+        from,
         "msg:" + message.id,
       );
     },
@@ -571,7 +617,7 @@ export default definePlugin({
                   y: 82,
                   size: 22,
                   color: theme.foreground,
-                  text: xp + " XP · #" + (rank ?? "—"),
+                  text: tr(ctx, "card", { xp, rank: rank ?? "—" }),
                 },
                 {
                   type: "progress",
@@ -662,7 +708,16 @@ export default definePlugin({
       const origin = meta?.id ?? "legacy-poll:" + e.pollId;
       if (e.votersTruncated) {
         if (!meta?.publisher) throw new Error("Missing poll publisher for voter rewards");
-        if (!ctx.features.enabled("pollPages")) throw new Error("Missing polls.voters grant");
+        // Degraded (P10): without the paging grant the voters cannot be listed. Retrying
+        // would never succeed, so report it and credit nobody for this poll.
+        if (!ctx.features.enabled("pollPages")) {
+          ctx.status.set(
+            "poll-pages",
+            `Poll ${e.pollId} had more voters than its event carries; grant plugins.query:polls.voters (feature pollPages) to reward them.`,
+          );
+          return;
+        }
+        ctx.status.set("poll-pages", null);
         await ctx.schedule.after(1, "voter-page", {
           origin,
           pollId: e.pollId,

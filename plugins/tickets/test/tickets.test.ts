@@ -9,10 +9,11 @@ import {
   submitModal,
   type RouteCall,
 } from "@cicord/sdk/testing";
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect, test, vi } from "vite-plus/test";
 import schema from "../config.schema.json" with { type: "json" };
 import plugin from "../src/index.ts";
 import type { MyTicket, MyTicketDetail, StaffTicket, StaffTicketDetail } from "../src/routes.ts";
+import type { Ticket } from "../src/tickets.ts";
 
 const grants = [
   "discord.messages.send",
@@ -29,6 +30,9 @@ const grants = [
   "discord.messages.manage",
   "discord.roles.assign",
 ];
+
+/** The optional features the full grant list above enables. */
+const granted = ["modmail", "ratingPrompts", "managedMessages", "messageContextMenu"];
 
 // 1 alice, 3 eve: members. 2 sam, 4 max: staff role. 5 mona: Cicord moderator without the
 // staff role. 6 ada: Cicord admin. 9 olga: server owner.
@@ -53,6 +57,7 @@ function setup(
     },
     grants,
     ...options,
+    features: options.features ?? granted,
     // As in plugin.yaml: GET /staff (role.members()) needs ServerMembers.
     intents: ["ServerMessages", "MessageContent", "ServerMembers"],
     plugin: { name: "tickets" },
@@ -95,6 +100,16 @@ async function openTicket(t: Harness, user = "1") {
 }
 
 const route = (t: Harness, key: string, call: RouteCall = {}) => callRoute(plugin, t, key, call);
+
+/** Runs the schema-2 migration task the way the scheduler does, one page per delivery. */
+async function migrate(t: Harness, ctx: Context = t.ctx) {
+  let runs = 0;
+  while (t.kv.get("meta:schema") !== 2 || t.kv.has("meta:reindex")) {
+    await plugin.tasks!.reindex!(ctx, undefined);
+    if (++runs > 100) throw new Error("migration did not finish");
+  }
+  return runs;
+}
 
 async function portalOpen(t: Harness, user = "1", body: Json = {}) {
   return route(t, "POST /tickets", {
@@ -290,6 +305,95 @@ describe("portal route and activity", () => {
     });
     expect((await route(t, "GET /tickets/9", { viewer: "2" })).status).toBe(404);
     expect((await route(t, "GET /tickets")).status).toBe(401);
+  });
+});
+
+describe("GET /tickets paging", () => {
+  /** 1,200 retained tickets, written straight into the store: ticket n is closed, every 300th is high priority. */
+  async function many(t: Harness) {
+    await openTicket(t);
+    const base = t.kv.get("ticket:00000001") as unknown as Ticket;
+    for (let n = 1; n <= 1200; n++)
+      await t.ctx.kv.set("ticket:" + String(n).padStart(8, "0"), {
+        ...base,
+        id: String(n),
+        number: n,
+        status: "closed",
+        closedAt: "2026-01-01T11:00:00.000Z",
+        priority: n % 300 === 0 ? "high" : "normal",
+      } as unknown as Json);
+    await t.ctx.kv.set("seq", 1200);
+  }
+  function spy(t: Harness) {
+    const reads = { listed: [] as (string | undefined)[], got: 0 };
+    const list = t.ctx.kv.list.bind(t.ctx.kv),
+      getMany = t.ctx.kv.getMany.bind(t.ctx.kv);
+    t.ctx.kv.list = ((o?: { prefix?: string }) => {
+      reads.listed.push(o?.prefix);
+      return list(o);
+    }) as typeof t.ctx.kv.list;
+    t.ctx.kv.getMany = ((keys: readonly string[]) => {
+      reads.got += keys.filter((k) => k.startsWith("ticket:")).length;
+      return getMany(keys);
+    }) as typeof t.ctx.kv.getMany;
+    return reads;
+  }
+
+  test("pages newest first with a cursor and never lists every ticket", async () => {
+    const t = setup();
+    await many(t);
+    const reads = spy(t);
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const res = await route(t, "GET /tickets" + (cursor ? "?cursor=" + cursor : ""), {
+        viewer: "2",
+      });
+      expect(res.status).toBe(200);
+      const body = res.body as unknown as { items: StaffTicket[]; cursor?: string };
+      expect(body.items.length).toBeLessThanOrEqual(50);
+      seen.push(...body.items.map((i) => i.id));
+      cursor = body.cursor;
+      pages++;
+    } while (cursor);
+    expect(pages).toBe(24);
+    expect(seen).toEqual(Array.from({ length: 1200 }, (_, i) => String(1200 - i)));
+    expect(reads.listed.filter((p) => p === undefined || p.startsWith("ticket:"))).toEqual([]);
+    // Each ticket record is read once across the pages (no page re-reads the store).
+    expect(reads.got).toBe(1200);
+  });
+
+  test("a selective filter reads at most 500 records per request and resumes from the cursor", async () => {
+    const t = setup();
+    await many(t);
+    const reads = spy(t);
+    const first = (await route(t, "GET /tickets?priority=high", { viewer: "2" })).body as unknown as {
+      items: StaffTicket[];
+      cursor?: string;
+    };
+    expect(reads.got).toBeLessThanOrEqual(500);
+    expect(first.items.map((i) => i.id)).toEqual(["1200", "900"]);
+    expect(first.cursor).toBe("700");
+    const second = (
+      await route(t, "GET /tickets?priority=high&cursor=" + first.cursor, { viewer: "2" })
+    ).body as unknown as { items: StaffTicket[]; cursor?: string };
+    expect(second.items.map((i) => i.id)).toEqual(["600", "300"]);
+    expect(second.cursor).toBe("200");
+    const last = (
+      await route(t, "GET /tickets?priority=high&cursor=" + second.cursor, { viewer: "2" })
+    ).body as unknown as { items: StaffTicket[]; cursor?: string };
+    expect(last).toEqual({ items: [] });
+    expect((await route(t, "GET /tickets?cursor=abc", { viewer: "2" })).status).toBe(400);
+    expect((await route(t, "GET /tickets?cursor=0", { viewer: "2" })).status).toBe(400);
+  });
+
+  test("status=open pages through the open-ticket index", async () => {
+    const t = setup();
+    await openTicket(t);
+    await openTicket(t, "3");
+    const res = await route(t, "GET /tickets?status=open&cursor=1", { viewer: "2" });
+    expect((res.body as unknown as { items: StaffTicket[] }).items.map((i) => i.id)).toEqual(["1"]);
   });
 });
 
@@ -896,7 +1000,8 @@ describe("tickets written by 0.1", () => {
       },
       { type: "closed", at: "2026-01-01T10:00:00.000Z", by: { id: "2", displayName: "sam" } },
     ]);
-    // the author index is built from the old records
+    // the migration task indexes the old records (author index included)
+    await migrate(t);
     const mine = await route(t, "GET /tickets/mine", { viewer: "1" });
     expect((mine.body as unknown as { items: MyTicket[] }).items.map((i) => i.id)).toEqual(["1"]);
     expect((await route(t, "GET /tickets/mine/2", { viewer: "3" })).body).toMatchObject({
@@ -1339,7 +1444,7 @@ test("optional interop uses only on-duty staff of the current type and filters m
   });
   const t = setup(config, {
     plugins: providers,
-    features: ["onDuty", "caseContext"],
+    features: [...granted, "onDuty", "caseContext"],
     grants: [...grants, "plugins.query:staff-shifts.onDuty", "plugins.query:moderation.cases"],
   });
   await portalOpen(t);
@@ -1475,7 +1580,8 @@ test("lost acknowledgements leave a durable receipt; widened offline log ACLs wi
   expect(shells()).toHaveLength(1);
   expect(t.edits.find((e) => e.id === first)?.message).toHaveProperty("files");
   wide = true;
-  await plugin.onStart!(ctx);
+  // Gateway availability (also delivered after a restart) rechecks the tracked copies.
+  await plugin.events!.serverAvailable!(ctx);
   expect(t.deletedMessages).toContainEqual(expect.objectContaining({ id: first }));
   const fallback = (await getTicket(ctx, 1))!.logDelivery!;
   expect(fallback.phase).toBe("summary");
@@ -1857,4 +1963,379 @@ test("a committed interop ticket recovers the already-owned channel after losing
   expect(t.createdChannels).toHaveLength(1);
   expect((await getTicket(t.ctx, 1))!.channelId).toBe(t.createdChannels[0]!.channel.id);
   expect(t.published.filter((e) => e.topic === "opened")).toHaveLength(1);
+});
+
+// ───────────────────────────────────────────────────────────── schema 2 indexes (C-05)
+
+/** A context whose KV records the keys it reads and the prefixes it lists. */
+function watched(t: Harness) {
+  const lists: string[] = [];
+  const reads: string[] = [];
+  const kv = t.ctx.kv;
+  const spy: Context["kv"] = {
+    ...kv,
+    list: (o) => (lists.push(o?.prefix ?? ""), kv.list(o)),
+    get: (k) => (reads.push(k), kv.get(k)),
+    getEntry: (k) => (reads.push(k), kv.getEntry(k)),
+    getMany: (keys) => (reads.push(...keys), kv.getMany(keys)),
+  } as Context["kv"];
+  return { ctx: { ...t.ctx, kv: spy } as Context, lists, reads };
+}
+
+const ticketKeys = (t: Harness) => [...t.kv.keys()].filter((k) => k.startsWith("ticket:"));
+const padded = (n: number) => "ticket:" + String(n).padStart(8, "0");
+
+function legacyClosed(n: number, closedAt: string, extra: Partial<Ticket> = {}) {
+  return {
+    id: String(n),
+    number: n,
+    revision: 3,
+    subject: "Old " + n,
+    description: "",
+    status: "closed",
+    author: { id: n % 2 ? "1" : "3", displayName: n % 2 ? "alice" : "eve" },
+    channelId: "",
+    channelRemoved: true,
+    createdAt: closedAt,
+    closedAt,
+    ...extra,
+  } as unknown as Json;
+}
+
+describe("schema 2 indexes", () => {
+  test("a fresh install records meta:schema through the migration task", async () => {
+    const t = setup();
+    await plugin.schedules!.maintenance!.run(t.ctx);
+    expect(t.scheduled.map((s) => s.task)).toEqual(["reindex"]);
+    await plugin.tasks!.reindex!(t.ctx, undefined);
+    expect(t.kv.get("meta:schema")).toBe(2);
+    t.scheduled.splice(0);
+    await plugin.schedules!.maintenance!.run(t.ctx);
+    expect(t.scheduled).toEqual([]);
+  });
+
+  test("maintenance takes a bounded page of due tickets per run and never lists the records", async () => {
+    const t = setup({ recordRetentionDays: 1, transcriptRetentionDays: 1 });
+    const old = new Date(Date.now() - 3 * 86400000).toISOString();
+    for (let n = 1; n <= 60; n++) t.kv.set(padded(n), legacyClosed(n, old));
+    t.kv.set(padded(61), legacyClosed(61, new Date().toISOString()));
+    await migrate(t);
+    expect(await t.ctx.kv.ranking("due").count()).toBe(61);
+    const w = watched(t);
+    await plugin.schedules!.maintenance!.run(w.ctx);
+    expect(ticketKeys(t)).toHaveLength(61 - 25);
+    expect(w.lists.filter((p) => p.startsWith("ticket:"))).toEqual([]);
+    expect(new Set(w.reads.filter((k) => k.startsWith("ticket:"))).size).toBe(25);
+    await plugin.schedules!.maintenance!.run(t.ctx);
+    await plugin.schedules!.maintenance!.run(t.ctx);
+    // Only the ticket inside its retention remains, with its indexes.
+    expect(ticketKeys(t)).toEqual([padded(61)]);
+    expect(await t.ctx.kv.ranking("due").count()).toBe(1);
+    expect([...t.kv.keys()].filter((k) => k.startsWith("who:"))).toEqual(["who:1:00000061"]);
+  });
+
+  test("the migration indexes 0.4.0 records in resumable pages, replays exactly once, and keeps the open receipt", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const t = setup({}, { features: [...granted, "appealUpdates"] });
+      const closedAt = new Date(Date.now() - 86400000).toISOString();
+      const request = { caller: "bot/mod", key: "appeal:7" };
+      for (let n = 1; n <= 45; n++)
+        t.kv.set(
+          padded(n),
+          legacyClosed(n, closedAt, {
+            rating: (n % 5) + 1,
+            ...(n === 7 ? { request, appeal: { number: 7, bot: "bot", instance: "mod" } } : {}),
+          }),
+        );
+      t.kv.set("seq", 45);
+      await plugin.schedules!.maintenance!.run(t.ctx);
+      await plugin.tasks!.reindex!(t.ctx, undefined);
+      expect(t.kv.get("meta:reindex")).toMatchObject({ cursor: padded(20) });
+      expect((t.kv.get(padded(20)) as { ix?: number }).ix).toBe(2);
+      expect((t.kv.get(padded(21)) as { ix?: number }).ix).toBeUndefined();
+      const firstPage = (t.kv.get(padded(1)) as { revision: number }).revision;
+      // The continuation task is lost (restart). An appeal update arrives meanwhile.
+      t.scheduled.splice(0);
+      await plugin.subscriptions!["moderation.appeal"]!(
+        t.ctx,
+        { case: 7, userId: "1", status: "accepted" } as never,
+        { publisher: { plugin: "moderation", bot: "bot", instance: "mod" } } as never,
+      );
+      await plugin.schedules!.maintenance!.run(t.ctx);
+      expect(t.scheduled).toEqual([]);
+      vi.setSystemTime(Date.now() + 11 * 60000);
+      await plugin.schedules!.maintenance!.run(t.ctx);
+      expect(t.scheduled.map((s) => s.task)).toEqual(["reindex"]);
+      // Two deliveries of the same page race; only one advances the cursor.
+      await Promise.all([
+        plugin.tasks!.reindex!(t.ctx, undefined),
+        plugin.tasks!.reindex!({ ...t.ctx }, undefined),
+      ]);
+      await migrate(t);
+      expect((t.kv.get(padded(1)) as { revision: number }).revision).toBe(firstPage);
+      expect(ticketKeys(t).every((k) => (t.kv.get(k) as { ix?: number }).ix === 2)).toBe(true);
+      expect(t.kv.get("meta:schema")).toBe(2);
+      let sum = 0;
+      for (let n = 1; n <= 45; n++) sum += (n % 5) + 1;
+      expect((await route(t, "GET /tickets/stats", { viewer: "2" })).body).toEqual({
+        rated: 45,
+        mean: sum / 45,
+      });
+      expect(t.kv.get(padded(7))).toMatchObject({ appeal: { status: "accepted" } });
+      expect([...t.kv.keys()].some((k) => k.startsWith("appealPending:"))).toBe(false);
+      const w = watched(t);
+      const retry = await plugin.actions!.open!.run(
+        w.ctx,
+        { userId: "1", subject: "Appeal", caseNumber: 7 },
+        {
+          caller: { plugin: "moderation", bot: "bot", instance: "mod", source: "cicord", verified: true },
+          onBehalfOf: { userId: "1", access: "member" },
+          idempotencyKey: "appeal:7",
+        },
+      );
+      expect(retry).toEqual({ id: "7" });
+      expect(w.lists).toEqual([]);
+      expect(ticketKeys(t)).toHaveLength(45);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("concurrent open requests in separate realms commit one ticket for one receipt", async () => {
+    const t = setup();
+    await migrate(t);
+    const w = watched(t);
+    const call = {
+      caller: { plugin: "economy", bot: "bot", instance: "shop", source: "cicord", verified: true },
+      onBehalfOf: { userId: "1", access: "member" as const },
+      idempotencyKey: "order-1",
+    };
+    const data = { userId: "1", subject: "Perk" };
+    const run = plugin.actions!.open!.run;
+    const [a, b] = await Promise.all([run(w.ctx, data, call), run({ ...w.ctx }, data, call)]);
+    expect(a).toEqual({ id: expect.any(String) });
+    expect(b).toEqual(a);
+    expect(ticketKeys(t)).toHaveLength(1);
+    expect([...t.kv.keys()].filter((k) => k.startsWith("open:1:"))).toHaveLength(1);
+    expect(w.lists.filter((p) => p.startsWith("ticket:"))).toEqual([]);
+    expect(await run(t.ctx, data, call)).toEqual(a);
+    const other = { ...call, caller: { ...call.caller, instance: "other" } };
+    await expect(run(t.ctx, data, other)).rejects.toMatchObject({ code: "denied" });
+    await expect(run(t.ctx, { ...data, userId: "3" }, call)).rejects.toMatchObject({
+      code: "denied",
+      message: "Ticket staff required",
+    });
+  });
+
+  test("index writes commit with the record: a stale concurrent save cannot skew the counters", async () => {
+    const t = setup();
+    await portalOpen(t);
+    await route(t, "POST /tickets/1/close", { viewer: "2" });
+    const { getTicket, saveTicket } = await import("../src/tickets.ts");
+    const [a, b] = [(await getTicket(t.ctx, 1))!, (await getTicket(t.ctx, 1))!];
+    a.rating = 5;
+    b.rating = 1;
+    const results = await Promise.allSettled([saveTicket(t.ctx, a), saveTicket({ ...t.ctx }, b)]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const winner = (await getTicket(t.ctx, 1))!.rating!;
+    expect([t.kv.get("rating:count:default"), t.kv.get("rating:sum:default")]).toEqual([1, winner]);
+    const ctx = { ...t.ctx, privacy: { pseudonym: async () => "deleted-user-1234567812345678" } };
+    await plugin.privacy!.erase(ctx, "1");
+    expect([t.kv.get("rating:count:default"), t.kv.get("rating:sum:default")]).toEqual([0, 0]);
+  });
+
+  test("auto-close candidates are taken by due time and survive a restart between warning and close", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const H = 3600000;
+    const start = Date.parse("2026-03-01T10:00:00Z");
+    vi.setSystemTime(start);
+    try {
+      const t = setup({ inactivityHours: 3 });
+      await migrate(t);
+      await portalOpen(t);
+      const due = async () => -(await t.ctx.kv.ranking("due").score("1"))!;
+      expect(await due()).toBe(start + 2 * H);
+      vi.setSystemTime(start + H);
+      const channel = t.createdChannels[0]!.channel;
+      await plugin.events!.messageCreate!(t.ctx, {
+        ...messageIn(t, channel, "1", "a1"),
+        createdAt: new Date(),
+      });
+      // The entry is now early; the pass re-reads the activity and reschedules.
+      vi.setSystemTime(start + 2 * H + 1000);
+      await plugin.schedules!.maintenance!.run(t.ctx);
+      expect(t.kv.get(padded(1))).not.toHaveProperty("warningAt");
+      expect(await due()).toBe(start + 3 * H);
+      vi.setSystemTime(start + 3 * H + 1000);
+      await plugin.schedules!.maintenance!.run(t.ctx);
+      const warnedAt = (t.kv.get(padded(1)) as { warningAt: number }).warningAt;
+      expect(warnedAt).toBe(start + 3 * H + 1000);
+      expect(await due()).toBe(warnedAt + H);
+      // A new context over the same storage (restart) closes it once.
+      vi.setSystemTime(warnedAt + H);
+      const resumed = { ...t.ctx };
+      await plugin.schedules!.maintenance!.run(resumed);
+      await plugin.schedules!.maintenance!.run(resumed);
+      expect(t.kv.get(padded(1))).toMatchObject({ status: "closed" });
+      expect(t.published.filter((e) => e.topic === "closed")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("privacy hooks read only the tickets that name the member, mentions included", async () => {
+    const t = setup();
+    await migrate(t);
+    await portalOpen(t, "1");
+    await portalOpen(t, "4");
+    await route(t, "POST /tickets/2/close", { viewer: "2" });
+    await route(t, "POST /tickets/1/notes", { viewer: "2", body: { content: "Ask <@3> too" } });
+    const w = watched(t);
+    const ctx = { ...w.ctx, privacy: { pseudonym: async () => "deleted-user-1234567812345678" } };
+    const before = (t.kv.get(padded(2)) as { revision: number }).revision;
+    await plugin.privacy!.erase(ctx, "3");
+    expect((t.kv.get(padded(1)) as { notes: { content: string }[] }).notes[0]!.content).toBe(
+      "Ask Deleted member too",
+    );
+    expect((t.kv.get(padded(2)) as { revision: number }).revision).toBe(before);
+    expect(w.lists.filter((p) => p.startsWith("ticket:"))).toEqual([]);
+    expect([...t.kv.keys()].some((k) => k.startsWith("who:3:"))).toBe(false);
+  });
+
+  test("transcripts name fetched-message authors by server display name (fetched messages carry no member)", async () => {
+    const t = setup();
+    t.addMember({ id: "8", username: "zed", nickname: "Zed on this server" });
+    await portalOpen(t, "1");
+    const channel = t.createdChannels[0]!.channel;
+    const line = await channel.send("A guest line");
+    // As from Discord REST: an author, no member.
+    Object.assign(line, { author: t.member("8")!.user, member: undefined });
+    await route(t, "POST /tickets/1/close", { viewer: "2" });
+    const pages = [...t.kv.entries()].filter(([k]) => k.startsWith("transcript:1:"));
+    const lines = pages.flatMap(([, v]) => v as { author: { id: string; displayName: string } }[]);
+    expect(lines.find((l) => l.author.id === "8")?.author.displayName).toBe("Zed on this server");
+  });
+
+  test("erasing a staff member who only wrote in an open channel keeps their lines out of the later transcript", async () => {
+    const t = setup();
+    await migrate(t);
+    await portalOpen(t, "1");
+    const channel = t.createdChannels[0]!.channel;
+    const reply = t.receive(channel.id, t.member("4")!.user, "Max private answer");
+    await plugin.events!.messageCreate!(t.ctx, reply);
+    expect([...t.kv.keys()].some((k) => k.startsWith("who:4:"))).toBe(false);
+    const ctx = { ...t.ctx, privacy: { pseudonym: async () => "deleted-user-1234567812345678" } };
+    await plugin.privacy!.erase(ctx, "4");
+    expect(t.kv.get(padded(1))).toMatchObject({ redactedMessageIds: [reply.id] });
+    await route(t, "POST /tickets/1/close", { viewer: "2" });
+    const pages = [...t.kv.entries()].filter(([k]) => k.startsWith("transcript:1:"));
+    expect(JSON.stringify(pages)).not.toContain("Max private answer");
+  });
+
+  test("a schema-1 record saved before the migration reaches it still gets its author and transcript indexes", async () => {
+    const t = setup();
+    t.kv.set("seq", 1);
+    const expiresAt = Date.now() + 86400000;
+    t.kv.set(
+      padded(1),
+      legacyClosed(1, new Date().toISOString(), { expiresAt, transcriptPages: 1 } as Partial<Ticket>),
+    );
+    t.kv.set("transcript:1:0", [{ author: { id: "3", displayName: "eve" }, at: "x", text: "Eve line" }]);
+    // A normal write marks the record before the migration task reaches it.
+    expect((await route(t, "POST /tickets/1/rating", { viewer: "1", body: { rating: 3 } })).status).toBe(200);
+    expect((t.kv.get(padded(1)) as { ix?: number }).ix).toBe(2);
+    await migrate(t);
+    const mine = (await route(t, "GET /tickets/mine", { viewer: "1" })).body as unknown as {
+      items: MyTicket[];
+    };
+    expect(mine.items.map((i) => i.id)).toEqual(["1"]);
+    const ctx = { ...t.ctx, privacy: { pseudonym: async () => "deleted-user-1234567812345678" } };
+    await plugin.privacy!.erase(ctx, "3");
+    expect(JSON.stringify(t.kv.get("transcript:1:0"))).not.toContain("Eve line");
+  });
+});
+
+// ───────────────────────────────────────────────────────────── optional features (C-10, SPB-19)
+
+describe("optional features and degraded configuration", () => {
+  const typed = {
+    modmailType: "help",
+    types: [
+      {
+        key: "help",
+        name: "Help",
+        staffRoles: ["support"],
+        logChannel: "private-log",
+        retainSourceForTranscript: true,
+      },
+    ],
+  };
+  const limited = grants.filter((g) => g !== "discord.dm.send" && g !== "discord.messages.manage");
+
+  test("without the DM and message-management grants, modmail, rating DMs and log files stay off with status lines", async () => {
+    const t = setup(typed, { grants: limited, features: ["messageContextMenu"] });
+    await plugin.onStart!(t.ctx);
+    const status = t.logs.filter((l) => l.level === "warn").map((l) => l.message);
+    expect(status).toContain("modmail: Modmail needs discord.dm.send: direct messages do not open tickets");
+    expect(status).toContain(
+      "transcriptFiles: Transcript files need discord.messages.manage: log channels receive summaries only",
+    );
+    await plugin.events!.directMessage!(t.ctx, {
+      ...messageIn(t, t.channel("help-desk")!, "1"),
+      content: "Hello",
+    });
+    expect(t.createdChannels).toHaveLength(0);
+    await portalOpen(t, "1", { type: "help" });
+    const welcome = (t.kv.get(padded(1)) as { welcomeId: string }).welcomeId;
+    await route(t, "POST /tickets/1/close", { viewer: "2" });
+    const log = t.sent.filter((m) => m.to === "private-log");
+    expect(log).toHaveLength(1);
+    expect(log[0]!.message).not.toHaveProperty("files");
+    expect(t.edits.filter((e) => e.id === log[0]!.id && "files" in (e.message as object))).toEqual([]);
+    expect(t.sent.some((m) => m.to.startsWith("dm:"))).toBe(false);
+    // The portal rating works without the DM prompt.
+    expect((await route(t, "POST /tickets/1/rating", { viewer: "1", body: { rating: 4 } })).status).toBe(200);
+    // Erasure blanks the bot's welcome copy instead of deleting it.
+    const ctx = { ...t.ctx, privacy: { pseudonym: async () => "deleted-user-1234567812345678" } };
+    await plugin.privacy!.erase(ctx, "1");
+    expect(t.deletedMessages).toEqual([]);
+    expect(t.edits.find((e) => e.id === welcome)?.message).toMatchObject({
+      content: "This message was removed.",
+      embeds: [],
+    });
+  });
+
+  test("granted, the same configuration has no status lines and opens modmail", async () => {
+    const t = setup(typed);
+    await plugin.onStart!(t.ctx);
+    expect(t.logs.filter((l) => l.level === "warn")).toEqual([]);
+    await plugin.events!.directMessage!(t.ctx, {
+      ...messageIn(t, t.channel("help-desk")!, "1"),
+      content: "Hello",
+    });
+    expect(t.createdChannels).toHaveLength(1);
+  });
+
+  test("duplicate type keys and an unknown modmailType degrade with status lines instead of failing startup", async () => {
+    const t = setup({
+      modmailType: "nope",
+      types: [
+        { key: "help", name: "Help", staffRoles: ["support"] },
+        { key: "help", name: "Again", staffRoles: ["mods"] },
+      ],
+    });
+    await expect(plugin.onStart!(t.ctx)).resolves.toBeUndefined();
+    const status = t.logs.filter((l) => l.level === "warn").map((l) => l.message);
+    expect(status).toContain("types: Duplicate ticket type help: only the first definition is used");
+    expect(status).toContain("modmail: Unknown modmailType nope: direct messages do not open tickets");
+    expect((await route(t, "GET /types", { viewer: "1" })).body).toEqual({
+      items: [{ key: "help", name: "Help" }],
+    });
+    await plugin.events!.directMessage!(t.ctx, {
+      ...messageIn(t, t.channel("help-desk")!, "1"),
+      content: "Hello",
+    });
+    expect(t.createdChannels).toHaveLength(0);
+  });
 });

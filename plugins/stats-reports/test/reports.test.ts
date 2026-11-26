@@ -14,6 +14,14 @@ const data: AnalyticsSummary = {
   kpis: [{ metric: "members.total", value: 100 }],
   series: [],
 };
+// Cohort state holds no member ID: HMAC join markers, day totals and the instance secret.
+const cohortKey = /^(arrival:[0-9a-f]{64}|(joins|early):\d{4}-\d\d-\d\d|cohort:secret)$/;
+/** Like the host: `ctx.privacy.pseudonym` throws outside a privacy hook for its subject. */
+function runtimePseudonym(h: ReturnType<typeof createTestContext>) {
+  h.ctx.privacy.pseudonym = async () => {
+    throw new Error("privacy.pseudonym is scoped to the member of the current privacy hook");
+  };
+}
 test("20 of 100 short stays, no raw join identifiers, report and counter retry limits", async () => {
   vi.useFakeTimers();
   const now = Date.parse("2030-01-03T00:00:00Z"),
@@ -34,6 +42,7 @@ test("20 of 100 short stays, no raw join identifiers, report and counter retry l
         joinedAt: new Date(now),
       })),
     });
+    runtimePseudonym(h);
     for (let i = 0; i < 100; i++)
       await plugin.events!.memberJoin!(h.ctx, h.member(String(1000 + i))!);
     vi.setSystemTime(now + 3 * day);
@@ -41,6 +50,8 @@ test("20 of 100 short stays, no raw join identifiers, report and counter retry l
       await plugin.events!.memberLeave!(h.ctx, h.member(String(1000 + i))!.user);
     expect(await shortStays(h.ctx, now, now + 7 * day)).toEqual({ joined: 100, left: 20 });
     expect(h.kv.has("arrival:1001")).toBe(false);
+    expect([...h.kv.keys()].filter((k) => k.startsWith("arrival:"))).toHaveLength(80);
+    expect([...h.kv.keys()].filter((k) => !cohortKey.test(k))).toEqual([]);
     await updateCounters(h.ctx, data, now);
     for (let i = 1; i <= 5; i++)
       await updateCounters(
@@ -137,4 +148,46 @@ test("reports are withheld from public or unknown destinations", async () => {
   });
   await plugin.schedules!.reports!.run(h.ctx);
   expect(h.sent).toHaveLength(0);
+});
+
+test("two-member export and erase of join markers, without the host pseudonym", async () => {
+  vi.useFakeTimers();
+  const now = Date.parse("2030-01-03T00:00:00Z"),
+    day = 86400000;
+  vi.setSystemTime(now);
+  try {
+    const h = createTestContext({
+      locales: { en, fr },
+      schema,
+      config: {},
+      features: ["cohorts"],
+      members: [
+        { id: "2001", joinedAt: new Date(now) },
+        { id: "2002", joinedAt: new Date(now + 1000) },
+      ],
+    });
+    runtimePseudonym(h);
+    // No marker and no secret yet: export finds nothing and creates nothing.
+    expect(await plugin.privacy!.export(h.ctx, "2001")).toEqual({ joinedAt: null });
+    expect(await plugin.privacy!.erase(h.ctx, "2001")).toEqual({ erased: 0 });
+    expect(h.kv.size).toBe(0);
+    await Promise.all(
+      ["2001", "2002"].map((id) => plugin.events!.memberJoin!(h.ctx, h.member(id)!)),
+    );
+    await plugin.events!.memberJoin!(h.ctx, h.member("2001")!); // replayed delivery
+    expect(await plugin.privacy!.export(h.ctx, "2001")).toEqual({ joinedAt: now });
+    expect(await plugin.privacy!.export(h.ctx, "2002")).toEqual({ joinedAt: now + 1000 });
+    expect(await h.eraseMember(plugin, "2001")).toEqual({ erased: 1 });
+    expect(await plugin.privacy!.export(h.ctx, "2001")).toEqual({ joinedAt: null });
+    expect(await plugin.privacy!.export(h.ctx, "2002")).toEqual({ joinedAt: now + 1000 });
+    // An erased member's later departure is not counted; the other member's is.
+    vi.setSystemTime(now + 2 * day);
+    await plugin.events!.memberLeave!(h.ctx, h.member("2001")!.user);
+    await plugin.events!.memberLeave!(h.ctx, h.member("2002")!.user);
+    expect(await shortStays(h.ctx, now, now + day)).toEqual({ joined: 2, left: 1 });
+    expect([...h.kv.keys()].filter((k) => k.startsWith("arrival:"))).toEqual([]);
+    expect([...h.kv.keys()].filter((k) => !cohortKey.test(k))).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
 });

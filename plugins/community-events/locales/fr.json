@@ -17,5 +17,6 @@
   "commands.event.create.description": "Programmer un événement communautaire",
   "commands.event.reminders.name": "rappels",
   "commands.event.reminders.description": "Gérer les rappels privés de vos événements",
-  "hour": "{name} commence dans une heure."
+  "hour": "{name} commence dans une heure.",
+  "manageEvents": "Impossible de créer ou modifier les événements Discord récurrents ({reason}) : donnez au bot la permission Gérer les événements."
 }

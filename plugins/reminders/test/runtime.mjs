@@ -29,4 +29,7 @@ test("private reminders in the simulated gateway", { timeout: 30000 }, async (t)
   assert.doesNotMatch(JSON.stringify(r), /rendez-vous/);
   r = await sim.command(alice, "remind cancel", { id: "1" });
   assert.match(JSON.stringify(r), /annulé/);
+  // The real host's permissions of the invoking member decide a channel reminder.
+  r = await sim.command(alice, "remind create", { when: "2h", message: "salon", where: "channel" });
+  assert.match(JSON.stringify(r), /prévu/);
 });

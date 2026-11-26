@@ -10,6 +10,7 @@
   "nativeOptions": "Native polls require whole hours (1–768, within the server limit), answers of at most 55 characters, and cannot enforce anonymity, role restrictions, weights or selection limits.",
   "future": "Choose a future ISO 8601 start time.",
   "scheduledOptions": "Scheduled polls do not support ping or thread.",
+  "threadUnavailable": "Discussion threads are not enabled for polls on this server. Post the poll without `thread`.",
   "unknown": "No such poll.",
   "authorOnly": "Only the author of the poll can close it.",
   "scheduled": "Poll #{id} is scheduled.",

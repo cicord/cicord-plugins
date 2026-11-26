@@ -4,11 +4,11 @@ metadata:
   name: ai-assistant
   version: 0.1.0
   displayName: Knowledge assistant
-  description: Answers questions from reviewed knowledge with citations and an operator-set daily token budget.
+  description: "Experimental, opt-in: answers questions from reviewed knowledge with citations and an operator-set daily token budget."
   license: Apache-2.0
   authors: [Cicord]
 spec:
-  engine: ">=0.2.0-0"
+  engine: ">=0.2.0"
   entry: ./src/index.ts
   locales: ./locales
   capabilities:

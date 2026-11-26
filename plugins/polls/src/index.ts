@@ -322,6 +322,10 @@ async function privatePollData(ctx: Context, id: string, erase: boolean) {
   return rows;
 }
 export default definePlugin({
+  /** KV layout version (§6). 1: the 0.1.1 layout, read in place (legacy array ballots too). */
+  async onStart(ctx) {
+    await ctx.kv.set("meta:schema", 1);
+  },
   privacy: {
     export: (ctx, id) => privatePollData(ctx, id, false),
     async erase(ctx, id) {
@@ -432,6 +436,11 @@ export default definePlugin({
         const start = o.start ? Date.parse(o.start) : Date.now();
         if (o.start && (!Number.isFinite(start) || start <= Date.now())) {
           await interaction.reply(ctx.i18n.t("future"));
+          return;
+        }
+        // Optional feature: refuse before anything is posted, never leave a half-made poll.
+        if (o.thread && !ctx.features.enabled("discussionThread")) {
+          await interaction.reply(ctx.i18n.t("threadUnavailable"));
           return;
         }
         if (o.start && (o.ping || o.thread)) {

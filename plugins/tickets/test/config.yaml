@@ -1,0 +1,4 @@
+# Minimal config of `cicord plugin test plugins/tickets --config plugins/tickets/test/config.yaml`
+# (panelChannel is required). Without types, the general queue uses staffRoles.
+panelChannel: general
+staffRoles: [moderator]

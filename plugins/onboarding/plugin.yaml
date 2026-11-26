@@ -9,7 +9,7 @@ metadata:
   license: Apache-2.0
   keywords: [onboarding, roles, portal]
 spec:
-  engine: ">=0.2.0-0"
+  engine: ">=0.2.0"
   entry: ./src/index.ts
   capabilities:
     - discord.roles.assign # Add or remove the configured roles for eligible members.

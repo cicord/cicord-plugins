@@ -81,6 +81,10 @@ declare module "@cicord/sdk" {
     "polls.voters": {input: {
       cursor?: string;
       pollId: string;
+      publisher?: {
+        bot: string;
+        instance: string;
+      };
     }; output: {
       cursor?: string;
       userIds: string[];

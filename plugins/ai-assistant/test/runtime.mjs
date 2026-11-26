@@ -33,7 +33,7 @@ test("missing provider credentials degrade only the assistant instance", async (
       health: "Degraded",
       instance: {
         files: ["knowledge/**/*.md"],
-        secrets: { API_KEY: { secretRef: "TEST_ASSISTANT_PROVIDER" } },
+        secrets: { API_KEY: { secretRef: "CICORD_TEST_ASSISTANT_PROVIDER" } },
       },
       files: { "knowledge/help.md": "# Recovery\nVisit the help desk for assistance." },
     },

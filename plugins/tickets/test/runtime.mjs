@@ -58,7 +58,7 @@ async function prepare({repo}) {
   await mkdir(join(root, "src"), { recursive: true });
   await writeFile(
     join(root, "plugin.yaml"),
-    "apiVersion: cicord.dev/v1alpha1\nkind: Plugin\nmetadata: {name: fixtures, version: 0.1.0}\nspec: {entry: ./src/index.ts, engine: '>=0.2.0-0', intents: [MessageContent], delivery: at-least-once, interop: {consumes: {actions: [tickets.open]}}, capabilities: [discord.members.read, discord.roles.assign, discord.dm.send, discord.channels.read, discord.messages.read, plugins.call:tickets.open]}\n",
+    "apiVersion: cicord.dev/v1alpha1\nkind: Plugin\nmetadata: {name: fixtures, version: 0.1.0}\nspec: {entry: ./src/index.ts, engine: '>=0.2.0', intents: [MessageContent], delivery: at-least-once, interop: {consumes: {actions: [tickets.open]}}, capabilities: [discord.members.read, discord.roles.assign, discord.dm.send, discord.channels.read, discord.messages.read, plugins.call:tickets.open]}\n",
   );
   // Drive real Discord role changes from a disposable operator command. Opening the
   // initial DM supplies its bot/user channel ID to the simulator's POST /sim/messages.
@@ -74,6 +74,11 @@ async function prepare({repo}) {
       "fixture-open":command({description:"Request a ticket through its versioned action",async run(ctx,i){
         const result=await ctx.plugins.call("tickets","open",{userId:i.user.id,type:"help",subject:"Deferred action",description:"One request"},{idempotencyKey:"fixture-open-"+i.user.id});
         await i.reply(JSON.stringify(result));
+      }}),
+      "fixture-open-twice":command({description:"Send one request twice concurrently",async run(ctx,i){
+        const input={userId:i.user.id,type:"help",subject:"Concurrent action",description:"Two realms"};
+        const results=await Promise.all([1,2].map(()=>ctx.plugins.call("tickets","open",input,{idempotencyKey:"fixture-twice-"+i.user.id})));
+        await i.reply(JSON.stringify(results));
       }}),
       "fixture-files":command({description:"Inspect a simulated transcript upload",permissions:["ManageRoles"],async run(ctx,i){
         const rows=await ctx.server.channel("private-log").messages({limit:50});
@@ -99,9 +104,15 @@ async function until(description, read, timeout = 3000) {
   const start = Date.now();
   let result;
   do {
-    result = await read();
+    try {
+      result = await read();
+    } catch (error) {
+      // The portal limits each user to 120 requests a minute: a poll answered 429 is "not yet".
+      if (!/ returned 429:/.test(String(error?.message))) throw error;
+      result = undefined;
+    }
     if (result) return result;
-    await delay(25);
+    await delay(250);
   } while (Date.now() - start < timeout);
   assert.fail(description);
 }
@@ -240,6 +251,18 @@ test(
       1,
     );
     assert.ok(committed.channelId);
+    // Each provider call runs in a fresh realm: the receipt, not module state, deduplicates.
+    const twice = JSON.parse(
+      (await command(first, alice, "fixture-open-twice", {})).response.content,
+    );
+    assert.equal(twice.length, 2);
+    assert.deepEqual(twice[0], twice[1]);
+    assert.equal(
+      (await tickets("acceptance", alice, "/mine")).items.filter(
+        (x) => x.subject === "Concurrent action",
+      ).length,
+      1,
+    );
     const bootstrap = await command(first, alice, "fixture-dm", {});
     const dm = bootstrap.response.content;
     const dms = () => sim.api("/api/v1/sim/users/" + alice.id + "/dms");

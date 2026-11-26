@@ -1,4 +1,6 @@
 {
   "backoff": "Feed unavailable. Retrying in {minutes} min.",
-  "uncertain": "Delivery is uncertain. Check the channel before retrying."
+  "uncertain": "Delivery of “{title}” is uncertain and it will not be sent again. Check the channel.",
+  "refused": "Discord refused to post in {channel} ({reason}). The entry stays unsent and is retried at the next check.",
+  "rejected": "Discord rejected the entry “{title}” ({reason}). It is skipped and will not be sent again."
 }

@@ -9,7 +9,7 @@ metadata:
   license: Apache-2.0
   keywords: [roles, reaction-roles, self-roles, buttons, onboarding]
 spec:
-  engine: ">=0.2.0-0"
+  engine: ">=0.2.0"
   entry: ./src/index.ts
   capabilities:
     - discord.messages.send      # the panel messages

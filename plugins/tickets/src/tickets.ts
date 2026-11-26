@@ -31,6 +31,22 @@ import type {
 } from "./routes.ts";
 
 import { archive, postArchive, purgeArchive } from "./transcript.ts";
+import {
+  DUE,
+  SCHEMA,
+  SCHEMA_KEY,
+  appealKey,
+  copyKey,
+  dueAt,
+  involved,
+  pad,
+  ratingCount,
+  ratingSum,
+  reqKey,
+  sameRequest,
+  whoKey,
+  type Request,
+} from "./indexes.ts";
 export type { Person } from "./routes.ts";
 
 export const PRIORITIES: readonly Priority[] = ["low", "normal", "high", "urgent"];
@@ -41,6 +57,8 @@ export interface Ticket {
   id: string;
   number: number;
   revision?: number;
+  /** KV schema of this record's indexes (src/indexes.ts). Absent on 0.2.1/0.4.0 records. */
+  ix?: number;
   erasing?: boolean;
   provision?: { topic: string; phase: "queued" | "creating" | "welcome"; since: number };
   subject: string;
@@ -104,7 +122,6 @@ export interface Ticket {
 }
 
 // Zero-padded numbers keep `kv.list()` (lexicographic) in ticket order.
-const pad = (n: number): string => String(n).padStart(8, "0");
 export const ticketKey = (n: number): string => `ticket:${pad(n)}`;
 export const openKey = (userId: string, n: number): string => `open:${userId}:${n}`;
 export const channelKey = (channelId: string): string => `channel:${channelId}`;
@@ -112,8 +129,6 @@ export const activityKey = (n: number): string => `activity:${n}`;
 export const lastActivityKey = (n: number): string => `last:${n}`;
 /** Index of a member's tickets (`GET /tickets/mine`). */
 export const authorKey = (userId: string, n: number): string => `author:${userId}:${pad(n)}`;
-/** Set once the author index covers the tickets written before 0.2. */
-const AUTHOR_INDEX = "index:authors";
 
 const TICKET_PERMS: Permission[] = [
   "ViewChannel",
@@ -127,6 +142,27 @@ const NO_MENTIONS = { users: false, roles: false, everyone: false } as const;
 
 export function person(user: Pick<User, "id" | "displayName">, member?: Member): Person {
   return { id: user.id, displayName: member?.displayName ?? user.displayName };
+}
+
+/**
+ * Server display names for the authors of fetched messages, which carry no member (Discord
+ * REST has none). The people the ticket already names come from the record; others are
+ * looked up at most `cap` times per call, then fall back to the user's global name.
+ */
+export function authorNames(ctx: Context, t: Ticket, cap = 25) {
+  const known = new Map<string, Person>();
+  for (const p of [t.author, t.assignee, ...(t.events ?? []).map((e) => e.by), ...t.notes.map((n) => n.by)])
+    if (p) known.set(p.id, p);
+  let lookups = 0;
+  return async (user: Pick<User, "id" | "displayName">): Promise<Person> => {
+    const hit = known.get(user.id);
+    if (hit) return hit;
+    let member: Member | undefined;
+    if (lookups++ < cap) member = await ctx.server.member(user.id).catch(() => undefined);
+    const p = person(user, member);
+    known.set(user.id, p);
+    return p;
+  };
 }
 
 /** Replaces `{name}` placeholders; unknown ones are kept as is. */
@@ -198,7 +234,13 @@ export async function getTicket(ctx: Context, n: number): Promise<Ticket | undef
   return raw ? normalize(raw) : undefined;
 }
 
-export async function saveTicket(ctx: Context, t: Ticket, privacyWrite = false): Promise<void> {
+export async function saveTicket(
+  ctx: Context,
+  t: Ticket,
+  privacyWrite = false,
+  /** Extra checks and writes committed with the record. */
+  extra?: (tx: Tx) => void,
+): Promise<void> {
   const key = ticketKey(t.number);
   const entry = await ctx.kv.getEntry(key);
   const saved = entry?.value as unknown as Ticket | undefined;
@@ -208,15 +250,95 @@ export async function saveTicket(ctx: Context, t: Ticket, privacyWrite = false):
   if (prior !== (t.revision ?? -1))
     throw new TicketConflict("Ticket changed; reload before saving");
   const revision = prior + 1;
-  const result = await ctx.kv
-    .atomic()
-    .check(key, entry?.version)
-    .set(key, { ...t, revision } as unknown as Json)
-    .commit();
-  if (!result.ok) throw new TicketConflict("Ticket changed; reload before saving");
+  const next: Ticket = { ...t, revision, ix: SCHEMA };
+  const previous = saved ? normalize(saved) : undefined;
+  // Schema-1 records contributed nothing to the counters yet.
+  const counted = saved?.ix === SCHEMA ? previous : undefined;
+  const known = counted ? involved(counted) : new Set<string>();
+  for (const id of involved(next)) if (!known.has(id)) await ctx.kv.set(whoKey(id, t.number), true);
+  const tx = ctx.kv.atomic().check(key, entry?.version);
+  extra?.(tx);
+  tx.set(key, next as unknown as Json);
+  deriveIndexes(ctx, tx, previous, counted, next, await ctx.kv.get<string>(lastActivityKey(t.number)));
+  if (!(await tx.commit()).ok) throw new TicketConflict("Ticket changed; reload before saving");
   t.revision = revision;
+  t.ix = SCHEMA;
 }
 
+type Tx = ReturnType<Context["kv"]["atomic"]>;
+
+/** Index writes for one record transition, committed with the record. */
+export function deriveIndexes(
+  ctx: Context,
+  tx: Tx,
+  previous: Ticket | undefined,
+  counted: Ticket | undefined,
+  next: Ticket,
+  last: string | undefined,
+) {
+  const n = next.number;
+  const due = dueAt(ctx.config, next, last);
+  if (due === undefined) tx.rankRemove(DUE, String(n));
+  else tx.rankSet(DUE, String(n), -due);
+  if (next.logDelivery || next.logCopy) tx.set(copyKey(n), n);
+  else if (previous?.logDelivery || previous?.logCopy) tx.delete(copyKey(n));
+  if (previous?.request && !sameRequest(previous.request, next.request))
+    tx.delete(reqKey(previous.request));
+  if (next.request && !sameRequest(counted?.request, next.request)) tx.set(reqKey(next.request), n);
+  const appeal = (t?: Ticket) => (t?.appeal ? appealKey(t.appeal, t.author.id, t.number) : undefined);
+  const [before, after, indexed] = [appeal(previous), appeal(next), appeal(counted)];
+  if (before && before !== after) tx.delete(before);
+  if (after && after !== indexed) tx.set(after, true);
+  const was = counted?.rating !== undefined ? ([counted.type, counted.rating] as const) : undefined;
+  const now = next.rating !== undefined ? ([next.type, next.rating] as const) : undefined;
+  if (was?.[0] !== now?.[0] || was?.[1] !== now?.[1]) {
+    if (was) tx.increment(ratingCount(was[0]), -1).increment(ratingSum(was[0]), -was[1]);
+    if (now) tx.increment(ratingCount(now[0]), 1).increment(ratingSum(now[0]), now[1]);
+  }
+}
+
+/** Recompute the `due` entry of a committed record. When work is still due, `floor` defers
+ * it, so a ticket that cannot progress now never monopolises the head of the ranking.
+ * A concurrent save wins: it committed its own entry. */
+export async function refreshDue(ctx: Context, n: number, floor?: number) {
+  const entry = await ctx.kv.getEntry(ticketKey(n));
+  if (!entry) {
+    await ctx.kv.ranking(DUE).remove(String(n));
+    return;
+  }
+  const t = normalize(entry.value as unknown as Ticket);
+  let due = dueAt(ctx.config, t, await ctx.kv.get<string>(lastActivityKey(n)));
+  if (due !== undefined && floor !== undefined && due <= Date.now()) due = floor;
+  const tx = ctx.kv.atomic().check(ticketKey(n), entry.version);
+  if (due === undefined) tx.rankRemove(DUE, String(n));
+  else tx.rankSet(DUE, String(n), -due);
+  await tx.commit();
+}
+
+/** Deletes an expired record with every index that points at it. */
+export async function deleteRecord(ctx: Context, n: number) {
+  const entry = await ctx.kv.getEntry(ticketKey(n));
+  if (!entry) return;
+  const raw = entry.value as unknown as Ticket;
+  const t = normalize(raw);
+  const tx = ctx.kv
+    .atomic()
+    .check(ticketKey(n), entry.version)
+    .delete(ticketKey(n))
+    .delete(authorKey(t.author.id, n))
+    .delete(lastActivityKey(n))
+    .delete(activityKey(n))
+    .delete(copyKey(n))
+    .rankRemove(DUE, String(n));
+  if (t.request) tx.delete(reqKey(t.request));
+  if (t.appeal) tx.delete(appealKey(t.appeal, t.author.id, n));
+  if (raw.ix === SCHEMA && t.rating !== undefined)
+    tx.increment(ratingCount(t.type), -1).increment(ratingSum(t.type), -t.rating);
+  if (!(await tx.commit()).ok) throw new TicketConflict("Ticket changed during retention");
+  for (const id of involved(t)) await ctx.kv.delete(whoKey(id, n));
+}
+
+/** Every record. Only for schema-1 data that has no index yet (privacy during migration). */
 export async function allTickets(ctx: Context): Promise<Ticket[]> {
   const tickets: Ticket[] = [];
   let cursor: string | undefined;
@@ -232,18 +354,59 @@ export async function allTickets(ctx: Context): Promise<Ticket[]> {
   return tickets;
 }
 
+export const indexed = async (ctx: Context) => (await ctx.kv.get(SCHEMA_KEY)) === SCHEMA;
+
+/** The ticket committed for an `open` request, without scanning. Until the schema-2
+ * migration finishes, a retry of a pre-upgrade request is found among the newest tickets
+ * (retries follow their first attempt closely; the lookup stays bounded). */
+export async function findRequest(ctx: Context, r: Request): Promise<Ticket | undefined> {
+  const n = await ctx.kv.get<number>(reqKey(r));
+  if (n !== undefined) {
+    const t = await getTicket(ctx, n);
+    if (t && sameRequest(t.request, r)) return t;
+  }
+  if (await indexed(ctx)) return undefined;
+  const seq = (await ctx.kv.get<number>("seq")) ?? 0;
+  const numbers = Array.from({ length: Math.min(seq, 100) }, (_, i) => seq - i);
+  const rows = await ctx.kv.getMany(numbers.map(ticketKey));
+  for (const row of rows) {
+    const t = row ? normalize(row as unknown as Ticket) : undefined;
+    if (t && sameRequest(t.request, r)) return t;
+  }
+  return undefined;
+}
+
+/** Numbers of every open ticket, from the `open:<user>:<n>` index (bounded by open
+ * tickets, not by retained records). Admission reservations may name a ticket not saved yet. */
+export async function openNumbers(ctx: Context): Promise<number[]> {
+  const out = new Set<number>();
+  let cursor: string | undefined;
+  do {
+    const page = await ctx.kv.list({ prefix: "open:", limit: 1000, ...(cursor ? { cursor } : {}) });
+    for (const i of page.items) out.add(Number(i.key.slice(i.key.lastIndexOf(":") + 1)));
+    cursor = page.cursor;
+  } while (cursor);
+  return [...out].sort((a, b) => a - b);
+}
+
+export async function ticketsByNumber(ctx: Context, numbers: readonly number[]) {
+  const out: Ticket[] = [];
+  for (let i = 0; i < numbers.length; i += 100) {
+    const rows = await ctx.kv.getMany(numbers.slice(i, i + 100).map(ticketKey));
+    for (const row of rows) if (row) out.push(normalize(row as unknown as Ticket));
+  }
+  return out;
+}
+
 /** Numbers of the member's open tickets. */
 export async function openTickets(ctx: Context, userId: string): Promise<number[]> {
   const { items } = await ctx.kv.list({ prefix: `open:${userId}:`, limit: 100 });
   return items.map((i) => Number(i.key.slice(i.key.lastIndexOf(":") + 1)));
 }
 
-/** Every ticket of a member, from the author index (built once from older records). */
+/** Every ticket of a member, from the author index. */
 async function authorTickets(ctx: Context, userId: string): Promise<Ticket[]> {
-  if (!(await ctx.kv.get(AUTHOR_INDEX))) {
-    for (const t of await allTickets(ctx)) await ctx.kv.set(authorKey(t.author.id, t.number), true);
-    await ctx.kv.set(AUTHOR_INDEX, true);
-  }
+  // Records older than the author index are indexed by the schema-2 migration task.
   const out: Ticket[] = [];
   let cursor: string | undefined;
   do {
@@ -267,9 +430,10 @@ export function numberOf(componentId: string): number | undefined {
   return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
+/** Configured types; a repeated key keeps its first definition (reported at startup). */
 export function types(ctx: Context) {
   return ctx.config.types?.length
-    ? ctx.config.types
+    ? ctx.config.types.filter((t, i, all) => all.findIndex((o) => o.key === t.key) === i)
     : [
         {
           key: "default",
@@ -585,8 +749,9 @@ async function createTicketChannel(
 export class OpenLimit extends Error {}
 export class TicketConflict extends Error {}
 /** Reserve against the shared durable member index across all invocation VMs. */
+const admissionKey = (userId: string) => "admission:" + userId;
 async function reserve(ctx: Context, userId: string, number: number) {
-  const key = "admission:" + userId;
+  const key = admissionKey(userId);
   for (;;) {
     const entry = await ctx.kv.getEntry(key);
     if ((await openTickets(ctx, userId)).length >= ctx.config.maxOpenPerMember)
@@ -613,12 +778,12 @@ type OpenInput = {
   request?: Ticket["request"];
 };
 
-async function allocate(ctx: Context, input: OpenInput): Promise<Ticket> {
+async function allocate(ctx: Context, input: OpenInput, admit = true): Promise<Ticket> {
   const type = ticketType(ctx, input.type);
   if (!type) throw new Error("Unknown ticket type");
   const author = person(input.user, input.member);
   const number = await ctx.kv.increment("seq");
-  await reserve(ctx, author.id, number);
+  if (admit) await reserve(ctx, author.id, number);
   const now = new Date().toISOString();
   const ticket: Ticket = {
     id: String(number),
@@ -647,24 +812,53 @@ async function allocate(ctx: Context, input: OpenInput): Promise<Ticket> {
 async function storeOpen(ctx: Context, t: Ticket) {
   await saveTicket(ctx, t);
   await ctx.kv.set(openKey(t.author.id, t.number), true);
+  await indexOpen(ctx, t);
+}
+
+async function indexOpen(ctx: Context, t: Ticket) {
   await ctx.kv.set(authorKey(t.author.id, t.number), true);
   await ctx.kv.increment("stats:opened");
   if (t.channelId) await ctx.kv.set(channelKey(t.channelId), t.number);
 }
 
-/** Interop actions commit this request with their idempotency result. Discord effects
- * start in a separate invocation that can read the authoritative committed record. */
-export async function requestTicket(ctx: Context, input: OpenInput) {
-  const t = await allocate(ctx, input);
+/**
+ * Interop actions commit this request with their idempotency result. Discord effects start
+ * in a separate invocation that can read the authoritative committed record.
+ *
+ * Each call runs in its own realm, so the request receipt, the member's open-ticket slot and
+ * the record are one atomic commit: a concurrent duplicate either sees the committed receipt
+ * or fails its commit and finds it on the next attempt. Returns the ticket holding the request.
+ */
+export async function requestTicket(ctx: Context, input: OpenInput): Promise<Ticket> {
+  const t = await allocate(ctx, input, false);
   t.provision = {
     topic:
       "Cicord · " + ctx.bot.key + "/" + ctx.plugin.instance + "/" + t.number + "/" + t.createdAt,
     phase: "queued",
     since: 0,
   };
-  await storeOpen(ctx, t);
+  const userId = t.author.id;
+  for (let attempt = 0; ; attempt++) {
+    const prior = input.request && (await findRequest(ctx, input.request));
+    if (prior) return prior;
+    const admission = await ctx.kv.getEntry(admissionKey(userId));
+    if ((await openTickets(ctx, userId)).length >= ctx.config.maxOpenPerMember)
+      throw new OpenLimit(ctx.i18n.t("openLimit"));
+    try {
+      await saveTicket(ctx, t, false, (tx) => {
+        if (input.request) tx.check(reqKey(input.request), null);
+        tx.check(admissionKey(userId), admission?.version)
+          .set(admissionKey(userId), t.number, { ttlSeconds: 120 })
+          .set(openKey(userId, t.number), true);
+      });
+      break;
+    } catch (error) {
+      if (!(error instanceof TicketConflict) || attempt >= 20) throw error;
+    }
+  }
+  await indexOpen(ctx, t);
   await ctx.schedule.after(1000, "provision", { number: t.number });
-  return { id: t.id };
+  return t;
 }
 
 export async function provisionTicket(ctx: Context, t: Ticket) {
@@ -879,7 +1073,9 @@ export async function finishClose(ctx: Context, closed: Ticket) {
   delete closed.pendingClose;
   await saveTicket(ctx, closed);
   try {
-    const member = await ctx.server.member(closed.author.id);
+    const member = ctx.features.enabled("ratingPrompts")
+      ? await ctx.server.member(closed.author.id)
+      : undefined;
     if (member)
       await member.send({
         content: ctx.i18n.t("rate", { number: closed.number }),
@@ -1020,9 +1216,12 @@ export async function staffDetail(ctx: Context, t: Ticket): Promise<StaffTicketD
       }
       const raw = await channel.messages({ limit: 50 });
       const safe = redactLive(t, raw);
+      const nameOf = authorNames(ctx, t);
+      const authors = new Map<string, Person>();
+      for (const m of safe) if (!authors.has(m.author.id)) authors.set(m.author.id, await nameOf(m.author));
       history = safe.toReversed().map((m) => ({
         id: m.id,
-        author: { ...person(m.author, m.member), bot: m.author.bot },
+        author: { ...authors.get(m.author.id)!, bot: m.author.bot },
         content: m.content,
         embeds: (m.embeds ?? []).map((e) => ({
           title: e.title ?? null,
@@ -1112,26 +1311,57 @@ export interface TicketFilters {
   label?: string | null;
 }
 
-/** Tickets for the staff, newest first. */
+/** Tickets returned by one `GET /tickets` page. */
+export const LIST_PAGE = 50;
+/** Ticket records one `GET /tickets` request reads at most, whatever the filters match. */
+export const LIST_SCAN = 500;
+
+/**
+ * One page of tickets for the staff, newest first. Ticket numbers are sequential (`seq`), so
+ * the page walks them downwards from `before` (the cursor, inclusive) with batched direct
+ * reads: no listing of the whole store. A request reads at most `LIST_SCAN` records, so a
+ * selective filter returns a short or empty page with a cursor rather than scanning every
+ * retained ticket. `status=open` walks the open-ticket index instead (bounded by open tickets).
+ */
 export async function listTickets(
   ctx: Context,
   f: TicketFilters,
   member?: Member,
-): Promise<StaffTicket[]> {
-  const out: StaffTicket[] = [];
-  for (const t of (await allTickets(ctx)).toReversed()) {
-    if (!mayRead(ctx, t, member)) continue;
-    if (f.status && t.status !== f.status) continue;
-    if (f.assignee !== undefined && (t.assignee?.id ?? null) !== f.assignee) continue;
-    if (f.priority && t.priority !== f.priority) continue;
-    if (
-      f.label !== undefined &&
-      (f.label === null ? t.labels.length > 0 : !t.labels.includes(f.label))
-    )
-      continue;
-    out.push(await staffView(ctx, t));
+  before?: number,
+): Promise<{ items: StaffTicket[]; cursor?: string }> {
+  let numbers: number[];
+  if (f.status === "open") {
+    numbers = (await openNumbers(ctx)).filter((n) => before === undefined || n <= before).toReversed();
+  } else {
+    const top = Math.min(before ?? Infinity, (await ctx.kv.get<number>("seq")) ?? 0);
+    numbers = Array.from({ length: Math.max(0, Math.min(top, LIST_SCAN + 1)) }, (_, i) => top - i);
   }
-  return out;
+  const out: StaffTicket[] = [];
+  let scanned = 0;
+  while (scanned < numbers.length && scanned < LIST_SCAN && out.length < LIST_PAGE) {
+    // Read no further ahead than the page can still use, so pages never re-read records.
+    const batch = numbers.slice(scanned, Math.min(scanned + LIST_PAGE - out.length, LIST_SCAN));
+    const rows = await ctx.kv.getMany(batch.map(ticketKey));
+    let i = 0;
+    for (; i < rows.length && out.length < LIST_PAGE; i++) {
+      const row = rows[i];
+      if (!row) continue;
+      const t = normalize(row as unknown as Ticket);
+      if (!mayRead(ctx, t, member)) continue;
+      if (f.status && t.status !== f.status) continue;
+      if (f.assignee !== undefined && (t.assignee?.id ?? null) !== f.assignee) continue;
+      if (f.priority && t.priority !== f.priority) continue;
+      if (
+        f.label !== undefined &&
+        (f.label === null ? t.labels.length > 0 : !t.labels.includes(f.label))
+      )
+        continue;
+      out.push(await staffView(ctx, t));
+    }
+    scanned += i;
+  }
+  const next = numbers[scanned];
+  return { items: out, ...(next !== undefined && next > 0 ? { cursor: String(next) } : {}) };
 }
 
 export async function publish(ctx: Context, t: Ticket, topic: "opened" | "closed" | "rated") {

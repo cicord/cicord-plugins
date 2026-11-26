@@ -111,3 +111,57 @@ test(
     await wait((ms) => ms.length === 0);
   },
 );
+
+test(
+  "erasing the author during the coalescing window keeps the highlight from being published",
+  { timeout: 65000 },
+  async (t) => {
+    const dir = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
+    const sim = await startSimulator(
+      t,
+      dir,
+      [
+        "storage.kv",
+        "scheduler",
+        "discord.messages.send",
+        "discord.messages.read",
+        "discord.messages.manage",
+        "discord.channels.read",
+        "events.publish",
+        "discord.reactions.manage",
+        "portal.routes",
+      ],
+      { channel: "stars", threshold: 1 },
+      { prepare },
+    );
+    const alice = sim.users.find((u) => u.username === "alice");
+    await sim.join(alice);
+    const stars = sim.guild.channels.find((c) => c.name === "stars"),
+      token = await sim.login(sim.owner);
+    const message = await sim.api("/api/v1/sim/messages", {
+      userId: alice.id,
+      channelId: sim.channel.id,
+      content: "Alice's summer photo",
+    });
+    await sim.api(
+      "/api/v1/portal/acceptance/plugins/bot/starboard/fixture/react",
+      { channel: message.channelId, id: message.id },
+      token,
+    );
+    // The reaction event carries a partial message: the pending row has no author yet.
+    await delay(500);
+    const erased = await sim.api(
+      "/api/v1/servers/acceptance/privacy/erase",
+      { userId: alice.id },
+      "local-simulator-only",
+    );
+    t.diagnostic(JSON.stringify(erased));
+    await delay(12000);
+    const rows = (await sim.api("/api/v1/sim/channels/" + stars.id + "/messages")).items;
+    assert.equal(
+      rows.filter((m) => m.embeds.length).length,
+      0,
+      "an erased member's message was highlighted",
+    );
+  },
+);

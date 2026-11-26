@@ -7,7 +7,6 @@
   "claimed": "You have already claimed this reward.",
   "empty": "No entries.",
   "unavailable": "This product is unavailable.",
-  "pending": "Purchase recorded. Fulfillment is pending.",
   "denied": "A server manager is required.",
   "item": "{label} · {price} points · {id}",
   "done": "Balance: {balance}",
@@ -24,5 +23,10 @@
   "commands.eco.take.description": "Remove points",
   "commands.eco.set.description": "Set the balance",
   "state.pending": "pending",
-  "state.delivered": "delivered"
+  "state.delivered": "delivered",
+  "bought.delivered": "Purchase delivered: {id}.",
+  "bought.pending": "Payment recorded for {id}, but delivery could not be completed yet. Run /buy {id} again or /inventory to retry. The points are refunded if it is still undelivered after 72 hours.",
+  "bought.refunded": "{id} could not be delivered. Your points were refunded.",
+  "state.refunded": "refunded",
+  "perk.description": "Shop order {id}"
 }

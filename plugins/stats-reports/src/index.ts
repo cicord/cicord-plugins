@@ -5,6 +5,7 @@ import {
   type AnalyticsSummary,
   type MessagePayload,
 } from "@cicord/sdk";
+import { hmac } from "./fast-sha256/sha256.cjs";
 const DAY = 86400000,
   MIN = 60000;
 const REPORT_TTL = 400 * 86400,
@@ -36,6 +37,27 @@ function range(now: number, kind: "week" | "month") {
     from: Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1),
     to: Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1),
   };
+}
+// Join markers are keyed by HMAC-SHA256(per-instance secret, member ID): the store never holds
+// a raw member ID, and the key is computable in every handler. `ctx.privacy.pseudonym` is not
+// usable here: the host scopes it to the subject of a privacy hook.
+const SECRET = "cohort:secret";
+const hex = (bytes: Uint8Array) => [...bytes].map((n) => n.toString(16).padStart(2, "0")).join("");
+const ascii = (value: string) => Uint8Array.from(value, (char) => char.charCodeAt(0));
+async function cohortSecret(ctx: Context, create: boolean): Promise<Uint8Array | undefined> {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const stored = await ctx.kv.get<string>(SECRET);
+    if (stored) return Uint8Array.from(stored.match(/../g)!, (b) => parseInt(b, 16));
+    if (!create) return undefined;
+    const fresh = hex(crypto.getRandomValues(new Uint8Array(32)));
+    await ctx.kv.atomic().check(SECRET, null).set(SECRET, fresh).commit();
+  }
+  throw new Error("Concurrent cohort secret creation");
+}
+/** The member's join-marker key, or undefined when no marker can exist yet. */
+async function arrivalKey(ctx: Context, userId: string, create = false) {
+  const secret = await cohortSecret(ctx, create);
+  return secret && "arrival:" + hex(hmac(secret, ascii(userId)));
 }
 export async function shortStays(ctx: Context, from: number, to: number) {
   let joined = 0,
@@ -271,7 +293,7 @@ export default definePlugin({
     async memberJoin(ctx, m) {
       if (!ctx.features.enabled("cohorts")) return;
       const at = m.joinedAt?.getTime() ?? Date.now(),
-        key = "arrival:" + (await ctx.privacy.pseudonym(m.id));
+        key = (await arrivalKey(ctx, m.id, true))!;
       const previous = await ctx.kv.getEntry<number>(key);
       if (previous?.value === at) return;
       await ctx.kv
@@ -283,9 +305,9 @@ export default definePlugin({
     },
     async memberLeave(ctx, u) {
       if (!ctx.features.enabled("cohorts")) return;
-      const key = "arrival:" + (await ctx.privacy.pseudonym(u.id)),
-        entry = await ctx.kv.getEntry<number>(key);
-      if (!entry) return;
+      const key = await arrivalKey(ctx, u.id),
+        entry = key && (await ctx.kv.getEntry<number>(key));
+      if (!key || !entry) return;
       const batch = ctx.kv.atomic().check(key, entry.version).delete(key);
       if (Date.now() - entry.value < 7 * DAY) batch.increment("early:" + day(entry.value));
       await batch.commit();
@@ -314,15 +336,15 @@ export default definePlugin({
     },
   },
   privacy: {
+    // Neither hook creates the secret: without it no marker exists. The secret is not member data.
     async export(ctx, id) {
-      return {
-        joinedAt: (await ctx.kv.get("arrival:" + (await ctx.privacy.pseudonym(id)))) ?? null,
-      };
+      const key = await arrivalKey(ctx, id);
+      return { joinedAt: (key && (await ctx.kv.get<number>(key))) ?? null };
     },
     async erase(ctx, id) {
-      const key = "arrival:" + (await ctx.privacy.pseudonym(id)),
-        exists = (await ctx.kv.get(key)) !== undefined;
-      await ctx.kv.delete(key);
+      const key = await arrivalKey(ctx, id),
+        exists = !!key && (await ctx.kv.get(key)) !== undefined;
+      if (key) await ctx.kv.delete(key);
       return { erased: exists ? 1 : 0 };
     },
   },

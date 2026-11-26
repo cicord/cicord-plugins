@@ -34,5 +34,9 @@
   "commands.timezone.set.description": "Définir votre fuseau horaire",
   "commands.timezone.set.options.zone.name": "zone",
   "commands.timezone.set.options.zone.description": "Fuseau horaire",
-  "contextMenus.Remind me.name": "Me le rappeler"
+  "contextMenus.Remind me.name": "Me le rappeler",
+  "channelDenied": "Vous ne pouvez pas écrire dans ce salon, le rappel ne peut donc pas y être publié. Choisissez un rappel en message privé.",
+  "channelFallback": "(Envoyé en privé : vous ne pouvez plus écrire dans {channel}.)",
+  "channelRefused": "Discord a refusé un rappel dans {channel} ({reason}). Il a été envoyé en message privé.",
+  "dmRefused": "Discord a refusé un rappel en message privé ({reason}) : le membre n’accepte peut-être pas les messages privés de ce serveur. Cette occurrence a été ignorée."
 }

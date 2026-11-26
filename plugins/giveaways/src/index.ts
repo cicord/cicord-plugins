@@ -34,8 +34,20 @@ type Giveaway = {
   refreshAt: number;
   image?: string;
   expiresAt?: number;
+  /** Set when the draw starts: entries stop before the entrant list is read. */
+  closing?: true;
 };
 const key = (id: string) => "gw:" + id;
+// Entries never write the giveaway record: each click changes its own entry key and this
+// counter, so a popular giveaway has no hot key. `entrants` holds the count that predates
+// the counter (records of earlier versions) and, after the draw, the final count.
+const countKey = (id: string) => "entrants:" + id;
+const refreshKey = (id: string) => "refreshing:" + id;
+async function entrantCount(ctx: Context, g: Giveaway) {
+  return g.state === "open"
+    ? g.entrants + ((await ctx.kv.get<number>(countKey(g.id))) ?? 0)
+    : g.entrants;
+}
 const t = (ctx: Context, id: string, vars: Record<string, string> = {}) => ctx.i18n.t(id, vars);
 function manager(ctx: Context, member?: Member) {
   return (
@@ -57,20 +69,37 @@ async function entries(ctx: Context, id: string) {
   } while (cursor);
   return canonical(result);
 }
+/**
+ * One page of the entrant list, in storage order: an anonymous request reads at most one KV
+ * page. Concatenate the pages and sort by numeric ID (as the verifier does) to hash them.
+ */
+const ENTRY_PAGE = 1000;
+async function entryPage(ctx: Context, id: string, cursor?: string) {
+  const page = await ctx.kv.list<number>({ prefix: entryKey(id), limit: ENTRY_PAGE, cursor });
+  return {
+    entries: canonical(
+      page.items.map(({ key, value }) => ({
+        userId: key.slice(entryKey(id).length),
+        weight: value,
+      })),
+    ),
+    ...(page.cursor ? { entriesCursor: page.cursor } : {}),
+  };
+}
 function canRead(ctx: Context, g: Giveaway, member?: Member) {
   const source = { id: g.channelId };
   // A missing snapshot or channel must never turn a private drawing into a public proof.
   const audience = ctx.server.audience(source);
   return audience.known && (member ? member.canView(source) : audience.public);
 }
-function view(g: Giveaway): DrawView {
+function view(g: Giveaway, entrants: number): DrawView {
   return {
     id: g.id,
     prize: g.prize,
     state: g.state,
     closesAt: g.closesAt,
     commitment: g.commitment,
-    entrants: g.entrants,
+    entrants,
     winners: g.winners,
     ...(g.state === "ended"
       ? {
@@ -83,7 +112,7 @@ function view(g: Giveaway): DrawView {
       : {}),
   };
 }
-function panel(ctx: Context, g: Giveaway): MessagePayload {
+function panel(ctx: Context, g: Giveaway, entrants: number): MessagePayload {
   return {
     embeds: [
       {
@@ -93,7 +122,7 @@ function panel(ctx: Context, g: Giveaway): MessagePayload {
         footer: { text: `gw/${g.id}` },
         fields: [
           { name: t(ctx, "commit"), value: g.commitment },
-          { name: t(ctx, "entrants"), value: String(g.entrants) },
+          { name: t(ctx, "entrants"), value: String(entrants) },
           { name: t(ctx, "end"), value: `<t:${Math.floor(g.closesAt / 1000)}:R>` },
           { name: t(ctx, "status"), value: t(ctx, "state." + g.state) },
           ...(g.state === "ended"
@@ -134,9 +163,10 @@ function panel(ctx: Context, g: Giveaway): MessagePayload {
   };
 }
 async function refresh(ctx: Context, g: Giveaway) {
-  const ch = ctx.server.channel({ id: g.channelId });
+  const ch = ctx.server.channel({ id: g.channelId }),
+    entrants = await entrantCount(ctx, g);
   if (g.messageId) {
-    await (await ch.message(g.messageId))?.edit(panel(ctx, g));
+    await (await ch.message(g.messageId))?.edit(panel(ctx, g, entrants));
     return;
   }
   // Discord honours the nonce for recent retries; the marker recovers older deliveries.
@@ -155,7 +185,7 @@ async function refresh(ctx: Context, g: Giveaway) {
         : undefined;
   } while (before);
   const message =
-    existing ?? (await ch.send({ ...panel(ctx, g), nonce: g.id, enforceNonce: true }));
+    existing ?? (await ch.send({ ...panel(ctx, g, entrants), nonce: g.id, enforceNonce: true }));
   for (;;) {
     const current = await ctx.kv.getEntry<Giveaway>(key(g.id));
     if (!current || current.value.messageId) break;
@@ -180,31 +210,37 @@ function requiredProviders(ctx: Context) {
     [c.noWarnings, "standing", "moderation"],
   ] as const;
 }
-async function eligibility(ctx: Context, m: Member) {
+/** The refusal message for an entry, naming the unmet condition, or undefined. */
+async function eligibility(ctx: Context, m: Member): Promise<string | undefined> {
   const c = ctx.config.conditions;
-  if (c.requiredRole && !m.hasRole(c.requiredRole)) return "role";
-  if (c.excludedRoles.some((r) => m.hasRole(r))) return "excluded";
+  if (c.requiredRole && !m.hasRole(c.requiredRole)) return t(ctx, "role");
+  if (c.excludedRoles.some((r) => m.hasRole(r))) return t(ctx, "excluded");
   const birth = Number((BigInt(m.id) >> 22n) + 1420070400000n);
-  if (Date.now() - birth < c.accountDays * 86400000) return "age";
-  if (Date.now() - m.joinedAt.getTime() < c.memberDays * 86400000) return "tenure";
+  if (Date.now() - birth < c.accountDays * 86400000) return t(ctx, "age");
+  if (Date.now() - m.joinedAt.getTime() < c.memberDays * 86400000) return t(ctx, "tenure");
   for (const [needed, feature, provider] of requiredProviders(ctx)) {
     if (!needed) continue;
-    if (!ctx.features.enabled(feature) || !ctx.plugins.has(provider)) return "missing";
+    // A provider that was unbound, disabled or failing since launch: name the condition.
+    const missing = () => t(ctx, "missing", { condition: t(ctx, "condition." + feature) });
+    if (!ctx.features.enabled(feature) || !ctx.plugins.has(provider)) return missing();
     const method =
       feature === "level" ? "memberLevel" : feature === "invites" ? "count" : "standing";
-    const res = (await ctx.plugins.query(provider, method, { userId: m.id })) as Record<
-      string,
-      number
-    >;
-    if (feature === "level" && !(res.level! >= c.level)) return "level";
-    if (feature === "invites" && !(res.valid! >= c.invites)) return "invites";
-    if (feature === "standing" && res.activeWarnings !== 0) return "standing";
+    let res: Record<string, number>;
+    try {
+      res = (await ctx.plugins.query(provider, method, { userId: m.id })) as Record<string, number>;
+    } catch (error) {
+      ctx.log.warn("Entry condition could not be verified", { provider, error: String(error) });
+      return missing();
+    }
+    if (feature === "level" && !(res.level! >= c.level)) return t(ctx, "level");
+    if (feature === "invites" && !(res.valid! >= c.invites)) return t(ctx, "invites");
+    if (feature === "standing" && res.activeWarnings !== 0) return t(ctx, "standing");
   }
 }
 async function enter(ctx: Context, i: Interaction, id: string, leave: boolean) {
   if (!ctx.config.enabled || !i.member) return i.reply({ content: t(ctx, "off"), ephemeral: true });
   const fail = leave ? undefined : await eligibility(ctx, i.member);
-  if (fail) return i.reply({ content: t(ctx, fail, { condition: "interop" }), ephemeral: true });
+  if (fail) return i.reply({ content: fail, ephemeral: true });
   const ek = entryKey(id, i.user.id);
   const weight =
     1 + ctx.config.bonus.reduce((s, r) => s + (i.member!.hasRole(r.role) ? r.entries : 0), 0);
@@ -214,29 +250,43 @@ async function enter(ctx: Context, i: Interaction, id: string, leave: boolean) {
       !g ||
       !canRead(ctx, g.value, i.member) ||
       g.value.state !== "open" ||
+      g.value.closing ||
       Date.now() >= g.value.closesAt
     )
       return i.reply({ content: t(ctx, "closed"), ephemeral: true });
     if (leave === !e) break;
-    const due = Date.now() >= g.value.refreshAt;
+    // The record is only checked: the draw's closing write makes an in-flight entry retry
+    // and see the giveaway closed, so every stored entry is part of the draw.
     const tx = ctx.kv
       .atomic()
       .check(key(id), g.version)
       .check(ek, e?.version ?? null)
-      .set(key(id), {
-        ...g.value,
-        entrants: g.value.entrants + (leave ? -1 : 1),
-        refreshAt: due ? Date.now() + 10000 : g.value.refreshAt,
-      });
+      .increment(countKey(id), leave ? -1 : 1);
     if (leave) tx.delete(ek);
     else tx.set(ek, weight);
     if ((await tx.commit()).ok) {
-      if (due) await ctx.schedule.after(10000, "refresh", { id });
+      // One panel refresh per 10 s, whoever clicks first.
+      const claimed = await ctx.kv
+        .atomic()
+        .check(refreshKey(id), null)
+        .set(refreshKey(id), true, { ttlSeconds: 10 })
+        .commit();
+      if (claimed.ok) await ctx.schedule.after(10000, "refresh", { id });
       break;
     }
   }
   await i.reply({ content: t(ctx, leave ? "left" : "joined"), ephemeral: true });
 }
+function rewardProviders(ctx: Context) {
+  const r = ctx.config.rewards;
+  return [
+    [r.xp, "xpReward", "levels", "grantXp"],
+    [r.coins, "coinReward", "economy", "credit"],
+    [r.role, "roleReward", "member-roles", "grantTemporary"],
+  ] as const;
+}
+const rewardUnavailable = (plugin: string, method: string) =>
+  "Reward unavailable: " + plugin + "." + method;
 async function payout(ctx: Context, g: Giveaway, userId: string) {
   const r = ctx.config.rewards;
   const calls: {
@@ -271,7 +321,7 @@ async function payout(ctx: Context, g: Giveaway, userId: string) {
   for (const c of calls)
     if (c.enabled) {
       if (!ctx.features.enabled(c.feature) || !ctx.plugins.has(c.plugin)) {
-        ctx.status.set("reward-" + c.feature, "Reward unavailable: " + c.plugin + "." + c.method);
+        ctx.status.set("reward-" + c.feature, rewardUnavailable(c.plugin, c.method));
         continue;
       }
       await ctx.plugins.call(
@@ -280,6 +330,7 @@ async function payout(ctx: Context, g: Giveaway, userId: string) {
         { userId, ...c.input, reason: "giveaway " + g.id } as Json,
         { idempotencyKey: `gw:${g.id}:${userId}:${c.method}` },
       );
+      ctx.status.set("reward-" + c.feature, null);
     }
 }
 async function settle(ctx: Context, id: string, round: number, count?: number) {
@@ -296,12 +347,23 @@ async function settle(ctx: Context, id: string, round: number, count?: number) {
     let g = cur.value;
     if (g.round < round) {
       if (round !== g.round + 1) return;
+      if (g.state === "open" && !g.closing) {
+        // Close entries first: this write fails every entry still in flight.
+        await ctx.kv
+          .atomic()
+          .check(key(id), cur.version)
+          .set(key(id), { ...g, closing: true })
+          .commit();
+        continue;
+      }
       const data = await entries(ctx, id);
       const winners = draw(g.seed, g.id, data, g.history, count ?? g.slots);
       const kept = round === 1 ? [] : g.winners.filter((w) => g.claimed.includes(w));
+      const { closing: _closing, ...rest } = g;
       g = {
-        ...g,
+        ...rest,
         state: "ended",
+        entrants: g.state === "open" ? data.length : g.entrants,
         round,
         expiresAt: Date.now() + ctx.config.historyDays * 86400000,
         entrantsHash: g.entrantsHash ?? entrantsHash(data),
@@ -312,8 +374,9 @@ async function settle(ctx: Context, id: string, round: number, count?: number) {
             ? Date.now() + ctx.config.claim.hours * 3600000
             : 0,
       };
-      if (!(await ctx.kv.atomic().check(key(id), cur.version).set(key(id), g).commit()).ok)
-        continue;
+      const tx = ctx.kv.atomic().check(key(id), cur.version).set(key(id), g);
+      if (cur.value.state === "open") tx.delete(countKey(id)).delete(refreshKey(id));
+      if (!(await tx.commit()).ok) continue;
     }
     await refresh(ctx, g);
     await ctx.events.publish(
@@ -360,7 +423,7 @@ async function kickoff(ctx: Context, g: Giveaway) {
       id: g.id,
       prize: g.prize,
       winners: [],
-      entrants: g.entrants,
+      entrants: await entrantCount(ctx, g),
       channelId: g.channelId,
       messageId: g.messageId,
     },
@@ -401,14 +464,22 @@ const actionCommand = (mode: "end" | "cancel" | "reroll") =>
       const cur = await ctx.kv.getEntry<Giveaway>(key(i.options.id));
       if (!cur || !canRead(ctx, cur.value, i.member)) return i.reply(t(ctx, "closed"));
       if (mode === "cancel" && cur.value.state === "open") {
+        const counter = await ctx.kv.getEntry<number>(countKey(cur.value.id));
+        const { closing: _closing, ...open } = cur.value;
         const g = {
-          ...cur.value,
+          ...open,
           state: "cancelled" as const,
+          entrants: cur.value.entrants + (counter?.value ?? 0),
           expiresAt: Date.now() + ctx.config.historyDays * 86400000,
         };
         await ctx.schedule.after(ctx.config.historyDays * 86400000, "purge", { id: g.id });
-        if ((await ctx.kv.atomic().check(key(g.id), cur.version).set(key(g.id), g).commit()).ok)
-          await refresh(ctx, g);
+        const tx = ctx.kv
+          .atomic()
+          .check(key(g.id), cur.version)
+          .check(countKey(g.id), counter?.version ?? null)
+          .set(key(g.id), g)
+          .delete(countKey(g.id));
+        if ((await tx.commit()).ok) await refresh(ctx, g);
       } else if (mode === "end" && cur.value.state === "open") await settle(ctx, cur.value.id, 1);
       else if (mode === "reroll" && cur.value.state === "ended")
         await settle(
@@ -447,6 +518,14 @@ export default definePlugin({
               : "Configured condition cannot be verified: " + provider,
           );
       }
+    if (ctx.config.enabled)
+      for (const [amount, feature, provider, method] of rewardProviders(ctx))
+        ctx.status.set(
+          "reward-" + feature,
+          !amount || (ctx.features.enabled(feature) && ctx.plugins.has(provider))
+            ? null
+            : rewardUnavailable(provider, method),
+        );
     if (ctx.config.enabled) await ctx.schedule.after(1, "recover");
   },
   commands: {
@@ -603,7 +682,7 @@ export default definePlugin({
           return;
         }
       }
-      await ctx.kv.delete(key(id));
+      await ctx.kv.atomic().delete(countKey(id)).delete(refreshKey(id)).delete(key(id)).commit();
     },
     async start(ctx, p) {
       const g = await ctx.kv.get<Giveaway>(key((p as { id: string }).id));
@@ -632,9 +711,9 @@ export default definePlugin({
         const g = await ctx.kv.get<Giveaway>(key(r.params.id));
         if (!g || !ctx.config.enabled || !canRead(ctx, g, r.viewer?.member)) return { status: 404 };
         return {
-          ...view(g),
+          ...view(g, await entrantCount(ctx, g)),
           ...(ctx.config.publishEntrants && g.state === "ended"
-            ? { entries: await entries(ctx, g.id) }
+            ? await entryPage(ctx, g.id, r.query.cursor)
             : {}),
         };
       },
@@ -644,7 +723,7 @@ export default definePlugin({
       async handler(ctx, r) {
         const g = await ctx.kv.get<Giveaway>(key(r.params.id));
         if (!g || !ctx.config.enabled || !canRead(ctx, g, r.viewer?.member)) return { status: 404 };
-        return { entries: await entries(ctx, g.id) };
+        return entryPage(ctx, g.id, r.query.cursor);
       },
     },
     "GET /giveaways": {
@@ -657,7 +736,7 @@ export default definePlugin({
           const page = await ctx.kv.list<Giveaway>({ prefix: "gw:", limit: 250, cursor });
           for (const row of page.items)
             if (canRead(ctx, row.value, r.viewer?.member)) {
-              items.push(view(row.value));
+              items.push(view(row.value, await entrantCount(ctx, row.value)));
               if (items.length === 50) return { items, cursor: row.key };
             }
           cursor = page.cursor;
@@ -688,28 +767,25 @@ async function inspect(ctx: Context, uid: string, erase: boolean) {
           e = await ctx.kv.getEntry<number>(entryKey(id, uid));
         if (!g || (!e && !g.value.history.includes(uid))) break;
         if (erase) {
-          const v = g.value;
+          const v = g.value,
+            counted = v.state === "open"; // an open giveaway counts entries in countKey
           const next = {
             ...v,
-            entrants: v.entrants - (e ? 1 : 0),
+            entrants: v.entrants - (e && !counted ? 1 : 0),
             history: v.history.map((x, j) => (x === uid ? "deleted-" + j : x)),
             winners: v.winners.filter((x) => x !== uid),
             claimed: v.claimed.filter((x) => x !== uid),
             redacted: true,
           };
-          if (
-            !(
-              await ctx.kv
-                .atomic()
-                .check(key(id), g.version)
-                .check(entryKey(id, uid), e?.version ?? null)
-                .delete(entryKey(id, uid))
-                .delete(`notice:${id}:${uid}`)
-                .set(key(id), next)
-                .commit()
-            ).ok
-          )
-            continue;
+          const tx = ctx.kv
+            .atomic()
+            .check(key(id), g.version)
+            .check(entryKey(id, uid), e?.version ?? null)
+            .delete(entryKey(id, uid))
+            .delete(`notice:${id}:${uid}`)
+            .set(key(id), next);
+          if (e && counted) tx.increment(countKey(id), -1);
+          if (!(await tx.commit()).ok) continue;
           if (v.winners.includes(uid)) await refresh(ctx, next);
         }
         out.push({ id, weight: e?.value ?? 0, winner: g.value.history.includes(uid) });

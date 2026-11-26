@@ -9,6 +9,7 @@ import {
 } from "@cicord/sdk";
 import { sendOnce, receiptTTL } from "./delivery.ts";
 import { ics, type CalendarItem } from "./calendar.ts";
+import { weekly } from "./zoned.ts";
 const MIN = 60000,
   WEEK = 7 * 86400000;
 type RecordEvent = CalendarItem & {
@@ -19,20 +20,50 @@ type RecordEvent = CalendarItem & {
   ended?: boolean;
   fingerprint?: string;
 };
-async function records(ctx: Context) {
+/** Days an ended event stays on the public calendar (the `recent:` index expires with it). */
+const CALENDAR_DAYS = 30,
+  // Rows each calendar index contributes at most: Discord keeps at most 100 scheduled events
+  // per server, so the `active:` index only exceeds it after missed deletions.
+  CALENDAR_LIMIT = 200;
+/**
+ * The events the public calendar shows: those not ended yet (`active:`) and those that ended
+ * in the last CALENDAR_DAYS (`recent:`, a TTL index). Never the whole history: a request
+ * reads at most CALENDAR_LIMIT rows per index, oldest first by event id.
+ */
+async function calendarRows(ctx: Context) {
   const rows: RecordEvent[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await ctx.kv.list<RecordEvent>({ prefix: "event:", cursor, limit: 500 });
-    rows.push(...page.items.map((x) => x.value));
-    cursor = page.cursor;
-  } while (cursor);
-  return rows;
+  for (const prefix of ["active:", "recent:"]) {
+    const ids: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await ctx.kv.list({
+        prefix,
+        cursor,
+        limit: Math.min(100, CALENDAR_LIMIT - ids.length),
+      });
+      ids.push(...page.items.map((x) => x.key.slice(prefix.length)));
+      cursor = page.cursor;
+    } while (cursor && ids.length < CALENDAR_LIMIT);
+    if (cursor) ctx.log.warn("community-events: calendar truncated", { index: prefix });
+    for (let i = 0; i < ids.length; i += 100) {
+      const values = await ctx.kv.getMany<RecordEvent>(
+        ids.slice(i, i + 100).map((id) => "event:" + id),
+      );
+      for (const v of values) if (v) rows.push(v);
+    }
+  }
+  const seen = new Set<string>();
+  return rows
+    .filter((r) => !seen.has(r.id) && !!seen.add(r.id))
+    .sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
 }
 async function store(ctx: Context, row: RecordEvent) {
   const batch = ctx.kv.atomic().set("event:" + row.id, row);
-  if (row.ended) batch.delete("active:" + row.id);
-  else batch.set("active:" + row.id, true);
+  if (row.ended)
+    batch
+      .delete("active:" + row.id)
+      .set("recent:" + row.id, true, { ttlSeconds: CALENDAR_DAYS * 86400 });
+  else batch.set("active:" + row.id, true).delete("recent:" + row.id);
   await batch.commit();
 }
 const snapshot = (e: ScheduledEvent): RecordEvent => ({
@@ -44,16 +75,70 @@ const snapshot = (e: ScheduledEvent): RecordEvent => ({
   ...(e.location ? { location: e.location } : {}),
   ...(e.description ? { description: e.description } : {}),
 });
-async function reconcile(ctx: Context) {
+/** Rows of the events not yet ended (the `active:` index), a bounded set. */
+async function activeRows(ctx: Context) {
+  const rows: RecordEvent[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await ctx.kv.list({ prefix: "active:", cursor, limit: 100 });
+    const values = await ctx.kv.getMany<RecordEvent>(
+      page.items.map((x) => "event:" + x.key.slice(7)),
+    );
+    for (const v of values) if (v) rows.push(v);
+    cursor = page.cursor;
+  } while (cursor);
+  return rows;
+}
+/** Discord refused for good: retrying the same request cannot succeed. */
+function refusal(error: unknown) {
+  if (error instanceof Error && error.name === "CapabilityError") return "missing grant";
+  const text = String(error);
+  if (/discord: missing permissions|HTTP 403/i.test(text)) return "missing permissions";
+  return undefined;
+}
+const RECONCILE_LEASE = 15000,
+  // Discord writes per run; a longer reconciliation continues in a follow-up task.
+  RECONCILE_WRITES = 10;
+/**
+ * Creates, edits and deletes the owned occurrences of the configured series. Returns false
+ * when another run holds the lease. Missing Manage Events is a status line, not a crash.
+ */
+async function reconcile(ctx: Context): Promise<boolean> {
+  const lock = await ctx.kv.getEntry<number>("lease:reconcile");
+  if ((lock?.value ?? 0) > Date.now()) return false;
+  const leased = await ctx.kv
+    .atomic()
+    .check("lease:reconcile", lock?.version ?? null)
+    .set("lease:reconcile", Date.now() + RECONCILE_LEASE)
+    .commit();
+  if (!leased.ok) return false;
+  try {
+    await reconcileSeries(ctx);
+    ctx.status.set("manageEvents", null);
+  } catch (error) {
+    const reason = refusal(error);
+    if (!reason) throw error;
+    ctx.log.warn("community-events: Discord refused a recurring event change", { reason });
+    ctx.status.set("manageEvents", ctx.i18n.t("manageEvents", { reason }));
+  } finally {
+    await ctx.kv.set("lease:reconcile", 0);
+  }
+  return true;
+}
+async function reconcileSeries(ctx: Context) {
   const now = Date.now(),
     native = await ctx.server.scheduledEvents(),
-    rows = await records(ctx),
+    rows = await activeRows(ctx),
     desired = new Set<string>();
+  let writes = 0;
   for (const s of ctx.config.series) {
-    const anchor = Date.parse(s.start);
+    const anchor = Date.parse(s.start),
+      zone = s.timeZone ?? "UTC";
     if (!Number.isFinite(anchor)) throw new Error("Invalid series start: " + s.key);
-    for (let slot = Math.max(0, Math.ceil((now - anchor) / WEEK)); ; slot++) {
-      const at = anchor + slot * WEEK;
+    // The same local weekday and time each week in the series' zone, across DST.
+    for (let slot = Math.max(0, Math.floor((now - anchor) / WEEK) - 1); ; slot++) {
+      const at = weekly(zone, anchor, slot);
+      if (at < now) continue;
       if (at >= now + ctx.config.weeksAhead * WEEK) break;
       const key = s.key + ":" + slot;
       desired.add(key);
@@ -71,6 +156,10 @@ async function reconcile(ctx: Context) {
       const found = native.find((e) => e.id === old?.id || e.description?.endsWith(marker));
       const fingerprint = JSON.stringify(input);
       if (old && found && old.fingerprint === fingerprint) continue;
+      if (writes++ >= RECONCILE_WRITES) {
+        await enqueue(ctx, "reconcile", { id: "" });
+        return;
+      }
       const event = found
         ? old
           ? await found.edit(input)
@@ -93,9 +182,19 @@ async function reconcile(ctx: Context) {
         .atomic()
         .delete("event:" + old.id)
         .delete("active:" + old.id)
+        .delete("recent:" + old.id)
         .commit();
     }
   }
+}
+/** Migration of installations without the `active:` index: one bounded page per task. */
+async function backfill(ctx: Context, cursor?: string) {
+  const page = await ctx.kv.list<RecordEvent>({ prefix: "event:", cursor, limit: 100 });
+  const batch = ctx.kv.atomic();
+  for (const { value } of page.items) if (!value.ended) batch.set("active:" + value.id, true);
+  if (page.items.length) await batch.commit();
+  if (page.cursor) await enqueue(ctx, "backfill", { id: "", cursor: page.cursor });
+  else await ctx.kv.set("meta:schema", 1);
 }
 type Phase = "hour" | "start";
 type ReminderPage = { after: string; done: boolean };
@@ -309,6 +408,7 @@ function seriesItems(ctx: Context): CalendarItem[] {
       start: s.start,
       end: new Date(Date.parse(s.start) + s.durationMinutes * MIN).toISOString(),
       weekly: true,
+      ...(s.timeZone && s.timeZone !== "UTC" ? { timeZone: s.timeZone } : {}),
       description: s.description,
       location: s.location,
     }));
@@ -360,11 +460,12 @@ async function privateData(ctx: Context, id: string, erase: boolean) {
 }
 export default definePlugin({
   async onStart(ctx) {
-    if (!(await ctx.kv.get("activeIndex"))) {
-      for (const event of await records(ctx))
-        if (!event.ended) await ctx.kv.set("active:" + event.id, true);
-      await ctx.kv.set("activeIndex", true);
+    // Schema 1: the `active:` index ("activeIndex" marked it before `meta:schema` existed).
+    if (!(await ctx.kv.get("meta:schema"))) {
+      if (await ctx.kv.get("activeIndex")) await ctx.kv.set("meta:schema", 1);
+      else await enqueue(ctx, "backfill", { id: "" });
     }
+    // Bounded: at most RECONCILE_WRITES Discord writes, the rest continues in a task.
     await reconcile(ctx);
   },
   events: {
@@ -380,14 +481,26 @@ export default definePlugin({
         .atomic()
         .delete("event:" + event.id)
         .delete("active:" + event.id)
+        .delete("recent:" + event.id)
         .commit();
     },
   },
   schedules: {
-    horizon: { cron: "8 * * * *", run: reconcile },
+    horizon: {
+      cron: "8 * * * *",
+      async run(ctx) {
+        await reconcile(ctx);
+      },
+    },
     attendance: { cron: "* * * * *", run: (ctx) => activePage(ctx) },
   },
   tasks: {
+    async reconcile(ctx) {
+      if (!(await reconcile(ctx))) throw new Error("Reconciliation already running");
+    },
+    async backfill(ctx, p) {
+      await backfill(ctx, (p as EventJob).cursor);
+    },
     async retract(ctx, p) {
       await ctx.server.retractDM((p as { messageId: string }).messageId);
     },
@@ -480,7 +593,7 @@ export default definePlugin({
     "GET /calendar": {
       access: "public",
       async handler(ctx) {
-        return (await records(ctx))
+        return (await calendarRows(ctx))
           .filter((e) => !e.channel || ctx.server.audience({ id: e.channel }).public)
           .map(({ id, name, start, end }) => ({
             id,
@@ -495,7 +608,7 @@ export default definePlugin({
       async handler(ctx) {
         const items = [
           ...seriesItems(ctx),
-          ...(await records(ctx)).filter(
+          ...(await calendarRows(ctx)).filter(
             (e) => !e.series && (!e.channel || ctx.server.audience({ id: e.channel }).public),
           ),
         ];

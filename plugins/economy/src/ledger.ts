@@ -1,6 +1,9 @@
 import type { Context, Json } from "@cicord/sdk";
+import sha from "./fast-sha256/sha256.cjs";
 import type { LedgerRow } from "./routes.ts";
 import { offsetAt } from "./timezone.ts";
+
+declare const TextEncoder: { new (): { encode(value: string): Uint8Array } };
 
 export const dayNumber = (ctx: Context, now = Date.now()) =>
   Math.floor((now + 60000 * offsetAt(ctx.config.timezone, now)) / 86400000);
@@ -13,16 +16,47 @@ export type Product = {
   durationSeconds: number;
 };
 type Change = { userId: string; amount: number; set?: boolean };
+export type Order = {
+  userId: string;
+  id: string;
+  item: Product;
+  state: "pending" | "delivered" | "refunded";
+  /** Start of the delivery window. */
+  createdAt?: number;
+  /** Start of the latest delivery attempt; a refund waits until it is older than the action deadline. */
+  attemptAt?: number;
+  attempts?: number;
+  error?: string;
+  /** The exact tickets.open input, frozen at purchase so every retry carries the same fingerprint. */
+  ticket?: { subject: string; description: string };
+};
 type Options = {
   claim?: "daily" | "weekly";
   earned?: boolean;
   cooldown?: number;
-  product?: Product;
+  /** Creates this pending order (and its pending index row) in the same commit. */
+  order?: Order;
+  /** Moves this pending order to refunded in the same commit, if `allow` accepts it. */
+  refund?: { key: string; allow: (order: Order) => boolean };
 };
 export const balanceKey = (uid: string) => "balance:" + uid;
 export const inventoryPrefix = (uid: string) => "order:" + uid + ":";
-export type Order = { userId: string; id: string; item: Product; state: "pending" | "delivered" };
-/** The first row owns the idempotency receipt. The journal, balances, limits, claim and purchase all commit together. */
+export const orderKey = (uid: string, id: string) => inventoryPrefix(uid) + id;
+/** Index of undelivered orders: `pend:<order key>`. Only these are revisited by the cron. */
+export const pendingKey = (key: string) => "pend:" + key;
+/** Receipts outlive journal rows and erasure, well beyond the host's 30-day action and event horizons. */
+export const RECEIPT_DAYS = 400;
+const hex = (bytes: Uint8Array) => [...bytes].map((n) => n.toString(16).padStart(2, "0")).join("");
+/**
+ * Idempotency receipt of one operation for one account. The key is a digest and the value
+ * a timestamp, so the row carries no member id: erasure keeps it, and a replay of the same
+ * event, command or caller key after an erasure or after journal expiry cannot pay twice.
+ */
+export const receiptKey = (uid: string, id: string) =>
+  "rcpt:" + hex(sha(new TextEncoder().encode(uid + "\n" + id))).slice(0, 40);
+const current = async (ctx: Context, uid: string) =>
+  (await ctx.kv.get<number>(balanceKey(uid))) ?? 0;
+/** The receipt, the journal, balances, limits, claim and order changes all commit together. */
 export async function transact(
   ctx: Context,
   id: string,
@@ -34,16 +68,30 @@ export async function transact(
   const uid = changes[0]!.userId;
   const transactionId = crypto.randomUUID();
   const rowId = (user: string) => `ledger:${user}:${id}`;
+  const receipt = receiptKey(uid, id);
   for (;;) {
-    const existing = await ctx.kv.get<LedgerRow>(rowId(uid));
-    if (existing) {
+    // A journal row written before receipts existed is honored as a receipt too.
+    const [prior, legacy] = await ctx.kv.getMany([receipt, rowId(uid)]);
+    if (prior !== undefined || legacy !== undefined) {
       await publish(ctx, id, changes);
-      return existing.balance;
+      return current(ctx, uid);
     }
     const now = Date.now(),
       day = dayNumber(ctx, now);
-    const checks = ctx.kv.atomic().check(rowId(uid), null);
+    const checks = ctx.kv
+      .atomic()
+      .check(receipt, null)
+      .set(receipt, now, { ttlSeconds: Math.max(RECEIPT_DAYS, ctx.config.journalDays) * 86400 });
     const delta = changes.map((e) => ({ ...e }));
+    if (options.refund) {
+      const { key, allow } = options.refund,
+        o = await ctx.kv.getEntry<Order>(key);
+      if (!o || o.value.state !== "pending" || !allow(o.value)) return current(ctx, uid);
+      checks
+        .check(key, o.version)
+        .set(key, { ...o.value, state: "refunded" } as Json)
+        .delete(pendingKey(key));
+    }
     if (options.claim) {
       const ck = `claim:${uid}:${options.claim}`,
         period = options.claim === "daily" ? day : Math.floor((day + 3) / 7);
@@ -63,15 +111,14 @@ export async function transact(
           delta[0]!.amount,
           Math.max(0, ctx.config.dailyCap - (earn?.value ?? 0)),
         );
-      if (!delta[0]!.amount) return (await ctx.kv.get<number>(balanceKey(uid))) ?? 0;
+      if (!delta[0]!.amount) return current(ctx, uid);
       checks
         .check(ek, earn?.version ?? null)
         .set(ek, (earn?.value ?? 0) + delta[0]!.amount, { ttlSeconds: 172800 });
       if (options.cooldown) {
         const ck = "cool:" + uid,
           prev = await ctx.kv.getEntry<number>(ck);
-        if (prev && now - prev.value < options.cooldown * 1000)
-          return (await ctx.kv.get<number>(balanceKey(uid))) ?? 0;
+        if (prev && now - prev.value < options.cooldown * 1000) return current(ctx, uid);
         checks.check(ck, prev?.version ?? null).set(ck, now, { ttlSeconds: options.cooldown });
       }
     }
@@ -100,13 +147,13 @@ export async function transact(
       }
       if (index === 0) balance = after;
     }
-    if (options.product)
-      checks.set(inventoryPrefix(uid) + id, {
-        id,
-        userId: uid,
-        item: options.product,
-        state: "pending",
-      } as Json);
+    if (options.order) {
+      const key = orderKey(uid, options.order.id);
+      checks
+        .check(key, null)
+        .set(key, { ...options.order, createdAt: now } as Json)
+        .set(pendingKey(key), now);
+    }
     if ((await checks.commit()).ok) {
       await publish(ctx, id, changes);
       return balance;

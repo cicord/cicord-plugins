@@ -193,13 +193,23 @@ async function audit(ctx: Context, cursor?: string) {
   for (const row of p.items) await ctx.schedule.after(1, "refresh", { id: row.value.messageId });
   if (p.cursor) await ctx.schedule.after(1, "audit", { cursor: p.cursor });
 }
+// A reaction event carries a partial message, so a highlight still inside its coalescing
+// window has no author yet. Resolve it from the source so erasure cannot miss it.
+async function author(ctx: Context, v: Highlight) {
+  if (v.authorId || !v.due) return v.authorId;
+  try {
+    return (await ctx.server.channel({ id: v.sourceId }).message(v.messageId))?.author.id;
+  } catch {
+    return undefined;
+  }
+}
 async function personal(ctx: Context, uid: string, erase: boolean) {
   let cursor: string | undefined;
   const rows: { messageId: string; stars: number }[] = [];
   do {
     const page = await ctx.kv.list<Highlight>({ prefix: "star:", limit: 250, cursor });
     for (const { value: v } of page.items)
-      if (v.authorId === uid) {
+      if ((await author(ctx, v)) === uid) {
         rows.push({ messageId: v.messageId, stars: v.stars });
         if (erase) await remove(ctx, v);
       }

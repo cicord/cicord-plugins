@@ -34,6 +34,8 @@ function setup(config: Record<string, unknown> = {}) {
       general: { name: "general" },
       voice: { name: "Voice", type: "voice" },
     },
+    // GET /scheduled is a moderator route: the mod role is a Cicord moderator.
+    access: { moderators: { roles: ["mod"] } },
     members: [{ id: "1", username: "mia", roles: ["mod"] }],
   });
 }

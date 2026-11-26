@@ -3,15 +3,26 @@ import {
   command,
   definePlugin,
   defineRoutes,
+  InteropError,
   query,
   subcommand,
   type Context,
   type Interaction,
   type Json,
 } from "@cicord/sdk";
-import { balanceKey, inventoryPrefix, pay, transact, type Order, type Product } from "./ledger.ts";
+import { balanceKey, inventoryPrefix, pay, transact, type Order } from "./ledger.ts";
 import type { LedgerRow, Routes } from "./routes.ts";
 import type { Movement } from "./contracts.ts";
+import {
+  available,
+  backfill,
+  deliver,
+  fulfillTask,
+  missing,
+  pendingOrders,
+  pendingPass,
+  purchase,
+} from "./shop.ts";
 
 const t = (ctx: Context, k: string, vars: Record<string, string | number> = {}) =>
   ctx.i18n.t(k, vars);
@@ -72,52 +83,6 @@ const admin = (mode: "give" | "take" | "set") =>
       );
     },
   });
-function available(ctx: Context, p: Product) {
-  if (p.type === "role") return !!p.role && ctx.features.enabled("permanentRole");
-  if (p.type === "temporary")
-    return !!p.role && ctx.features.enabled("temporaryRole") && ctx.plugins.has("member-roles");
-  return p.type === "perk" && ctx.features.enabled("perk") && ctx.plugins.has("tickets");
-}
-async function purchase(ctx: Context, uid: string, itemId: string, id: string) {
-  const key = inventoryPrefix(uid) + id;
-  if (!ctx.config.enabled) throw new Error("unavailable");
-  let order = await ctx.kv.get<Order>(key);
-  if (!order) {
-    const item = ctx.config.shop.find((p) => p.id === itemId);
-    if (!item || !available(ctx, item)) throw new Error("unavailable");
-    await transact(ctx, id, [{ userId: uid, amount: -item.price }], "purchase " + item.id, {
-      product: item,
-    });
-    order = await ctx.kv.get<Order>(key);
-  }
-  if (!order || order.item.id !== itemId) throw new Error("purchase_conflict");
-  if (order.state === "pending") await ctx.schedule.after(1, "fulfill", { key });
-  return { orderId: order.id, itemId: order.item.id, state: order.state };
-}
-async function fulfill(ctx: Context, order: Order) {
-  if (!ctx.config.enabled || order.state === "delivered") return;
-  const { id, userId, item } = order;
-  if (!available(ctx, item)) throw new Error("Product provider unavailable: " + item.id);
-  if (item.type === "role") {
-    const m = await ctx.server.member(userId);
-    if (!m) throw new Error("Purchaser unavailable");
-    if (!m.hasRole(item.role!)) await m.addRole(item.role!, "economy order " + id);
-  } else if (item.type === "temporary")
-    await ctx.plugins.call(
-      "member-roles",
-      "grantTemporary",
-      { userId, role: item.role!, durationSeconds: item.durationSeconds },
-      { idempotencyKey: "order:" + id },
-    );
-  else
-    await ctx.plugins.call(
-      "tickets",
-      "open",
-      { userId, subject: item.label, description: "Store order " + id },
-      { idempotencyKey: "order:" + id },
-    );
-  await ctx.kv.set(inventoryPrefix(userId) + id, { ...order, state: "delivered" });
-}
 type Rule = "level" | "birthday" | "star" | "suggestion" | "poll" | "attendee" | "ticket";
 const earn = (ctx: Context, id: string, uid: string, reward: number, reason: string) =>
   transact(ctx, id, [{ userId: uid, amount: reward }], reason, { earned: true });
@@ -139,8 +104,13 @@ const handler =
       return;
     const origin = meta?.id;
     if (!origin) throw new Error("Missing event receipt");
-    if (rule === "poll" && data.votersTruncated) {
-      if (!ctx.features.enabled("pollPages")) throw new Error("Missing polls.voters grant");
+    if (rule === "poll" && data.votersTruncated && !ctx.features.enabled("pollPages"))
+      // P10: pay the voters the event carries and say why the others are not paid.
+      ctx.status.set(
+        "poll-voters",
+        "A closed poll had more voters than its event carries; only those were paid. Grant plugins.query:polls.voters (pollPages) to pay every voter.",
+      );
+    else if (rule === "poll" && data.votersTruncated) {
       if (!meta?.publisher) throw new Error("Missing poll publisher for voter rewards");
       await ctx.schedule.after(1, "voters", {
         origin,
@@ -163,6 +133,13 @@ const movement = (direction: number) =>
   action({
     async run(ctx, input: Movement, call) {
       if (!Number.isSafeInteger(input.amount) || input.amount < 1) throw new Error("invalid");
+      // A debit spends a member's points: only that member, through a consumer's
+      // interaction or member route, may authorize it. Background callers can only credit.
+      if (
+        direction < 0 &&
+        (call.onBehalfOf?.userId !== input.userId || call.onBehalfOf.access === "scoped")
+      )
+        throw new InteropError("denied", "A debit must be made on behalf of the debited member");
       return {
         balance: await transact(
           ctx,
@@ -184,25 +161,64 @@ async function history(ctx: Context, prefix: string, cursor?: string) {
   const page = await ctx.kv.list<LedgerRow>({ prefix, cursor, limit: 50 });
   return { items: page.items.map((e) => e.value), cursor: page.cursor };
 }
-async function pending(ctx: Context, cursor?: string) {
-  if (!ctx.config.enabled) return;
-  const p = await ctx.kv.list<Order>({ prefix: "order:", limit: 200, cursor });
-  for (const e of p.items)
-    if (e.value.state === "pending") await ctx.schedule.after(1, "fulfill", { key: e.key });
-  if (p.cursor) await ctx.schedule.after(1, "pending", { cursor: p.cursor });
+const publishers: Record<Rule, string> = {
+  level: "levels",
+  birthday: "birthdays",
+  star: "starboard",
+  suggestion: "suggestions",
+  poll: "polls",
+  attendee: "community-events",
+  ticket: "tickets",
+};
+/** P10: name every configured product or reward source that cannot work, and what it lacks. */
+function reportStatus(ctx: Context) {
+  const line = (head: string, parts: string[]) =>
+    parts.length ? (head + parts.join("; ")).slice(0, 300) : null;
+  const enabled = ctx.config.enabled;
+  ctx.status.set(
+    "shop-products",
+    line(
+      "Unavailable shop products: ",
+      enabled
+        ? ctx.config.shop.flatMap((p) => {
+            const why = missing(ctx, p);
+            return why ? [p.id + " (" + why + ")"] : [];
+          })
+        : [],
+    ),
+  );
+  const inactive: string[] = [];
+  const e = ctx.config.earnings;
+  if (enabled && e.message && !ctx.features.enabled("messageRewards"))
+    inactive.push("message (messageRewards: ServerMessages intent not enabled)");
+  if (enabled && e.voice && !ctx.features.enabled("voiceRewards"))
+    inactive.push(
+      "voice (voiceRewards: ServerVoiceStates intent, discord.members.read and discord.channels.read)",
+    );
+  const rules = enabled ? (Object.keys(publishers) as Rule[]).filter((r) => e[r]) : [];
+  if (rules.length && !ctx.features.enabled("eventRewards"))
+    inactive.push(rules.join(", ") + " (eventRewards: events.subscribe not granted)");
+  else
+    for (const r of rules)
+      if (!ctx.plugins.has(publishers[r]))
+        inactive.push(r + " (" + publishers[r] + " not installed)");
+  if (
+    rules.includes("poll") &&
+    ctx.features.enabled("eventRewards") &&
+    !ctx.features.enabled("pollPages")
+  )
+    inactive.push("voters beyond a poll event's list (pollPages: plugins.query:polls.voters)");
+  ctx.status.set("rewards", line("Inactive rewards: ", inactive));
+  if (!enabled || ctx.features.enabled("pollPages")) ctx.status.set("poll-voters", null);
 }
 export default definePlugin({
   async onStart(ctx) {
-    if (ctx.config.enabled) {
-      const missing = ctx.config.shop.filter((p) => !available(ctx, p)).map((p) => p.id);
-      ctx.status.set(
-        "shop-products",
-        missing.length ? "Unavailable shop products: " + missing.join(", ").slice(0, 170) : null,
-      );
-    }
-    if (ctx.config.enabled) await ctx.schedule.after(1, "pending");
+    reportStatus(ctx);
+    if (!ctx.config.enabled) return;
+    await ctx.schedule.after(1, "pending");
+    if (!(await ctx.kv.get("migr:pending-index"))) await ctx.schedule.after(1, "backfill");
   },
-  schedules: { orders: { cron: "0 * * * *", run: (ctx) => pending(ctx) } },
+  schedules: { orders: { cron: "0 * * * *", run: (ctx) => pendingPass(ctx) } },
   commands: {
     balance: command({
       description: "View a server wallet",
@@ -270,9 +286,11 @@ export default definePlugin({
       ephemeral: true,
       options: { item: { type: "string", required: true, description: "Product ID" } },
       async run(ctx, i) {
+        // Delivery runs here, where the host attaches the buyer as the call principal.
+        await i.defer({ ephemeral: true });
         try {
           const order = await purchase(ctx, i.user.id, i.options.item, i.id);
-          await i.reply(t(ctx, order.state === "pending" ? "pending" : "state.delivered"));
+          await i.reply(t(ctx, "bought." + order.state, { id: order.itemId }));
         } catch (e) {
           if (e instanceof Error && ["funds", "unavailable"].includes(e.message))
             return i.reply(t(ctx, e.message));
@@ -285,6 +303,8 @@ export default definePlugin({
       ephemeral: true,
       async run(ctx, i) {
         if (!ctx.config.enabled) return i.reply(t(ctx, "off"));
+        await i.defer({ ephemeral: true });
+        await retryDeliveries(ctx, i.user.id);
         const p = await ctx.kv.list<Order>({ prefix: inventoryPrefix(i.user.id), limit: 25 });
         await i.reply(
           p.items
@@ -327,29 +347,44 @@ export default definePlugin({
       )
         return;
       const k = "voice:" + v.user.id;
-      if (v.channel?.id === (await ctx.kv.get(k))) return;
+      // The session is `<channel>:<join token>`: a chain only continues while it holds the
+      // current token, so leaving and rejoining leaves exactly one live chain.
+      const session = await ctx.kv.get<string>(k);
+      // A value without a token predates tokens: its chain has stopped, so start a new one.
+      if (v.channel && session?.includes(":") && session.split(":")[0] === v.channel.id) return;
       if (!v.channel) {
         await ctx.kv.delete(k);
         return;
       }
-      await ctx.kv.set(k, v.channel.id);
+      const token = v.channel.id + ":" + crypto.randomUUID();
+      await ctx.kv.set(k, token);
       await ctx.schedule.after(60000, "voice", {
         uid: v.user.id,
         channel: v.channel.id,
+        token,
         minute: Math.floor(Date.now() / 60000) + 1,
       });
     },
   },
   tasks: {
     async pending(ctx, p) {
-      await pending(ctx, (p as { cursor?: string } | undefined)?.cursor);
+      await pendingPass(ctx, (p as { cursor?: string } | undefined)?.cursor);
+    },
+    async backfill(ctx, p) {
+      await backfill(ctx, (p as { cursor?: string } | undefined)?.cursor);
     },
     async voice(ctx, p) {
-      const { uid, channel, minute } = p as { uid: string; channel: string; minute: number };
+      const { uid, channel, token, minute } = p as {
+        uid: string;
+        channel: string;
+        token?: string;
+        minute: number;
+      };
       if (
         !ctx.config.enabled ||
         !ctx.config.earnings.voice ||
-        (await ctx.kv.get("voice:" + uid)) !== channel
+        !token ||
+        (await ctx.kv.get("voice:" + uid)) !== token
       )
         return;
       if (!(await ctx.server.voiceMembers({ id: channel })).some((m) => m.id === uid)) return;
@@ -357,12 +392,12 @@ export default definePlugin({
       await ctx.schedule.after(60000, "voice", {
         uid,
         channel,
+        token,
         minute: Math.floor(Date.now() / 60000) + 1,
       });
     },
     async fulfill(ctx, p) {
-      const order = await ctx.kv.get<Order>((p as { key: string }).key);
-      if (order) await fulfill(ctx, order);
+      await fulfillTask(ctx, (p as { key: string }).key);
     },
     async batch(ctx, p) {
       const { origin, ids, rate, rule } = p as {
@@ -443,6 +478,13 @@ export default definePlugin({
         }
       },
     },
+    "POST /inventory/deliver": {
+      access: "member",
+      async handler(ctx, r) {
+        if (!ctx.config.enabled) return { items: [] };
+        return { items: await retryDeliveries(ctx, r.viewer!.user.id) };
+      },
+    },
     "GET /shop": {
       access: "member",
       async handler(ctx) {
@@ -465,7 +507,18 @@ export default definePlugin({
 });
 async function personal(ctx: Context, uid: string, erase: boolean) {
   const out: { key: string; value: Json }[] = [];
-  for (const p of ["balance", "voice", "cool", "claim", "order", "earned", "ledger"]) {
+  // Receipts (`rcpt:<digest>`) carry no member id and are kept so replays stay idempotent.
+  for (const p of [
+    "balance",
+    "voice",
+    "cool",
+    "claim",
+    "order",
+    "pend:order",
+    "alias",
+    "earned",
+    "ledger",
+  ]) {
     const prefix = p + ":" + uid;
     let cursor: string | undefined;
     do {
@@ -483,5 +536,19 @@ async function personal(ctx: Context, uid: string, erase: boolean) {
     } while (cursor);
   }
   if (erase) await ctx.kv.ranking("wealth").remove(uid);
+  return out;
+}
+/**
+ * Member-initiated retry of up to three undelivered orders, with the original keys. An
+ * action can take 5 s, so no new attempt starts after 4 s: the handler deadline is 10 s.
+ */
+async function retryDeliveries(ctx: Context, uid: string) {
+  const out: { orderId: string; itemId: string; state: Order["state"] }[] = [];
+  const start = Date.now();
+  for (const { key, order } of await pendingOrders(ctx, uid, 3)) {
+    if (Date.now() - start > 4000) break;
+    const now = (await deliver(ctx, key, "member")) ?? order;
+    out.push({ orderId: now.id, itemId: now.item.id, state: now.state });
+  }
   return out;
 }

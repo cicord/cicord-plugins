@@ -7,7 +7,7 @@ metadata:
   description: Weekly and monthly aggregate activity reports, short-stay counts and voice channel counters.
   license: Apache-2.0
 spec:
-  engine: ">=0.2.0-0"
+  engine: ">=0.2.0"
   entry: ./src/index.ts
   config: {schema: ./config.schema.json}
   locales: ./locales
@@ -33,4 +33,4 @@ spec:
         - discord.channels.manage # Create and maintain the channels owned by this installation.
   privacy:
     records:
-      - {name: members, policy: erase, description: "Pseudonymous join date until departure or expiry after thirty days."}
+      - {name: members, policy: erase, description: "Join date under a keyed hash of the member ID, until departure, erasure or expiry after thirty days."}

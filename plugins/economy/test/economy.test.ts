@@ -62,7 +62,8 @@ test("credit and debit have independent idempotency namespaces for the same call
   const credit = () => plugin.actions!.credit!.run(h.ctx, { userId: "1", amount: 100 }, call);
   expect(await credit()).toEqual({ balance: 100 });
   expect(await credit()).toEqual({ balance: 100 });
-  expect(await plugin.actions!.debit!.run(h.ctx, { userId: "1", amount: 10 }, call)).toEqual({
+  const member = { ...call, onBehalfOf: { userId: "1", access: "member" as const } };
+  expect(await plugin.actions!.debit!.run(h.ctx, { userId: "1", amount: 10 }, member)).toEqual({
     balance: 90,
   });
   expect(h.published.every((p) => String((p.payload as { id: string }).id).length < 128)).toBe(

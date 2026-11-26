@@ -4,20 +4,20 @@ metadata:
   name: economy
   version: 0.1.0
   displayName: Economy
-  description: Server points, daily claims, transfers and a community rewards shop.
+  description: "Experimental, opt-in: server points, daily claims, transfers and a community rewards shop."
   license: Apache-2.0
 spec:
-  engine: ">=0.2.0-0"
+  engine: ">=0.2.0"
   entry: ./src/index.ts
   config: {schema: ./config.schema.json}
   locales: ./locales
   delivery: at-least-once
   capabilities:
-    - storage.kv # balances and append-only journal
+    - storage.kv # balances, journal, idempotency receipts and orders
     - discord.messages.send # wallet and shop commands
     - portal.routes # member wallets and staff ledger
     - events.publish # financial journal notifications
-    - scheduler # pending shop fulfillment and poll batches
+    - scheduler # shop delivery retries and refunds, poll batches
   optional:
     - feature: eventRewards
       capabilities:
@@ -64,5 +64,5 @@ spec:
       actions: [member-roles.grantTemporary, tickets.open]
   privacy:
     records:
-      - {name: accounts, policy: erase, description: "Balances, claims, earnings, purchase receipts and journal rows attributable to a member."}
+      - {name: accounts, policy: erase, description: "Balances, claims, earnings, orders, the pending-order index and journal rows attributable to a member. Idempotency receipts are keyed by a digest, hold only a timestamp and are kept."}
   routes: {types: ./src/routes.ts}

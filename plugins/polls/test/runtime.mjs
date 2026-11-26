@@ -86,7 +86,7 @@ async function observers({ repo }) {
 kind: Plugin
 metadata: {name: ${name}, version: 0.1.0}
 spec:
-  engine: ">=0.2.0-0"
+  engine: ">=0.2.0"
   entry: ./src/index.ts
   capabilities: [events.subscribe,storage.kv,portal.routes]
 ${contract}`,

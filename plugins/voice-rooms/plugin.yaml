@@ -9,7 +9,7 @@ metadata:
   license: Apache-2.0
   keywords: [voice, channels, rooms, join-to-create]
 spec:
-  engine: ">=0.2.0-0"
+  engine: ">=0.2.0"
   entry: ./src/index.ts
   capabilities:
     - discord.channels.read     # resolve the hubs
@@ -37,9 +37,9 @@ spec:
   privacy:
     records:
       - name: roomOwnership
-        description: Owner, guest permissions and cooldowns for live rooms.
+        description: Owner, guest permissions and cooldowns for live rooms, and the marker of a room being created.
         policy: erase
-        retention: Room lifetime; at most one hour for a creation cooldown.
+        retention: Room lifetime; at most one hour for a creation cooldown and a day at most for a creation marker (cleared when the room is recorded or by the sweep).
       - name: legacyDiscordOverwrite
         description: Unattributed member-specific Discord overwrite on an adopted 0.1 room.
         policy: retain

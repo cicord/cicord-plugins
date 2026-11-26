@@ -65,5 +65,6 @@
   "deletedSubject": "Objet du ticket effacé",
   "confirmRetain": "Fermer le ticket nº {number} et archiver son salon ?",
   "relayDenied": "Votre message privé n’a pas été transmis. Contactez l’équipe pour vérifier les accès au ticket.",
-  "relayPending": "Transmission d’un message privé…"
+  "relayPending": "Transmission d’un message privé…",
+  "removedMessage": "Ce message a été retiré."
 }

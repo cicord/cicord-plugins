@@ -7,6 +7,25 @@
       },
       "cursor": {
         "type": "string"
+      },
+      "publisher": {
+        "type": "object",
+        "description": "Publisher of the polls.closed event (its meta.publisher). The provider refuses a poll id published by another polls installation.",
+        "properties": {
+          "bot": {
+            "type": "string",
+            "minLength": 1
+          },
+          "instance": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "bot",
+          "instance"
+        ],
+        "additionalProperties": false
       }
     },
     "required": [

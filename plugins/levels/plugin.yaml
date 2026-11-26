@@ -9,7 +9,7 @@ metadata:
   license: Apache-2.0
   keywords: [xp, levels, leaderboard, roles, portal]
 spec:
-  engine: ">=0.2.0-0"
+  engine: ">=0.2.0"
   entry: ./src/index.ts
   capabilities:
     - discord.messages.send      # level-up announcements, recap, /top
@@ -49,4 +49,4 @@ spec:
     consumes: {queries: [polls.voters]}
   privacy:
     records:
-      - {name: xp, policy: erase, description: "Profiles, balances, cooldowns, poll receipts, reaction references and seasonal rankings."}
+      - {name: xp, policy: erase, description: "Profiles, balances, reached-level marks, cooldowns, award receipts, reaction references and their per-member index, announcement references and seasonal rankings."}

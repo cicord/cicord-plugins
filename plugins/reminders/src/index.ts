@@ -2,11 +2,13 @@ import {
   command,
   definePlugin,
   subcommand,
+  type Channel,
   type Context,
   type Json,
   type Interaction,
+  type Member,
 } from "@cicord/sdk";
-import { duration, parseDate } from "./time.ts";
+import { duration, localMs, nextDue, parseDate } from "./time.ts";
 import { ZONES } from "./tz.ts";
 
 type Reminder = {
@@ -18,6 +20,10 @@ type Reminder = {
   source?: string;
   repeat: number;
   task: string;
+  /** Zone of a repeating reminder: whole days repeat at its local time of `anchor`. */
+  zone?: string;
+  /** Local wall-clock time (ms) of the first occurrence. */
+  anchor?: number;
 };
 const key = (id: string) => "reminder:" + id;
 const memberKey = (id: string) => "active:" + id;
@@ -27,6 +33,21 @@ const active = (ctx: Context, owner: string) => ctx.kv.get<string[]>(memberKey(o
 const read = (ctx: Context, id: string) => ctx.kv.get<Reminder>(key(id));
 const zone = async (ctx: Context, owner: string) =>
   (await ctx.kv.get<string>("zone:" + owner)) ?? ctx.config.timeZone;
+/** The member may read and write in the channel the bot would post their text in. */
+function canPost(member: Member | undefined, channel: Channel) {
+  if (!member?.canView(channel)) return false;
+  const perms = member.permissionsIn(channel);
+  return perms.includes(channel.type === "thread" ? "SendMessagesInThreads" : "SendMessages");
+}
+/** Discord or the host refused for good: retrying the same request cannot succeed. */
+function refusal(error: unknown) {
+  if (error instanceof Error && error.name === "CapabilityError") return "missing grant";
+  const text = String(error);
+  if (/discord: missing permissions|HTTP 403/i.test(text)) return "missing permissions";
+  if (/discord: not found|unknown channel|HTTP 404/i.test(text)) return "unknown channel";
+  if (/discord: bad request|HTTP 4(?!29)\d\d/i.test(text)) return "rejected message";
+  return undefined;
+}
 
 async function create(
   ctx: Context,
@@ -35,6 +56,9 @@ async function create(
   ticket?: { key: string; version: string },
 ) {
   if (!ctx.config.enabled) return i.reply(ctx.i18n.t("disabled"));
+  // The bot posts the member's text: only where the member could post it themselves.
+  if (r.channel && !canPost(i.member, ctx.server.channel({ id: r.channel })))
+    return i.reply({ content: ctx.i18n.t("channelDenied"), ephemeral: true });
   const owner = i.user.id,
     indexKey = memberKey(owner);
   const id = String(await ctx.kv.increment("seq"));
@@ -102,18 +126,14 @@ async function deliver(ctx: Context, payload: Json | undefined) {
   const r = await read(ctx, p.id);
   if (!r || r.due !== p.due) return;
   const member = await ctx.server.member(r.owner);
-  const channel = r.channel ? ctx.server.channel({ id: r.channel }) : undefined;
-  if (
-    !member ||
-    (channel && !member.canView(channel)) ||
-    (r.source && !member.canView({ id: r.source }))
-  ) {
+  if (!member || (r.source && !member.canView({ id: r.source }))) {
     await remove(ctx, r.owner, r.id);
     return;
   }
+  const channel = r.channel ? ctx.server.channel({ id: r.channel }) : undefined;
   const late = Math.max(0, Math.floor((Date.now() - r.due) / 60000));
-  const payloadOut = {
-    content: [r.message, late ? ctx.i18n.t("late", { minutes: late }) : ""]
+  const message = (note?: string) => ({
+    content: [r.message, late ? ctx.i18n.t("late", { minutes: late }) : "", note ?? ""]
       .filter(Boolean)
       .join("\n"),
     allowedMentions: none,
@@ -130,15 +150,44 @@ async function deliver(ctx: Context, payload: Json | undefined) {
         })),
       },
     ],
-  };
-  await (channel ?? member).send(payloadOut);
+  });
+  // A member who can no longer write in the destination gets the reminder by DM instead.
+  let fallback = !!channel && !canPost(member, channel);
+  if (channel && !fallback) {
+    try {
+      await channel.send(message());
+      ctx.status.set("channel", null);
+    } catch (error) {
+      const reason = refusal(error);
+      if (!reason) throw error; // ambiguous: retried with the same nonce
+      ctx.status.set("channel", ctx.i18n.t("channelRefused", { channel: channel.mention, reason }));
+      fallback = true;
+    }
+  }
+  if (!channel || fallback) {
+    try {
+      await member.send(
+        message(
+          fallback ? ctx.i18n.t("channelFallback", { channel: `<#${r.channel}>` }) : undefined,
+        ),
+      );
+      ctx.status.set("dm", null);
+    } catch (error) {
+      const reason = refusal(error);
+      if (!reason) throw error;
+      // The member does not accept DMs: retrying cannot help, and a dead task would end a
+      // repeating reminder. Skip this occurrence and say so.
+      ctx.log.warn("reminders: a reminder DM was refused", { reminder: r.id, reason });
+      ctx.status.set("dm", ctx.i18n.t("dmRefused", { reason }));
+    }
+  }
   // Only this member can reuse the button, and only once per delivered occurrence.
   await ctx.kv.set(`snooze:${r.owner}:${r.id}:${r.due}`, r, { ttlSeconds: 86400 });
   if (!r.repeat) {
     await remove(ctx, r.owner, r.id);
     return;
   }
-  const due = r.due + (1 + Math.floor(Math.max(0, Date.now() - r.due) / r.repeat)) * r.repeat;
+  const due = nextDue(r, Date.now());
   const task = await ctx.schedule.after(Math.max(1, due - Date.now()), "deliver", {
     id: r.id,
     due,
@@ -241,10 +290,13 @@ export default definePlugin({
             )
               return i.reply(ctx.i18n.t("invalid"));
             if (i.options.where === "channel" && !i.channel) return i.reply(ctx.i18n.t("invalid"));
+            const tz = await zone(ctx, i.user.id);
             await create(ctx, i, {
               due: when,
               message: i.options.message,
               repeat,
+              // The zone at creation keeps a daily or weekly reminder on its local time.
+              ...(repeat ? { zone: tz, anchor: localMs(tz, when) } : {}),
               ...(i.options.where === "channel" ? { channel: i.channel!.id } : {}),
             });
           },

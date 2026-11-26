@@ -6,6 +6,8 @@ import { credit, migrate } from "../src/storage.ts";
 import { position } from "../src/levels.ts";
 import schema from "../config.schema.json" with { type: "json" };
 import en from "../locales/en.json" with { type: "json" };
+import voters from "../../polls/contracts/voters.v1.json" with { type: "json" };
+import { violations } from "./contract.ts";
 
 const event: EventMeta = {
   id: "event-4000",
@@ -16,14 +18,21 @@ const event: EventMeta = {
 };
 test("4,000 truncated voters are fetched page by page and forced replay cannot double-credit", async () => {
   const h = createTestContext({ schema, features: ["pollBonus", "pollPages"], locales: { en } });
+  const calls: unknown[] = [];
   Object.assign(h.ctx, {
     plugins: {
-      query: async (_p: string, _m: string, i: { cursor?: string }) => {
+      // Checked against the real polls contract, like the runtime does (SPC-2).
+      query: async (p: string, m: string, i: { cursor?: string }) => {
+        expect([p, m]).toEqual(["polls", "voters"]);
+        expect(violations(voters.input, i)).toEqual([]);
+        calls.push(i);
         const offset = Number(i.cursor ?? 0);
-        return {
+        const page = {
           userIds: Array.from({ length: 1000 }, (_, n) => String(offset + n + 1)),
           ...(offset < 3000 ? { cursor: String(offset + 1000) } : {}),
         };
+        expect(violations(voters.output, page)).toEqual([]);
+        return page;
       },
     },
   });
@@ -36,6 +45,7 @@ test("4,000 truncated voters are fetched page by page and forced replay cannot d
     for (let task = h.scheduled.shift(); task; task = h.scheduled.shift())
       await plugin.tasks![task.task]!(h.ctx, task.payload);
   }
+  expect(calls[0]).toEqual({ pollId: "9", publisher: { bot: "community", instance: "polls" } });
   expect(await h.ctx.kv.ranking("xp").count()).toBe(4000);
   for (let i = 1; i <= 4000; i++) expect(h.kv.get("xp:" + i)).toBe(10);
 });

@@ -6,7 +6,6 @@ import {
   type Context,
   type Json,
   type RouteResponse,
-  type ServerInvite,
 } from "@cicord/sdk";
 import {
   changeMember,
@@ -19,13 +18,16 @@ import {
   type Entry,
 } from "./storage.ts";
 import type { InviteAttribution } from "./contracts.ts";
+import {
+  attribute,
+  baseline,
+  forget,
+  snapshot,
+  type Snapshot,
+  type Tracker,
+} from "./attribution.ts";
 
-type Snapshot = { uses: number; code: string; inviterId?: string; vanity?: boolean };
-type Cache = {
-  invites: Map<string, Snapshot>;
-  pending: { attribution: InviteAttribution; remaining: number }[];
-};
-const caches = new WeakMap<Context, Cache>();
+const caches = new WeakMap<Context, Tracker>();
 const locks = new WeakMap<Context, Promise<void>>();
 function serial(ctx: Context, work: () => Promise<void>) {
   const next = (locks.get(ctx) ?? Promise.resolve()).then(work);
@@ -35,53 +37,34 @@ function serial(ctx: Context, work: () => Promise<void>) {
   );
   return next;
 }
-function snapshot(inv: ServerInvite): Snapshot {
-  return {
-    uses: inv.uses ?? 0,
-    code: inv.code,
-    ...(inv.inviter ? { inviterId: inv.inviter.id } : {}),
-    vanity: inv.vanity,
-  };
-}
-async function refresh(ctx: Context) {
-  return new Map((await ctx.server.invites()).map((i) => [i.code, snapshot(i)]));
-}
-function attribute(cache: Cache, fresh: Map<string, Snapshot>): InviteAttribution {
-  let total = 0;
-  const increments: Snapshot[] = [];
-  let uncertain = false;
-  for (const [code, entry] of fresh) {
-    const prev = cache.invites.get(code);
-    if (!prev) {
-      if (entry.uses > 0) uncertain = true;
-      continue;
-    }
-    const diff = entry.uses - prev.uses;
-    if (diff > 0) {
-      increments.push(entry);
-      total += diff;
-    }
+const STATUS = "invite-counters";
+const forbidden = (e: unknown) =>
+  /missing permissions|missing access|forbidden|50013|50001/i.test(String(e));
+/**
+ * The current invite counters, or undefined when Discord refuses them (P10: the status line
+ * names the missing Manage Server permission). Joins are still recorded, without an inviter.
+ */
+async function refresh(ctx: Context): Promise<Map<string, Snapshot> | undefined> {
+  try {
+    const fresh = new Map((await ctx.server.invites()).map((i) => [i.code, snapshot(i)]));
+    ctx.status.set(STATUS, null);
+    return fresh;
+  } catch (e) {
+    ctx.status.set(
+      STATUS,
+      forbidden(e)
+        ? "Invite attribution paused: the bot needs the Manage Server permission to read invite counters. Joins are recorded without an inviter."
+        : "Invite attribution paused: invite counters could not be read. Check that the bot has the Manage Server permission. Joins are recorded without an inviter.",
+    );
+    ctx.log.warn("Invite counters unavailable", { error: String(e) });
+    return undefined;
   }
-  cache.invites = fresh;
-  // Discord does not associate a member ID with an invite-use delta. Preserve
-  // multiple uses of a single code; two distinct codes in one snapshot are ambiguous.
-  if (uncertain || increments.length > 1) {
-    cache.pending = [];
-    cache.pending.push({ attribution: {}, remaining: Math.max(1, total + (uncertain ? 1 : 0)) });
-  } else if (total) {
-    const i = increments[0]!;
-    cache.pending.push({
-      remaining: total,
-      attribution: {
-        code: i.vanity ? "vanity" : i.code,
-        ...(i.inviterId ? { inviterId: i.inviterId } : {}),
-      },
-    });
-  }
-  const pending = cache.pending[0];
-  if (!pending) return {};
-  if (--pending.remaining === 0) cache.pending.shift();
-  return pending.attribution;
+}
+/** Takes a new baseline: uses seen before it are never attributed. */
+async function rebase(ctx: Context) {
+  const fresh = await refresh(ctx);
+  if (fresh) caches.set(ctx, baseline(fresh, Date.now()));
+  else caches.delete(ctx);
 }
 async function publishJoined(
   ctx: Context,
@@ -103,7 +86,7 @@ async function publishJoined(
 }
 export default definePlugin({
   async onStart(ctx) {
-    caches.set(ctx, { invites: await refresh(ctx), pending: [] });
+    await serial(ctx, () => rebase(ctx));
     await initializeIndex(ctx);
   },
   tasks: { migrate },
@@ -115,7 +98,23 @@ export default definePlugin({
     },
     inviteDelete(ctx, invite) {
       return serial(ctx, async () => {
-        caches.get(ctx)?.invites.delete(invite.code);
+        const tracker = caches.get(ctx);
+        if (tracker) forget(tracker, invite.code, Date.now());
+      });
+    },
+    // After a gateway gap events may have been missed: start from fresh counters.
+    serverAvailable(ctx) {
+      return serial(ctx, () => rebase(ctx));
+    },
+    // Recovers attribution once the bot regains Manage Server (a role change grants it).
+    roleUpdate(ctx) {
+      return serial(ctx, async () => {
+        if (!caches.has(ctx)) await rebase(ctx);
+      });
+    },
+    memberUpdate(ctx, m) {
+      return serial(ctx, async () => {
+        if (m.id === ctx.bot.user.id && !caches.has(ctx)) await rebase(ctx);
       });
     },
     memberJoin(ctx, m) {
@@ -127,10 +126,13 @@ export default definePlugin({
           return;
         }
         const fresh = await refresh(ctx),
-          cache = caches.get(ctx);
+          tracker = caches.get(ctx),
+          now = Date.now();
         let a: InviteAttribution = {};
-        if (cache) a = attribute(cache, fresh);
-        else caches.set(ctx, { invites: fresh, pending: [] });
+        // Without counters, or without a baseline to compare with, the join stays unknown.
+        if (!fresh) caches.delete(ctx);
+        else if (tracker) a = attribute(tracker, fresh, now, at);
+        else caches.set(ctx, baseline(fresh, now));
         const fake = at - m.user.createdAt.getTime() < ctx.config.minAccountDays * 86400000;
         await changeMember(ctx, m.id, () => ({ ...a, at, fake, left: false }));
         await publishJoined(ctx, m.id, at, a, fake);

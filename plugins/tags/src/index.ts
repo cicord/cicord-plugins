@@ -10,32 +10,28 @@ import {
 } from "@cicord/sdk";
 import type { Tag, TagResult, TagSearch } from "./contracts.ts";
 import type { Routes } from "./routes.ts";
-import { parseTag, search, valid, visible } from "./catalog.ts";
+import { search, valid, visible } from "./catalog.ts";
+import { PORTAL_LIMIT, loadCatalog, lower, portalKey, readFileTags } from "./store.ts";
 
-const git = new Map<string, Tag>(),
-  portal = new Map<string, Tag>();
-const lower = (s: string) => s.trim().toLowerCase();
 const quiet = { users: false, roles: false, everyone: false };
-function all() {
-  return [...git.values(), ...portal.values()].filter(
-    (t, i) => i < git.size || !git.has(lower(t.name)),
-  );
-}
-function matches(ctx: Context, q: string, n: number, viewer?: Member, destination?: Channel) {
-  if (!ctx.config.enabled) return [];
+function pick(ctx: Context, tags: Tag[], q: string, n: number, viewer?: Member, destination?: Channel) {
   return search(
-    all().filter((t) => visible(ctx, t, viewer, destination)),
+    tags.filter((t) => visible(ctx, t, viewer, destination)),
     q,
     Math.min(50, Math.max(n, 1)),
   );
 }
-function exact(ctx: Context, name: string, it: Interaction) {
-  return matches(ctx, name, 25, it.member, it.channel).find((t) =>
+async function matches(ctx: Context, q: string, n: number, viewer?: Member, destination?: Channel) {
+  if (!ctx.config.enabled) return [];
+  return pick(ctx, (await loadCatalog(ctx)).all, q, n, viewer, destination);
+}
+async function exact(ctx: Context, name: string, it: Interaction) {
+  return (await matches(ctx, name, 25, it.member, it.channel)).find((t) =>
     [t.name, ...t.aliases].some((a) => lower(a) === lower(name)),
   );
 }
 async function send(ctx: Context, it: Interaction, name: string, userId?: string) {
-  const tag = exact(ctx, name, it);
+  const tag = await exact(ctx, name, it);
   if (!tag) {
     await it.reply({ content: ctx.i18n.t("missing"), ephemeral: true });
     return;
@@ -49,28 +45,10 @@ async function send(ctx: Context, it: Interaction, name: string, userId?: string
 
 export default definePlugin({
   async onStart(ctx) {
-    git.clear();
-    portal.clear();
-    if (!ctx.config.enabled) return;
-    if (ctx.features.enabled("files")) {
-      const paths = await ctx.files.list("tags/**/*.md");
-      for (let i = 0; i < paths.length; i += 32)
-        await Promise.all(
-          paths.slice(i, i + 32).map(async (path) => {
-            const tag = parseTag(await ctx.files.read(path));
-            if (!tag) throw new Error("Invalid tag frontmatter in " + path);
-            if (git.has(lower(tag.name))) throw new Error("Duplicate tag name: " + tag.name);
-            git.set(lower(tag.name), tag);
-          }),
-        );
-    }
-    let cursor: string | undefined;
-    do {
-      const page = await ctx.kv.list<Tag>({ prefix: "portal:", limit: 100, cursor });
-      for (const item of page.items) portal.set(lower(item.value.name), item.value);
-      cursor = page.cursor;
-    } while (cursor && portal.size <= 1000);
-    await ctx.kv.set("meta:schema", 1);
+    // Fail fast on an invalid revision. This is validation only: every handler rebuilds the
+    // catalog from files and KV, so correctness never depends on startup state, and nothing
+    // here writes (it stays valid if the host also runs it in a read-only realm).
+    await readFileTags(ctx, true);
   },
   commands: {
     tag: command({
@@ -80,8 +58,8 @@ export default definePlugin({
           type: "string",
           description: "Tag name or alias",
           required: true,
-          autocomplete: (ctx, it, opt) =>
-            matches(ctx, opt.value, 25, it.member, it.channel).map((t) => ({
+          autocomplete: async (ctx, it, opt) =>
+            (await matches(ctx, opt.value, 25, it.member, it.channel)).map((t) => ({
               name: t.name,
               value: t.name,
             })),
@@ -98,7 +76,7 @@ export default definePlugin({
       type: "message",
       ephemeral: true,
       async run(ctx, it) {
-        const choices = matches(ctx, "", 25, it.member, it.channel);
+        const choices = await matches(ctx, "", 25, it.member, it.channel);
         if (!choices.length) {
           await it.reply({ content: ctx.i18n.t("missing"), ephemeral: true });
           return;
@@ -137,14 +115,16 @@ export default definePlugin({
         !ctx.config.channels.includes(msg.channel.key ?? "")
       )
         return;
+      const key = "debounce:" + msg.channel.id;
+      // Skip the catalog read entirely while the channel is cooling down.
+      if ((await ctx.kv.get(key)) !== undefined) return;
       const content = lower(msg.content);
-      const tag = all().find(
+      const tag = (await loadCatalog(ctx)).all.find(
         (t) =>
           visible(ctx, t, msg.member, msg.channel) &&
           t.keywords.some((word) => content.includes(lower(word))),
       );
       if (!tag) return;
-      const key = "debounce:" + msg.channel.id;
       if (
         !(
           await ctx.kv
@@ -165,7 +145,7 @@ export default definePlugin({
         const viewer = call.onBehalfOf
           ? await ctx.server.member(call.onBehalfOf.userId)
           : undefined;
-        return { entries: matches(ctx, input.query, input.limit, viewer ?? undefined) };
+        return { entries: await matches(ctx, input.query, input.limit, viewer ?? undefined) };
       },
     }),
   },
@@ -173,23 +153,25 @@ export default definePlugin({
     "GET /stats": {
       access: "moderator",
       async handler(ctx, req) {
-        const tags = matches(ctx, req.query.q ?? "", 50, req.viewer?.member),
+        const tags = await matches(ctx, req.query.q ?? "", 50, req.viewer?.member),
           counts = await ctx.kv.getMany<number>(tags.map((t) => "used:" + lower(t.name)));
         return { items: tags.map((tag, n) => ({ name: tag.name, uses: counts[n] ?? 0 })) };
       },
     },
     "GET /tags": {
       access: "member",
-      handler(ctx, req) {
-        const member = req.viewer?.member,
-          entries = matches(ctx, req.query.q ?? "", 50, member);
+      async handler(ctx, req) {
+        const member = req.viewer?.member;
+        if (!ctx.config.enabled) return { entries: [] };
+        const catalog = await loadCatalog(ctx),
+          entries = pick(ctx, catalog.all, req.query.q ?? "", 50, member);
         if (member?.access !== "admin" && member?.access !== "moderator") return { entries };
-        const canEdit = ctx.config.enabled && ctx.config.editableOnPortal;
+        const canEdit = ctx.config.editableOnPortal;
         return {
           canEdit,
           entries: entries.map((tag) => ({
             ...tag,
-            editable: canEdit && !git.has(lower(tag.name)),
+            editable: canEdit && !catalog.files.has(lower(tag.name)),
           })),
         };
       },
@@ -198,11 +180,19 @@ export default definePlugin({
       access: "moderator",
       async handler(ctx, req) {
         const tag = valid(req.body),
-          name = lower(req.params.name),
-          prior = portal.get(name);
+          name = lower(req.params.name);
         if (!ctx.config.enabled || !ctx.config.editableOnPortal || !req.viewer?.member)
           return { status: 403, body: { saved: false } };
-        if (!tag || lower(tag.name) !== name || git.has(name) || (!prior && portal.size >= 1000))
+        const key = portalKey(name),
+          entry = await ctx.kv.getEntry<Tag>(key),
+          prior = entry && valid(entry.value),
+          catalog = await loadCatalog(ctx);
+        if (
+          !tag ||
+          lower(tag.name) !== name ||
+          catalog.files.has(name) ||
+          (!prior && catalog.portal.size >= PORTAL_LIMIT)
+        )
           return { status: 400, body: { saved: false } };
         if (
           (prior && !visible(ctx, prior, req.viewer.member)) ||
@@ -215,16 +205,21 @@ export default definePlugin({
             !["same", "narrower"].includes(ctx.server.compareAudience(prior.channel, tag.channel)))
         )
           return { status: 403, body: { saved: false } };
-        await ctx.kv.set("portal:" + name, tag);
-        portal.set(name, tag);
-        return { saved: true };
+        // The audience checks above judged this exact prior version.
+        const saved = await ctx.kv
+          .atomic()
+          .check(key, entry?.version ?? null)
+          .set(key, tag)
+          .commit();
+        return saved.ok ? { saved: true } : { status: 409, body: { saved: false } };
       },
     },
     "DELETE /tags/:name": {
       access: "moderator",
       async handler(ctx, req) {
-        const name = lower(req.params.name),
-          tag = portal.get(name);
+        const key = portalKey(req.params.name),
+          entry = ctx.config.enabled ? await ctx.kv.getEntry<Tag>(key) : undefined,
+          tag = entry && valid(entry.value);
         if (
           !ctx.config.enabled ||
           !ctx.config.editableOnPortal ||
@@ -233,9 +228,8 @@ export default definePlugin({
           !visible(ctx, tag, req.viewer.member)
         )
           return { status: 403, body: { deleted: false } };
-        await ctx.kv.delete("portal:" + name);
-        portal.delete(name);
-        return { deleted: true };
+        const deleted = await ctx.kv.atomic().check(key, entry.version).delete(key).commit();
+        return deleted.ok ? { deleted: true } : { status: 409, body: { deleted: false } };
       },
     },
   }),

@@ -44,6 +44,13 @@
             "description": "Declared role key",
             "x-cicord-ref": "role"
           },
+          "backlog": {
+            "type": "integer",
+            "description": "Entries already in the feed at its first successful check (or after an id change) to publish, newest ones; the others are recorded as seen",
+            "minimum": 0,
+            "maximum": 8,
+            "default": 0
+          },
           "template": {
             "type": "string",
             "description": "Message template with {title}, {url} and {role}",

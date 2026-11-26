@@ -7,7 +7,6 @@
   "claimed": "Vous avez déjà réclamé cette récompense.",
   "empty": "Aucune entrée.",
   "unavailable": "Cet article est indisponible.",
-  "pending": "Achat enregistré. La livraison est en attente.",
   "denied": "Un gestionnaire du serveur est requis.",
   "item": "{label} · {price} points · {id}",
   "done": "Solde : {balance}",
@@ -24,5 +23,10 @@
   "commands.eco.take.description": "Retirer des points",
   "commands.eco.set.description": "Définir le solde",
   "state.pending": "en attente",
-  "state.delivered": "livré"
+  "state.delivered": "livré",
+  "bought.delivered": "Achat livré : {id}.",
+  "bought.pending": "Paiement enregistré pour {id}, mais la livraison n’a pas encore abouti. Relancez /buy {id} ou /inventory pour réessayer. Les points sont remboursés si la livraison n’a pas eu lieu après 72 heures.",
+  "bought.refunded": "{id} n’a pas pu être livré. Vos points ont été remboursés.",
+  "state.refunded": "remboursé",
+  "perk.description": "Commande de la boutique {id}"
 }

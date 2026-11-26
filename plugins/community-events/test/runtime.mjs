@@ -26,7 +26,14 @@ test(
       {
         weeksAhead: 2,
         series: [
-          { key: "weekly", name: "Town hall", start, durationMinutes: 60, location: "Club" },
+          {
+            key: "weekly",
+            name: "Town hall",
+            start,
+            timeZone: "Europe/Paris",
+            durationMinutes: 60,
+            location: "Club",
+          },
         ],
       },
     );
@@ -36,7 +43,11 @@ test(
     assert.equal(new Set(calendar.map((x) => x.id)).size, 2);
     const response = await fetch(`http://127.0.0.1:${sim.port}${route}.ics`);
     assert.equal(response.headers.get("content-type"), "text/calendar; charset=utf-8");
-    assert.match(await response.text(), /RRULE:FREQ=WEEKLY/);
+    const body = await response.text();
+    assert.match(body, /RRULE:FREQ=WEEKLY/);
+    // The runtime (no Intl time-zone data) keeps the local time with the plugin's own rules.
+    assert.match(body, /BEGIN:VTIMEZONE\r\nTZID:Europe\/Paris\r\n/);
+    assert.match(body, /DTSTART;TZID=Europe\/Paris:\d{8}T\d{6}\r\n/);
     const alice = sim.users.find((u) => u.username === "alice");
     await sim.join(alice);
     const denied = await sim.command(alice, "event create");

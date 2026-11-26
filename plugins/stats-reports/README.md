@@ -11,7 +11,7 @@ Set `locale: fr` or `locale: en` to choose the report language, including period
 
 ## Short stays
 
-The optional cohorts feature requires `discord.members.read` and ServerMembers. A join records its time under a server-specific HMAC pseudonym. Departure within seven days increases the original arrival day's early-departure count. The report shows this number with the number of observed arrivals in that period, as of publication. With collection disabled the report labels the figure unavailable. A join marker expires after 30 days, on departure or when the member requests erasure. Day counts contain no identifiers.
+The optional cohorts feature requires `discord.members.read` and ServerMembers. A join records its time under HMAC-SHA256 of the member ID, keyed by a random 32-byte secret that the instance creates in its own storage on the first observed join. Departure within seven days increases the original arrival day's early-departure count. The report shows this number with the number of observed arrivals in that period, as of publication. With collection disabled the report labels the figure unavailable. A join marker expires after 30 days, on departure or when the member requests erasure. Day counts contain no identifiers. The store never holds a raw member ID, but the secret sits in the same store: this is pseudonymization, not anonymization. Whoever can read the instance storage and knows a member ID can find that member's marker. Member export and erasure compute the same key. They never create the secret, and the secret is not exported. SHA-256 comes from fast-sha256 1.3.0 (public domain), included under `src/fast-sha256`.
 
 ## Delivery, counters and grants
 

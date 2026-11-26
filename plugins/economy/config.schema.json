@@ -220,7 +220,7 @@
       "minimum": 31,
       "maximum": 3650,
       "default": 365,
-      "description": "Days to retain append-only journal rows and transfer receipts."
+      "description": "Days to retain journal rows. Idempotency receipts are kept for at least 400 days."
     }
   },
   "additionalProperties": false

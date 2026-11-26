@@ -13,6 +13,8 @@ import {
   type Ticket,
 } from "./tickets.ts";
 import type { Person } from "./routes.ts";
+import { whoKey } from "./indexes.ts";
+import { removeOwn } from "./messages.ts";
 
 type Kind = "inbound" | "outbound" | "portal";
 type Target = { kind: "channel" | "dm"; id?: string; delivered?: boolean };
@@ -77,7 +79,7 @@ async function retract(ctx: Context, t: Ticket, target: Target) {
     return;
   }
   const channel = ticketChannel(ctx, t);
-  if (channel) await (await channel.message(target.id))?.delete("Ticket relay removed");
+  if (channel) await removeOwn(ctx, await channel.message(target.id), "Ticket relay removed");
 }
 
 async function abort(ctx: Context, t: Ticket, r: Relay, version: string) {
@@ -226,6 +228,8 @@ export async function relay(
   };
   const key = keyOf(r);
   if (!(await activeMember(ctx, t, r))) return undefined;
+  // Pending relay text is personal data before the ticket record names its author.
+  await ctx.kv.set(whoKey(author.id, t.number), true);
   const ticketEntry = await ctx.kv.getEntry(ticketKey(t.number));
   const current = ticketEntry?.value as unknown as Ticket | undefined;
   if (!ticketEntry || !current || current.erasing || (current.revision ?? 0) !== (t.revision ?? 0))
@@ -254,8 +258,17 @@ export async function pendingRelays(ctx: Context, n: number) {
   } while (cursor);
   return rows;
 }
-export async function repairRelays(ctx: Context, t: Ticket) {
-  for (const r of await pendingRelays(ctx, t.number)) await deliverRelay(ctx, keyOf(r));
+/** Resumes one page of pending relays (every ticket); returns the next page's cursor. */
+export async function repairRelayPage(ctx: Context, cursor: string | undefined, limit: number) {
+  const page = await ctx.kv.list({ prefix: "relay:", limit, ...(cursor ? { cursor } : {}) });
+  for (const { key } of page.items) {
+    try {
+      await deliverRelay(ctx, key);
+    } catch (error) {
+      ctx.log.warn("Relay repair deferred", { key, error: String(error) });
+    }
+  }
+  return page.cursor;
 }
 
 export async function eraseRelays(ctx: Context, t: Ticket, userId: string) {

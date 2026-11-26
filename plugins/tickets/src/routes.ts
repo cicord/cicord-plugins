@@ -182,10 +182,21 @@ export interface Routes {
 
   // ── staff (a staff role, the server owner or a Cicord admin)
 
-  /** Tickets, newest first. `assignee`: a user id, `me` or `none`; `label`: a key or `none`. */
+  /**
+   * Tickets, newest first. `assignee`: a user id, `me` or `none`; `label`: a key or `none`.
+   * One page holds at most 50 tickets and reads at most 500 records, so a selective filter
+   * can return a short or empty page: follow `cursor` (pass it as `?cursor=`) until it is
+   * absent, which marks the last page.
+   */
   "GET /tickets": {
-    query: { status?: TicketStatus; assignee?: string; priority?: Priority; label?: string };
-    response: { items: StaffTicket[] };
+    query: {
+      status?: TicketStatus;
+      assignee?: string;
+      priority?: Priority;
+      label?: string;
+      cursor?: string;
+    };
+    response: { items: StaffTicket[]; cursor?: string };
   };
   "GET /tickets/:id": { response: StaffTicketDetail };
   /**

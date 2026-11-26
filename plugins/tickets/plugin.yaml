@@ -9,7 +9,7 @@ metadata:
   license: Apache-2.0
   keywords: [tickets, support, helpdesk, portal]
 spec:
-  engine: ">=0.2.0-0"
+  engine: ">=0.2.0"
   entry: ./src/index.ts
   capabilities:
     - discord.messages.send     # panel, welcome message, notices, portal replies, log summary
@@ -19,8 +19,6 @@ spec:
     - discord.members.read      # check that an assignee is staff; GET /staff lists the staff roles' members
     - storage.kv # Persist installation state and progress across restarts.
     - portal.routes             # member and staff routes (src/routes.ts)
-    - discord.messages.manage # Moderate or maintain the messages controlled by this feature.
-    - discord.dm.send # Relay staff replies to the authorized ticket opener and retract managed copies.
     - events.publish # Deliver declared events to authorized subscribers.
     - scheduler # Run delayed work and recover it after restart.
     - portal.links # Issue links to this installation’s portal flows.
@@ -28,13 +26,22 @@ spec:
     - ServerMessages # Receive message events in guild channels.
     - MessageContent # Read the conversation for transcripts and consented modmail relay.
     - ServerMembers # Observe member joins, departures and role changes.
-    - DirectMessages # Receive messages sent directly to the bot.
   locales: ./locales
   delivery: at-least-once
   optional:
+    # Needs only the required capabilities; the SDK-13 runtime support is reported at startup.
     - feature: messageContextMenu
+    - feature: modmail
       capabilities:
-        - discord.channels.read # Resolve configured channels and their current permissions.
+        - discord.dm.send # Relay modmail in both directions and retract the tracked DM copies.
+      intents:
+        - DirectMessages # Receive the DMs that open and continue modmail tickets.
+    - feature: ratingPrompts
+      capabilities:
+        - discord.dm.send # Send the 1-5 satisfaction prompt after closing (the portal works without it).
+    - feature: managedMessages
+      capabilities:
+        - discord.messages.manage # Delete file-bearing transcript copies and erased content; without it, log channels get summaries and copies are blanked.
     - feature: appealUpdates
       capabilities:
         - events.subscribe # Receive the events declared in the interop section.
@@ -57,7 +64,7 @@ spec:
       - {name: tickets, policy: anonymize, description: Ticket participants and their authored content including staff notes and portal responses., retention: While open and 1 to 730 days after closing.}
       - {name: transcripts, policy: anonymize, description: Authored transcript lines and tracked Discord copies., retention: Configurable between 1 and 365 days.}
       - {name: relays, policy: erase, description: Pending private texts and durable receipts for bot-authored copies.}
-      - {name: indexes, policy: erase, description: Member lookup keys and open-ticket indexes.}
+      - {name: indexes, policy: erase, description: "Member lookup keys (author and involvement), open-ticket, request and appeal indexes."}
   config:
     schema: ./config.schema.json
   routes:

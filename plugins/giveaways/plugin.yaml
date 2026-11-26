@@ -4,10 +4,10 @@ metadata:
   name: giveaways
   version: 0.1.0
   displayName: Giveaways
-  description: Auditable weighted community giveaways with scheduled draws and claims.
+  description: "Experimental, opt-in: auditable weighted community giveaways with scheduled draws and claims."
   license: Apache-2.0
 spec:
-  engine: ">=0.2.0-0"
+  engine: ">=0.2.0"
   entry: ./src/index.ts
   config: {schema: ./config.schema.json}
   locales: ./locales

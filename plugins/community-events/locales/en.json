@@ -17,5 +17,6 @@
   "commands.event.create.description": "Create a scheduled community event",
   "commands.event.reminders.name": "reminders",
   "commands.event.reminders.description": "Opt in or out of DMs for events you mark Interested",
-  "hour": "{name} begins in one hour."
+  "hour": "{name} begins in one hour.",
+  "manageEvents": "Cannot create or edit the recurring Discord events ({reason}): give the bot the Manage Events permission."
 }

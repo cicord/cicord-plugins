@@ -1,7 +1,7 @@
 import type { Context, Json } from "@cicord/sdk";
 import {
-  allTickets,
-  person,
+  normalize,
+  authorNames,
   redactLive,
   saveTicket,
   ticketChannel,
@@ -10,6 +10,7 @@ import {
   type Ticket,
 } from "./tickets.ts";
 import type { Person } from "./routes.ts";
+import { mentioned, whoKey } from "./indexes.ts";
 
 declare const TextEncoder: { new (): { encode(value: string): Uint8Array } };
 
@@ -36,6 +37,8 @@ export async function archive(ctx: Context, t: Ticket) {
   let before: string | undefined;
   let messages = 0;
   let pages = 0;
+  // Fetched messages carry no member: server display names come from the record or a bounded lookup.
+  const nameOf = authorNames(ctx, t);
   for (;;) {
     const batch = await channel.messages({ limit: 100, ...(before ? { before } : {}) });
     if (!batch.length) break;
@@ -43,7 +46,7 @@ export async function archive(ctx: Context, t: Ticket) {
     for (const m of redactLive(t, batch)) {
       const userId = copied.get(m.id);
       if (m.author.bot && !userId) continue;
-      const by = userId ? personForCopy(t, userId) : person(m.author, m.member);
+      const by = userId ? personForCopy(t, userId) : await nameOf(m.author);
       participants.set(by.id, by);
       messages++;
       lines.push({
@@ -58,6 +61,15 @@ export async function archive(ctx: Context, t: Ticket) {
           .join("\n"),
       });
     }
+    // Archived lines can name members the record does not: index them for privacy hooks
+    // for as long as the pages themselves live.
+    const named = new Set<string>();
+    for (const l of lines) {
+      named.add(l.author.id);
+      mentioned(l.text, named);
+    }
+    const ttlSeconds = Math.max(1, Math.ceil((t.expiresAt - Date.now()) / 1000));
+    for (const id of named) await ctx.kv.set(whoKey(id, t.number), true, { ttlSeconds });
     // Up to 20 messages per KV value, even when embeds are unusually large.
     for (let start = 0; start < lines.length; start += 20)
       await writePage(ctx, t, pages++, lines.slice(start, start + 20));
@@ -140,6 +152,15 @@ const mentions = { everyone: false, users: false, roles: false } as const;
  * before attempting the edit. A lost acknowledgement leaves a durable "attaching" receipt. */
 export async function removeLogCopy(ctx: Context, t: Ticket) {
   const receipt = t.logDelivery;
+  const filed = !!t.logCopy || receipt?.phase === "attached" || receipt?.phase === "attaching";
+  if (filed && !ctx.features.enabled("managedMessages")) {
+    // Overwriting text keeps Discord attachments: only deletion withdraws the files.
+    ctx.status.set(
+      "transcriptFiles",
+      "Attached transcript files cannot be withdrawn without discord.messages.manage",
+    );
+    throw new Error("Transcript copy withdrawal needs discord.messages.manage");
+  }
   if (
     receipt &&
     (receipt.phase === "attached" || receipt.phase === "attaching") &&
@@ -177,6 +198,8 @@ async function copyAllowed(ctx: Context, t: Ticket) {
   if (
     !dest ||
     !type ||
+    // A file-bearing copy is only posted when the bot may also delete it later.
+    !ctx.features.enabled("managedMessages") ||
     !("retainSourceForTranscript" in type) ||
     !type.retainSourceForTranscript ||
     !type.logChannel ||
@@ -299,13 +322,45 @@ export async function postArchive(ctx: Context, t: Ticket) {
   await reconcileCopy(ctx, t);
 }
 
-export async function withdrawCopies(ctx: Context, _channelId?: string) {
-  for (const t of await allTickets(ctx)) {
-    if (!t.logDelivery && !t.logCopy) continue;
+const SWEEP = "sweep:copies";
+const SWEEP_PAGE = 10;
+
+/**
+ * Rechecks every tracked log copy after a permission or availability change, a bounded page
+ * per invocation: the first page runs inline, the rest in `sweepCopies` tasks. A newer
+ * request restarts the sweep from the beginning and retires the older one.
+ */
+export async function requestSweep(ctx: Context) {
+  const gen = await ctx.kv.increment(SWEEP);
+  await sweepCopies(ctx, { gen });
+}
+
+export async function sweepCopies(ctx: Context, payload: unknown) {
+  const p = payload as { gen?: unknown; cursor?: unknown } | undefined;
+  if (typeof p?.gen !== "number" || (await ctx.kv.get<number>(SWEEP)) !== p.gen) return;
+  const cursor = typeof p.cursor === "string" ? p.cursor : undefined;
+  const next = await reconcilePage(ctx, cursor, SWEEP_PAGE);
+  if (next) await ctx.schedule.after(50, "sweepCopies", { gen: p.gen, cursor: next });
+}
+
+/** Reconciles one page of tracked copies; returns the cursor of the next page. */
+export async function reconcilePage(ctx: Context, cursor: string | undefined, limit: number) {
+  const page = await ctx.kv.list<number>({ prefix: "copy:", limit, ...(cursor ? { cursor } : {}) });
+  for (const { key } of page.items) {
+    const record = "ticket:" + key.slice("copy:".length);
+    const entry = await ctx.kv.getEntry(record);
+    const raw = entry?.value as unknown as Ticket | undefined;
+    if (!raw?.logDelivery && !raw?.logCopy) {
+      // A stale entry; the version check keeps a copy recorded by a concurrent save.
+      await ctx.kv.atomic().check(record, entry?.version).delete(key).commit();
+      continue;
+    }
+    const t = normalize(raw);
     try {
       await reconcileCopy(ctx, t);
     } catch (error) {
       ctx.log.warn("Transcript reconciliation deferred", { ticket: t.id, error: String(error) });
     }
   }
+  return page.cursor;
 }

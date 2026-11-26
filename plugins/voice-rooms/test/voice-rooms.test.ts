@@ -17,7 +17,10 @@ const grants = [
 
 // 1 alice, 2 bob, 3 carl (guild member): members. 4 sam: staff role. 9 olga: server owner.
 // 50 a music bot.
-function setup(config: Record<string, unknown> = {}) {
+function setup(
+  config: Record<string, unknown> = {},
+  extra: { roles?: Record<string, { name: string; permissions?: string[] }> } = {},
+) {
   const t = createTestContext({
     schema,
     locales: { en, fr },
@@ -41,7 +44,7 @@ function setup(config: Record<string, unknown> = {}) {
     intents: ["ServerVoiceStates"],
     plugin: { name: "voice-rooms" },
     server: { id: "100", ownerId: "9" },
-    roles: { guild: { name: "Guild" }, staff: { name: "Staff" } },
+    roles: { guild: { name: "Guild" }, staff: { name: "Staff" }, ...extra.roles } as never,
     channels: {
       voice: { name: "VOCAUX", type: "category", id: "300" },
       guilds: { name: "GUILDES", type: "category", id: "301" },
@@ -88,6 +91,8 @@ describe("join to create", () => {
       name: "🔊 Sadiwii's channel",
       type: "voice",
       category: { id: "300" },
+      // Per attempt: a replay resumes the same key (SPA-16).
+      provisionKey: expect.stringMatching(/^room:500:1:[0-9a-f-]{36}$/),
     });
     // Created without overwrites (it gets the category's), then the owner's and the bot's.
     expect(t.overwrites(room.id)).toEqual({
@@ -119,6 +124,7 @@ describe("join to create", () => {
       type: "voice",
       category: "guilds",
       userLimit: 5,
+      provisionKey: expect.stringMatching(/^room:501:3:/),
     });
     expect(room.categoryId).toBe("301");
     // Numbers are per hub, and reused once free.
@@ -180,6 +186,137 @@ describe("join to create", () => {
     expect(t.createdChannels).toHaveLength(1);
     expect(t.deletedChannels.map((d) => d.id)).toEqual([t.createdChannels[0]!.channel.id]);
     expect([...t.kv.keys()]).toEqual([]);
+  });
+});
+
+describe("degraded Discord permissions and replays", () => {
+  function statuses(t: TestHarness) {
+    const lines = new Map<string, string | null>();
+    const set = t.ctx.status.set.bind(t.ctx.status);
+    t.ctx.status.set = (key: string, message: string | null) => {
+      lines.set(key, message);
+      set(key, message);
+    };
+    return lines;
+  }
+
+  test("a bot without Move Members gets a status line and joins create no channel", async () => {
+    const t = setup(
+      {},
+      { roles: { botrole: { name: "Bot", permissions: ["ViewChannel", "Connect", "ManageChannels"] } } },
+    );
+    const lines = statuses(t);
+    t.addMember({ id: "bot", username: "TestBot", bot: true, roles: ["botrole"] });
+    for (let i = 0; i < 3; i++) {
+      await voice(t, t.setVoice("2", "create"));
+      await voice(t, t.setVoice("2", null));
+    }
+    expect(t.createdChannels).toHaveLength(0);
+    expect(t.deletedChannels).toHaveLength(0);
+    expect(lines.get("permissions:500")).toContain("MoveMembers");
+  });
+
+  test("a Discord refusal sets the status line and later joins wait instead of churning", async () => {
+    const t = setup();
+    const lines = statuses(t);
+    let calls = 0;
+    t.ctx.server.createChannel = async () => {
+      calls++;
+      throw new Error("discord: missing permissions (HTTP 403, code 50013)");
+    };
+    await voice(t, t.setVoice("1", "create"));
+    await voice(t, t.setVoice("2", "create"));
+    expect(calls).toBe(1);
+    expect(lines.get("permissions:500")).toContain("create the room");
+    expect(t.kv.has("pending:500:1")).toBe(false);
+  });
+
+  test("a refused move deletes the room once, then the hub waits; a success clears the line", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = setup();
+      const lines = statuses(t);
+      const update = t.setVoice("1", "create");
+      const moveTo = update.member!.moveTo.bind(update.member);
+      Object.assign(update.member!, {
+        moveTo: async () => {
+          throw new Error("discord: missing permissions (HTTP 403)");
+        },
+      });
+      await voice(t, update);
+      expect(t.createdChannels).toHaveLength(1);
+      expect(t.deletedChannels).toHaveLength(1);
+      expect(lines.get("permissions:500")).toContain("move the member");
+      await voice(t, t.setVoice("2", "create"));
+      expect(t.createdChannels).toHaveLength(1);
+      // Fixed on Discord: after the wait, the next join creates a room and clears the line.
+      vi.setSystemTime(Date.now() + 301000);
+      Object.assign(update.member!, { moveTo });
+      await voice(t, t.setVoice("2", null));
+      await joinHub(t, "2");
+      expect(t.createdChannels).toHaveLength(2);
+      expect(lines.get("permissions:500")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /** The host's provisioning-key contract (internal/plugin): one channel per key while it exists. */
+  function provisioning(t: TestHarness, crashes: { n: number }) {
+    const create = t.ctx.server.createChannel.bind(t.ctx.server);
+    const byKey = new Map<string, string>();
+    const alive = (id: string) => !t.deletedChannels.some((d) => d.id === id);
+    t.ctx.server.createChannel = async (options) => {
+      const known = options.provisionKey && byKey.get(options.provisionKey);
+      if (known && alive(known)) return t.ctx.server.channel({ id: known });
+      const channel = await create(options);
+      if (options.provisionKey) byKey.set(options.provisionKey, channel.id);
+      if (crashes.n-- > 0) throw new Error("runtime stopped"); // created, nothing saved it
+      return channel;
+    };
+    t.ctx.server.recoverOwnedChannel = async (request) => {
+      const key = typeof request === "string" ? request : request.provisionKey;
+      const id = byKey.get(key);
+      return id && alive(id) ? { status: "owned", id } : { status: "missing" };
+    };
+  }
+
+  test("a crash after createChannel: the redelivered join resumes the same channel", async () => {
+    const t = setup();
+    provisioning(t, { n: 1 });
+    const update = t.setVoice("1", "create");
+    await expect(voice(t, update)).rejects.toThrow("runtime stopped");
+    expect(t.kv.has("pending:500:1")).toBe(true);
+    await voice(t, update); // at-least-once redelivery
+    expect(t.createdChannels).toHaveLength(1);
+    const room = t.createdChannels[0]!.channel;
+    expect(t.voiceChannel("1")).toBe(room.id);
+    expect(t.kv.get("room:" + room.id)).toMatchObject({ owner: "1", hub: "500" });
+    expect(t.kv.has("pending:500:1")).toBe(false);
+  });
+
+  test("the sweep deletes the empty channel of an interrupted creation and forgets the marker", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = setup();
+      provisioning(t, { n: 1 });
+      const update = t.setVoice("1", "create");
+      await expect(voice(t, update)).rejects.toThrow("runtime stopped");
+      await voice(t, t.setVoice("1", null)); // the member left; no redelivery
+      const orphan = t.createdChannels[0]!.channel;
+      // A fresh marker is left alone: its attempt may still be running.
+      await plugin.schedules!.sweep!.run(t.ctx);
+      expect(t.deletedChannels).toEqual([]);
+      vi.setSystemTime(Date.now() + 3 * 60_000);
+      await plugin.schedules!.sweep!.run(t.ctx);
+      expect(t.deletedChannels.map((d) => d.id)).toEqual([orphan.id]);
+      expect(t.kv.has("pending:500:1")).toBe(false);
+      // The next join creates a new room.
+      await joinHub(t, "1");
+      expect(t.createdChannels).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -274,6 +411,37 @@ describe("/voice", () => {
     r = await runCommand(plugin, t, "voice rename", { user: "1", options: { name: "Three" } });
     expect(text(r.replies[0])).toContain("two renames per 10 minutes");
     expect(room.name).toBe("Two");
+  });
+
+  test("the rename window is durable across a restart and counts privacy renames", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { t, room } = await withRoom();
+      const rename = async (p: typeof plugin, user: string, name: string) =>
+        text(
+          (await runCommand(p, t, "voice rename", { user, channel: room.id, options: { name } }))
+            .replies[0],
+        );
+      expect(await rename(plugin, "1", "One")).toBe("Renamed to **One**.");
+      expect(await rename(plugin, "1", "Two")).toBe("Renamed to **Two**.");
+      // A restarted runtime (or another realm) loads a fresh module: the window is in KV.
+      vi.resetModules();
+      const restarted = (await import("../src/index.ts")).default;
+      expect(await rename(restarted, "1", "Three")).toContain("two renames per 10 minutes");
+      expect(room.name).toBe("Two");
+      // Erasure still anonymizes a member-derived name when the window is full.
+      await restarted.privacy!.erase(t.ctx, "1");
+      expect(room.name).toBe("Voice room 1");
+      vi.setSystemTime(Date.now() + 10 * 60 * 1000 + 1000);
+      expect(await rename(restarted, "4", "Staff pick")).toBe("Renamed to **Staff pick**.");
+      // The erasure rename takes the second slot of the new window.
+      await restarted.privacy!.erase(t.ctx, "4");
+      expect(room.name).toBe("Voice room 1");
+      expect(await rename(restarted, "4", "Again")).toContain("two renames per 10 minutes");
+      expect(t.kv.get("rename:" + room.id)).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("only the owner and the staff manage a room", async () => {

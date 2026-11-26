@@ -1,5 +1,5 @@
 import { expect, test, vi, afterEach, beforeEach } from "vite-plus/test";
-import { createTestContext, callRoute } from "@cicord/sdk/testing";
+import { createTestContext, callRoute, runCommand } from "@cicord/sdk/testing";
 import schema from "../config.schema.json" with { type: "json" };
 import en from "../locales/en.json" with { type: "json" };
 import fr from "../locales/fr.json" with { type: "json" };
@@ -89,4 +89,39 @@ test("an offline December birthday is caught up when the server restarts in Janu
   await plugin.tasks!.celebrate!(t.ctx, p);
   expect(t.published).toHaveLength(1);
   expect(await plugin.privacy!.export(t.ctx, "1")).toMatchObject({ lastCelebrationYear: 2026 });
+});
+test("remove then set again never repeats the year's greeting, role or event", async () => {
+  vi.setSystemTime(Date.parse("2026-03-10T12:00:00Z"));
+  const t = setup({ channel: "general", role: "birthday" });
+  const cycle = async () => {
+    await callRoute(plugin, t, "PUT /birthday", { viewer: "2", body: { day: 10, month: 3 } });
+    const task = t.scheduled.filter((x) => x.task === "celebrate").at(-1)!;
+    vi.setSystemTime(Date.now() + 1500);
+    await plugin.tasks!.celebrate!(t.ctx, task.payload);
+    // A replayed delivery of the same task changes nothing either.
+    await plugin.tasks!.celebrate!(t.ctx, task.payload);
+    return task;
+  };
+  const first = await cycle();
+  expect(t.member("2")!.hasRole("birthday")).toBe(true);
+  for (let n = 0; n < 2; n++) {
+    await callRoute(plugin, t, "DELETE /birthday", { viewer: "2" });
+    expect(t.member("2")!.hasRole("birthday")).toBe(false);
+    await cycle();
+  }
+  await runCommand(plugin, t, "birthday remove", { user: "2" });
+  await runCommand(plugin, t, "birthday set", { user: "2", options: { day: 11, month: 3 } });
+  vi.setSystemTime(Date.parse("2026-03-11T12:00:00Z"));
+  for (const task of t.scheduled.filter((x) => x.task === "celebrate"))
+    await plugin.tasks!.celebrate!(t.ctx, task.payload);
+  await plugin.tasks!.celebrate!(t.ctx, first.payload);
+  expect(t.sent).toHaveLength(1);
+  expect(t.published).toHaveLength(1);
+  expect(t.member("2")!.hasRole("birthday")).toBe(false);
+  expect(t.sent[0]!.message).toMatchObject({ nonce: "bd2-2026", enforceNonce: true });
+  expect(await plugin.privacy!.export(t.ctx, "2")).toMatchObject({ celebrated: [2026] });
+  // Privacy erasure (unlike the self-service withdrawal) also deletes the marker.
+  await plugin.privacy!.erase(t.ctx, "2");
+  expect(await plugin.privacy!.export(t.ctx, "2")).toEqual({});
+  expect([...t.kv.keys()].filter((k) => k.startsWith("celebrated:"))).toEqual([]);
 });

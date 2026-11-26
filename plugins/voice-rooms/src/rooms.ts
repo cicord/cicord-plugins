@@ -1,6 +1,6 @@
 import type { History } from "./privacy.ts";
 import { publishClosed } from "./lifecycle.ts";
-import type { Context, Json, Member, PluginConfig, TextChannel } from "@cicord/sdk";
+import type { ChannelRef, Context, Json, Member, PluginConfig, TextChannel } from "@cicord/sdk";
 
 export type Hub = NonNullable<PluginConfig["hubs"]>[number];
 export type Permission = Hub["ownerPermissions"][number];
@@ -54,8 +54,79 @@ export async function getRoom(ctx: Context, id: string): Promise<Room | undefine
   return (await ctx.kv.get(roomKey(id))) as Room | undefined;
 }
 
-export async function saveRoom(ctx: Context, id: string, room: Room): Promise<void> {
-  await ctx.kv.set(roomKey(id), room as unknown as Json);
+/** Saves a room. `pending`: the creation marker to clear in the same commit. */
+export async function saveRoom(
+  ctx: Context,
+  id: string,
+  room: Room,
+  pending?: string,
+): Promise<void> {
+  if (!pending) return ctx.kv.set(roomKey(id), room as unknown as Json);
+  await ctx.kv
+    .atomic()
+    .set(roomKey(id), room as unknown as Json)
+    .delete(pending)
+    .commit();
+}
+
+// ───────────────────────────────────────────────────────────── creation and permissions
+
+/**
+ * Creation marker of a member's room in a hub, claimed (check-null) before `createChannel`
+ * and cleared with the room record. It holds the token of the attempt's `provisionKey`: a
+ * redelivered or interrupted hub join resumes with the same key, so the host returns the
+ * channel the first attempt created instead of a second one. The sweep finishes or cleans
+ * up markers left by a crash (an untracked channel is deleted once empty).
+ */
+export const PENDING = "pending:";
+export const pendingKey = (hubId: string, memberId: string) => PENDING + hubId + ":" + memberId;
+export type Pending = { token: string; at: number };
+export const PENDING_SECONDS = 86400;
+/** A marker older than this belongs to an interrupted attempt (the sweep cleans it up). */
+export const STALE_PENDING_MS = 120_000;
+export const provisionKey = (hubId: string, memberId: string, token: string) =>
+  "room:" + hubId + ":" + memberId + ":" + token;
+/** A hub whose rooms Discord refused for a missing permission: joins wait BLOCKED_SECONDS. */
+export const blockedKey = (hubId: string) => "blocked:" + hubId;
+export const BLOCKED_SECONDS = 300;
+/** Instance status line of a hub missing Discord permissions. */
+export const permissionsStatus = (hubId: string) => "permissions:" + hubId;
+
+/** Discord refused the request for a missing permission (not a missing Cicord grant). */
+export function permissionRefusal(e: unknown): boolean {
+  return /discord: missing permissions|missing permissions|HTTP 403|50013/i.test(errorText(e));
+}
+
+/**
+ * The Discord permissions the bot lacks to run the hub: Move Members in the hub, and
+ * Manage Channels, Connect and Move Members where its rooms are created. Unknown
+ * permissions (an empty answer: the bot member is not known yet) never block.
+ */
+export async function missingPermissions(
+  ctx: Context,
+  hub: Hub,
+  target: ChannelRef | undefined,
+): Promise<Permission[]> {
+  let bot: Member | undefined;
+  try {
+    bot = await ctx.server.member(ctx.bot.user.id);
+  } catch {
+    return [];
+  }
+  if (!bot) return [];
+  const missing = new Set<Permission>();
+  const check = (perms: readonly string[], needed: readonly Permission[]) => {
+    if (!perms.length || perms.includes("Administrator")) return;
+    for (const p of needed) if (!perms.includes(p)) missing.add(p);
+  };
+  const hubRef = hubChannel(ctx, hub);
+  if (hubRef) check(bot.permissionsIn(hubRef), ["MoveMembers"]);
+  check(target ? bot.permissionsIn(target) : (bot.permissions ?? []), [
+    "ManageChannels",
+    "Connect",
+    "MoveMembers",
+  ]);
+  return [...missing];
 }
 
 async function forgetRoom(ctx: Context, id: string): Promise<void> {
@@ -240,4 +311,32 @@ export async function patchRoom(ctx: Context, id: string, update: (room: Room) =
       return room;
   }
   throw Error("Concurrent room updates");
+}
+
+// Discord allows two renames of a channel per 10 minutes: the third would wait for minutes.
+const RENAME_WINDOW = 10 * 60 * 1000;
+/**
+ * Reserves a rename of `channelId` in the durable per-channel window (shared by every realm
+ * and kept across restarts). Returns false when two renames already happened within ten
+ * minutes. `force` records the rename even then: privacy erasure must not be refused.
+ */
+export async function reserveRename(
+  ctx: Context,
+  channelId: string,
+  force = false,
+): Promise<boolean> {
+  const key = "rename:" + channelId;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const entry = await ctx.kv.getEntry<number[]>(key),
+      now = Date.now(),
+      recent = (entry?.value ?? []).filter((at) => now - at < RENAME_WINDOW);
+    if (recent.length >= 2 && !force) return false;
+    const committed = await ctx.kv
+      .atomic()
+      .check(key, entry?.version ?? null)
+      .set(key, [...recent, now], { ttlSeconds: RENAME_WINDOW / 1000 })
+      .commit();
+    if (committed.ok) return true;
+  }
+  throw new Error("Concurrent renames of this room; retry");
 }

@@ -22,7 +22,18 @@ type Birthday = {
   roleDone?: number;
 };
 type Grant = { role: string; until: number; task: string };
+/** What was done for a member's celebration of one year. */
+type Mark = { greeted?: boolean; role?: boolean; published?: boolean };
 const DAY = 86400000;
+// One greeting, role and event per member and year, even after `/birthday remove` and a new
+// opt-in (which gets a new record id). Self-service withdrawal keeps the marker; privacy
+// erasure deletes it. It outlives every date the member could pick in the same year.
+const markKey = (owner: string, year: number) => `celebrated:${owner}:${year}`;
+const MARK_TTL = 400 * 86400;
+const annualKey = (owner: string, year: number) => `birthday:${owner}:${year}`;
+// Discord nonces are at most 25 characters: a snowflake in base 36 takes 13.
+const nonceOf = (owner: string, year: number) =>
+  `bd${/^\d+$/.test(owner) ? BigInt(owner).toString(36) : owner}-${year}`.slice(0, 25);
 async function memberZone(ctx: Context, id: string) {
   if (ctx.features.enabled("personalTimeZone") && ctx.plugins.has("reminders")) {
     const res = (await ctx.plugins.query("reminders", "timezone", { userId: id })) as {
@@ -75,9 +86,27 @@ async function clearRole(ctx: Context, b: Birthday, force = false) {
   await ctx.kv.delete("grant:" + b.id);
   await ctx.schedule.cancel(grant.task);
 }
-async function erase(ctx: Context, owner: string) {
+async function marks(ctx: Context, owner: string) {
+  const out: { key: string; year: number; value: Mark }[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await ctx.kv.list<Mark>({ prefix: `celebrated:${owner}:`, limit: 100, cursor });
+    for (const item of page.items)
+      out.push({ key: item.key, year: Number(item.key.split(":")[2]), value: item.value });
+    cursor = page.cursor;
+  } while (cursor);
+  return out;
+}
+/** Withdraws the opt-in. `privacy` also deletes the per-year celebration markers. */
+async function erase(ctx: Context, owner: string, privacy = true) {
+  let erased = 0;
+  if (privacy)
+    for (const m of await marks(ctx, owner)) {
+      await ctx.kv.delete(m.key);
+      erased++;
+    }
   const b = await byOwner(ctx, owner);
-  if (!b) return { erased: 0 };
+  if (!b) return { erased };
   await clearRole(ctx, b, true);
   await ctx.schedule.cancel(b.task);
   await ctx.kv
@@ -86,7 +115,7 @@ async function erase(ctx: Context, owner: string) {
     .delete("birthday:" + b.id)
     .rankRemove("upcoming", b.id)
     .commit();
-  return { erased: 1 };
+  return { erased: erased + 1 };
 }
 
 async function role(ctx: Context, b: Birthday, year: number) {
@@ -101,7 +130,7 @@ async function role(ctx: Context, b: Birthday, year: number) {
       "member-roles",
       "grantTemporary",
       { userId: b.owner, role, durationSeconds: 86400, reason: "Birthday" },
-      { idempotencyKey: `birthday:${b.id}:${year}` },
+      { idempotencyKey: annualKey(b.owner, year) },
     );
     return;
   }
@@ -138,28 +167,34 @@ async function celebrate(ctx: Context, payload: Json | undefined) {
     Math.floor(toLocal(zone, at / 60000) / 1440);
   const due = at <= now && (at >= b.since || sameDay) && b.year !== year;
   if (due && (await ctx.server.member(b.owner))) {
-    if (b.announced !== year) {
-      await ctx.server
-        .channel(ctx.config.channel)
-        .send({
-          content: ctx.i18n.t("greeting", { member: `<@${b.owner}>` }),
-          allowedMentions: { users: [b.owner], roles: false, everyone: false },
-          nonce: `bd${b.id}-${year}`,
-          enforceNonce: true,
-        });
-      b.announced = year;
-      await ctx.kv.set("birthday:" + b.id, b);
+    const key = markKey(b.owner, year);
+    const mark: Mark = (await ctx.kv.get<Mark>(key)) ?? {};
+    const save = () => ctx.kv.set(key, mark, { ttlSeconds: MARK_TTL });
+    // `announced` and `roleDone` are the per-record receipts of earlier versions.
+    if (!mark.greeted && b.announced !== year) {
+      await ctx.server.channel(ctx.config.channel).send({
+        content: ctx.i18n.t("greeting", { member: `<@${b.owner}>` }),
+        allowedMentions: { users: [b.owner], roles: false, everyone: false },
+        nonce: nonceOf(b.owner, year),
+        enforceNonce: true,
+      });
+      mark.greeted = true;
+      await save();
     }
-    if (b.roleDone !== year) {
+    if (!mark.role && b.roleDone !== year) {
       await role(ctx, b, year);
-      b.roleDone = year;
-      await ctx.kv.set("birthday:" + b.id, b);
+      mark.role = true;
+      await save();
     }
-    await ctx.events.publish(
-      "today",
-      { userId: b.owner },
-      { version: 1, idempotencyKey: `birthday:${b.id}:${year}` },
-    );
+    if (!mark.published) {
+      await ctx.events.publish(
+        "today",
+        { userId: b.owner },
+        { version: 1, idempotencyKey: annualKey(b.owner, year) },
+      );
+      mark.published = true;
+      await save();
+    }
     b.year = year;
   }
   const next = anniversary(year + 1, b.month, b.day, ctx.config.hour, zone);
@@ -196,7 +231,7 @@ export default definePlugin({
   },
   events: {
     async memberLeave(ctx, m) {
-      if (ctx.config.eraseOnLeave) await erase(ctx, m.id);
+      if (ctx.config.eraseOnLeave) await erase(ctx, m.id, true);
     },
   },
   tasks: {
@@ -229,7 +264,7 @@ export default definePlugin({
         remove: subcommand({
           description: "Withdraw your birthday",
           async run(ctx, i) {
-            await erase(ctx, i.user.id);
+            await erase(ctx, i.user.id, false);
             await i.reply(ctx.i18n.t("removed"));
           },
         }),
@@ -270,21 +305,23 @@ export default definePlugin({
     "DELETE /birthday": {
       access: "member",
       async handler(ctx, req): Promise<RouteResponse> {
-        return req.viewer ? erase(ctx, req.viewer.user.id) : { status: 403 };
+        return req.viewer ? erase(ctx, req.viewer.user.id, false) : { status: 403 };
       },
     },
   },
   privacy: {
     async export(ctx, id): Promise<Json> {
       const b = await byOwner(ctx, id);
-      if (!b) return {};
+      const celebrated = (await marks(ctx, id)).map((m) => m.year);
+      if (!b) return celebrated.length ? { celebrated } : {};
       const role = await ctx.kv.get("grant:" + b.id);
       return {
         birthday: { day: b.day, month: b.month },
         lastCelebrationYear: b.year || null,
         role: role ?? null,
+        ...(celebrated.length ? { celebrated } : {}),
       };
     },
-    erase,
+    erase: (ctx, id) => erase(ctx, id, true),
   },
 });

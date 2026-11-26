@@ -10,7 +10,7 @@ import {
   type MessagePayload,
 } from "@cicord/sdk";
 import { searchKnowledge, sections, visible, type Passage } from "./knowledge.ts";
-import { askProvider } from "./provider.ts";
+import { askProvider, providerDeadline } from "./provider.ts";
 import type { Routes } from "./routes.ts";
 
 const quiet = { users: false, roles: false, everyone: false };
@@ -28,6 +28,30 @@ function allowed(ctx: Context, m: Member) {
     (!ctx.config.allowedRoles.length || ctx.config.allowedRoles.some((r) => m.hasRole(r)))
   );
 }
+/**
+ * Claims the member and channel cooldowns for one question. The claim stores the question
+ * ID, so a redelivered event or a retried task for the same question is not rate limited by
+ * its own claim.
+ */
+async function reserveRate(ctx: Context, userId: string, channelId: string, id: string) {
+  const mkey = userKey(userId, "rate"),
+    ckey = "rate:" + channelId;
+  if (
+    (
+      await ctx.kv
+        .atomic()
+        .check(mkey, null)
+        .check(ckey, null)
+        .set(mkey, id, ttl(ctx.config.memberInterval))
+        .set(ckey, id, ttl(ctx.config.channelInterval))
+        .commit()
+    ).ok
+  )
+    return true;
+  const [member, channel] = await ctx.kv.getMany([mkey, ckey]);
+  return member === id && channel === id;
+}
+type Answer = { message: MessagePayload; source?: Passage; refused?: true };
 async function answer(
   ctx: Context,
   user: Member,
@@ -36,8 +60,14 @@ async function answer(
   id: string,
   ephemeral: boolean,
   history: string[] = [],
-): Promise<{ message: MessagePayload; source?: Passage }> {
-  const say = (key: string) => ({ message: { content: ctx.i18n.t(key), allowedMentions: quiet } });
+  options: { admitted?: boolean; deadline?: number } = {},
+): Promise<Answer> {
+  // A refusal (disabled, restricted, limited) is shown privately to /ask only. The gateway
+  // path stays silent so that the bot never echoes spam in a public help channel.
+  const say = (key: string): Answer => ({
+    message: { content: ctx.i18n.t(key), allowedMentions: quiet },
+    refused: true,
+  });
   if (!ctx.config.enabled) return say("disabled");
   if (
     ch.type === "dm" ||
@@ -46,26 +76,13 @@ async function answer(
     (await ctx.kv.get("opt:" + user.id))
   )
     return say("restricted");
-  const mkey = userKey(user.id, "rate"),
-    ckey = "rate:" + ch.id;
-  if (
-    !(
-      await ctx.kv
-        .atomic()
-        .check(mkey, null)
-        .check(ckey, null)
-        .set(mkey, true, ttl(ctx.config.memberInterval))
-        .set(ckey, true, ttl(ctx.config.channelInterval))
-        .commit()
-    ).ok
-  )
-    return say("limited");
+  if (!options.admitted && !(await reserveRate(ctx, user.id, ch.id, id))) return say("limited");
   const live = await ctx.server.member(user.id);
   if (!live || !allowed(ctx, live) || !live.canView(ch)) return say("restricted");
   const docs = await searchKnowledge(ctx, question, live, ephemeral ? undefined : ch);
   const result =
     docs.length && ctx.secrets.has("API_KEY")
-      ? await askProvider(ctx, question, docs, history)
+      ? await askProvider(ctx, question, docs, history, options.deadline)
       : docs.length
         ? "unavailable"
         : "unknown";
@@ -204,6 +221,7 @@ export default definePlugin({
   },
   tasks: {
     async question(ctx, payload, task) {
+      const started = Date.now();
       const reply = task?.interaction;
       if (!reply || !payload || typeof payload !== "object" || Array.isArray(payload)) return;
       const id = String(payload.id ?? "");
@@ -214,7 +232,9 @@ export default definePlugin({
       const member = await ctx.server.member(reply.userId);
       const channel = ctx.server.channel({ id: reply.channelId });
       if (!member) return;
-      const result = await answer(ctx, member, channel, pending.question, id, true);
+      const result = await answer(ctx, member, channel, pending.question, id, true, [], {
+        deadline: providerDeadline(started),
+      });
       // Recheck immediately before delivery, after all provider/storage work.
       const optedOut = await ctx.kv.get("opt:" + reply.userId);
       const retained = await ctx.kv.get(key);
@@ -275,12 +295,14 @@ export default definePlugin({
       }
     },
     async help(ctx, p) {
+      const started = Date.now();
       if (!ctx.config.enabled) return;
       const ref = p as { channel: string; message: string };
       const channel = ctx.server.channel({ id: ref.channel }),
         msg = await channel.message(ref.message);
+      // A fetched message carries no member: eligibility is read from the live member below.
       if (
-        !msg?.member ||
+        !msg ||
         msg.author.bot ||
         !(
           ctx.config.channels.includes(channel.key ?? "") ||
@@ -300,6 +322,18 @@ export default definePlugin({
         ).ok
       )
         return;
+      // Admission (role, access, opt-out, cooldown) was decided before scheduling. Re-check
+      // the live member before any visible effect, and stay silent if they lost access.
+      const live = await ctx.server.member(msg.author.id);
+      if (
+        !live ||
+        !allowed(ctx, live) ||
+        !live.canView(channel) ||
+        (await ctx.kv.get("opt:" + msg.author.id))
+      ) {
+        await ctx.kv.delete(userKey(msg.author.id, "task:" + msg.id));
+        return;
+      }
       await channel.typing();
       const q = msg.content.slice(0, 1000),
         history: string[] = [];
@@ -311,8 +345,11 @@ export default definePlugin({
             history.push(previous.content.slice(0, 750));
         }
       }
-      const reply = await answer(ctx, msg.member, channel, q, msg.id, false, history);
-      await msg.reply(reply.message);
+      const reply = await answer(ctx, live, channel, q, msg.id, false, history, {
+        admitted: true,
+        deadline: providerDeadline(started),
+      });
+      if (!reply.refused) await msg.reply(reply.message);
       await ctx.kv.delete(userKey(msg.author.id, "task:" + msg.id));
     },
   },
@@ -419,6 +456,10 @@ export default definePlugin({
         )
       )
         return;
+      // Apply the role filter, access and cooldowns before queueing. A limited or excluded
+      // member gets no public reply and no typing indicator.
+      if (!allowed(ctx, msg.member) || !msg.member.canView(msg.channel)) return;
+      if (!(await reserveRate(ctx, msg.author.id, msg.channel.id, msg.id))) return;
       const task = await ctx.schedule.after(1, "help", {
         channel: msg.channel.id,
         message: msg.id,

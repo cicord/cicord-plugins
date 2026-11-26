@@ -66,3 +66,57 @@ it("does not retry an ambiguous network failure", async () => {
   expect(await askProvider(ctx, "question", [])).toBe("unavailable");
   expect(charges).toBe(1);
 });
+
+function scripted(replies: { status: number; headers?: Record<string, string> }[]) {
+  const timeouts: (number | undefined)[] = [];
+  const docs = sections("# Restart\nPress the green button.", "knowledge/faq.md", "https://d.example/");
+  const ctx = {
+    config: { maxOutputTokens: 100, model: "fixture" },
+    secrets: { ref: () => "opaque-handle" },
+    http: {
+      fetch: async (_url: string, init: { timeoutMs?: number }) => {
+        timeouts.push(init.timeoutMs);
+        const r = replies[timeouts.length - 1]!;
+        return {
+          status: r.status,
+          headers: r.headers ?? {},
+          json: async () => ({
+            content: [{ type: "text", text: JSON.stringify({ source: 0, quote: "Press the green button." }) }],
+          }),
+        };
+      },
+    },
+  } as unknown as Context;
+  return { ctx, docs, timeouts };
+}
+it("retries once after an unbilled overload or rate limit, within the deadline", async () => {
+  for (const first of [{ status: 529 }, { status: 429, headers: { "retry-after": "0" } }]) {
+    const fake = scripted([first, { status: 200 }]);
+    const result = await askProvider(fake.ctx, "Which button?", fake.docs, [], Date.now() + 8000);
+    expect(typeof result === "object" && result.text).toBe("Press the green button.");
+    expect(fake.timeouts).toHaveLength(2);
+  }
+  const twice = scripted([{ status: 529 }, { status: 529 }, { status: 200 }]);
+  expect(await askProvider(twice.ctx, "q", twice.docs, [], Date.now() + 8000)).toBe("unavailable");
+  expect(twice.timeouts).toHaveLength(2);
+});
+it("does not retry a spend-cap 429 or a 500", async () => {
+  for (const first of [{ status: 429 }, { status: 500 }, { status: 503 }]) {
+    const fake = scripted([first, { status: 200 }]);
+    expect(await askProvider(fake.ctx, "q", fake.docs, [], Date.now() + 8000)).toBe("unavailable");
+    expect(fake.timeouts).toHaveLength(1);
+  }
+});
+it("gives the provider the remaining handler time and never starts a call that cannot finish", async () => {
+  const fake = scripted([{ status: 200 }]);
+  await askProvider(fake.ctx, "q", fake.docs, [], Date.now() + 8000);
+  expect(fake.timeouts[0]).toBeGreaterThan(7000);
+  expect(fake.timeouts[0]).toBeLessThanOrEqual(8000);
+  const late = scripted([{ status: 200 }]);
+  expect(await askProvider(late.ctx, "q", late.docs, [], Date.now() + 1500)).toBe("unavailable");
+  expect(late.timeouts).toHaveLength(0);
+  // No retry when the backoff would leave too little time for a second call.
+  const tight = scripted([{ status: 529 }, { status: 200 }]);
+  expect(await askProvider(tight.ctx, "q", tight.docs, [], Date.now() + 2300)).toBe("unavailable");
+  expect(tight.timeouts).toHaveLength(1);
+});

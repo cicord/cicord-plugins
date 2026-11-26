@@ -1,13 +1,36 @@
 import type { Context, Json } from "@cicord/sdk";
 import { dayKey, dayOf, levelOf, xpKey } from "./levels.ts";
 
-type Receipt = { xp: number; previous: number; level: number; eventId?: string };
+/**
+ * The highest level a member has reached, per season. A level is a business fact crossed
+ * once: reaction toggles, `/xp remove` then `/xp give`, and replays never cross it again.
+ * A season reset (the member's archive roll) starts a new mark tagged with that season.
+ */
+export type Peak = { level: number; season?: string };
+/** Set in the receipt of the award that crossed a level, so a replay repeats its effects. */
+export type Crossing = { level: number; previous: number; season?: string };
+export type Receipt = {
+  xp: number;
+  previous: number;
+  level: number;
+  /** Receipts written before 0.2.0's high-water mark: never replayed as a crossing. */
+  eventId?: string;
+  crossed?: Crossing;
+};
 const ttl = 30 * 86400;
+export const WEEK = 7 * 86400;
+export const peakKey = (uid: string) => "peak:" + uid;
+export const receiptKey = (uid: string, id: string) => "award:" + uid + ":" + id;
+/** Per-member index of references whose key starts with a message id (privacy hooks). */
+export const authoredIndex = (uid: string, messageId: string) => "by:" + uid + ":msg:" + messageId;
+export const reactedIndex = (uid: string, messageId: string) => "by:" + uid + ":gave:" + messageId;
 export class ConcurrentReaction extends Error {}
 export type ReactionChange = {
   key: string;
   version: string | null;
-  value: { emojis: string[]; amount: number };
+  value: { emojis: string[]; amount: number; award?: string };
+  /** Reactor-side privacy index written with the reaction record. */
+  index: string;
 };
 export function activeArchive(ctx: Context) {
   const s = ctx.config.season;
@@ -22,8 +45,9 @@ export async function credit(
   reaction?: ReactionChange,
 ): Promise<Receipt> {
   if (!Number.isSafeInteger(amount)) throw new Error("Invalid XP amount");
-  const receipt = "award:" + uid + ":" + id,
-    k = xpKey(uid);
+  const receipt = receiptKey(uid, id),
+    k = xpKey(uid),
+    pk = peakKey(uid);
   for (;;) {
     const hit = await ctx.kv.get<Receipt>(receipt);
     if (hit) return hit;
@@ -37,17 +61,40 @@ export async function credit(
     const prior = rolling ? 0 : (old?.value ?? 0),
       xp = Math.max(0, absolute ? amount : prior + amount);
     if (!Number.isSafeInteger(xp)) throw new Error("XP exceeds safe integer range");
-    const res = { xp, previous: levelOf(prior), level: levelOf(xp), eventId: crypto.randomUUID() };
+    // Members from before the mark existed have reached at least their current level.
+    const stored = await ctx.kv.getEntry<Peak>(pk);
+    const base: Peak = rolling
+      ? { level: 0, season: archive }
+      : {
+          level: Math.max(stored?.value.level ?? 0, levelOf(prior)),
+          ...(stored?.value.season ? { season: stored.value.season } : {}),
+        };
+    const level = levelOf(xp);
+    const res: Receipt = { xp, previous: levelOf(prior), level };
+    if (level > base.level)
+      res.crossed = {
+        level,
+        previous: base.level,
+        ...(base.season ? { season: base.season } : {}),
+      };
     const tx = ctx.kv
       .atomic()
       .check(k, old?.version ?? null)
       .check(receipt, null)
+      .check(pk, stored?.version ?? null)
       .set(k, xp)
       .set(receipt, res, { ttlSeconds: ttl });
+    const peak: Peak = { ...base, level: Math.max(base.level, level) };
+    if (
+      rolling ||
+      peak.level !== (stored?.value.level ?? 0) ||
+      (peak.season ?? null) !== (stored?.value.season ?? null)
+    )
+      tx.set(pk, peak);
     if (reaction)
-      tx.check(reaction.key, reaction.version).set(reaction.key, reaction.value, {
-        ttlSeconds: 7 * 86400,
-      });
+      tx.check(reaction.key, reaction.version)
+        .set(reaction.key, { ...reaction.value, award: id }, { ttlSeconds: WEEK })
+        .set(reaction.index, true, { ttlSeconds: WEEK });
     if (rolling) {
       tx.check(mark, null).set(mark, old?.value ?? 0);
       if (old?.value) tx.rankSet("season:" + archive, uid, old.value);
@@ -91,6 +138,11 @@ export async function seasonBatch(ctx: Context, p: Json | undefined) {
   if (page.cursor) await ctx.schedule.after(1, "season", { cursor: page.cursor });
   else await ctx.kv.set("season:" + season, true);
 }
+type ImportPage = { offset?: number; invalid?: number; rows?: number[] };
+/**
+ * `userId,xp` rows, 100 per task. A malformed row is skipped and reported, never retried:
+ * the import completes and the status line lists the first invalid row numbers.
+ */
 export async function importCsv(ctx: Context, p: Json | undefined) {
   const file = ctx.config.importFile;
   if (
@@ -100,82 +152,179 @@ export async function importCsv(ctx: Context, p: Json | undefined) {
     (await ctx.kv.get("import:" + file))
   )
     return;
-  const rows = (await ctx.files.read(file)).split(/\r?\n/),
-    offset = Number((p as { offset?: number })?.offset ?? 0);
+  let text: string;
+  try {
+    text = await ctx.files.read(file);
+  } catch (error) {
+    ctx.status.set("import-csv", `Cannot read ${file}: ${String(error)}`.slice(0, 300));
+    return;
+  }
+  const rows = text.split(/\r?\n/),
+    page = (p ?? {}) as ImportPage,
+    offset = Number(page.offset ?? 0);
+  let invalid = page.invalid ?? 0;
+  const bad = [...(page.rows ?? [])];
   for (let i = offset; i < Math.min(rows.length, offset + 100); i++) {
     const line = rows[i]!.trim();
     if (!line || (i === 0 && line === "userId,xp")) continue;
     const match = /^([1-9][0-9]{0,19}),([0-9]{1,15})$/.exec(line);
-    if (!match) throw new Error("Invalid XP CSV row " + (i + 1));
+    if (!match) {
+      invalid++;
+      if (bad.length < 10) bad.push(i + 1);
+      continue;
+    }
     await credit(ctx, match[1]!, Number(match[2]), "import:" + file + ":" + i, true);
   }
-  if (rows.length > offset + 100)
-    await ctx.schedule.after(1, "import-csv", { offset: offset + 100 });
-  else await ctx.kv.set("import:" + file, true);
+  if (rows.length > offset + 100) {
+    await ctx.schedule.after(1, "import-csv", { offset: offset + 100, invalid, rows: bad });
+    return;
+  }
+  await ctx.kv.set("import:" + file, true);
+  ctx.status.set(
+    "import-csv",
+    invalid
+      ? `${file} imported; ${invalid} invalid rows skipped (rows ${bad.join(", ")}${invalid > bad.length ? ", …" : ""}). Expected userId,xp.`.slice(
+          0,
+          300,
+        )
+      : null,
+  );
+}
+type Row = { key: string; value: Json };
+/** Every row of one prefix (the prefixes here are all scoped to one member or message). */
+async function rowsOf(ctx: Context, prefix: string, out: Row[]) {
+  let cursor: string | undefined;
+  do {
+    const page = await ctx.kv.list({ prefix, limit: 1000, cursor });
+    out.push(...page.items);
+    cursor = page.cursor;
+  } while (cursor);
+}
+/** Days whose `day:` counters may still exist (the recap prunes yesterday's every morning). */
+const RECENT_DAYS = 14;
+/**
+ * The member's rows, found through member-scoped keys and the `by:<uid>:` index only. Rows
+ * keyed by message id (`msg:`, `reaction:`, legacy `react:`) are reached through the index
+ * written with them. Rows written before the index existed expire on their own (seven-day
+ * TTL, in 0.1 too).
+ *
+ * `references` are other members' rows that point at this member: the reactions they gave
+ * to the member's messages. They are another member's data, so an export leaves them out
+ * (minimal data), and an erasure deletes them with the messages they reference.
+ */
+async function memberRows(ctx: Context, uid: string): Promise<{ rows: Row[]; references: Row[] }> {
+  const rows: Row[] = [];
+  const references: Row[] = [];
+  const exact = [
+    xpKey(uid),
+    "user:" + uid,
+    "cooldown:" + uid,
+    "voice:" + uid,
+    peakKey(uid),
+    pendingKey(uid),
+  ];
+  for (let d = 0; d < RECENT_DAYS; d++)
+    exact.push(dayKey(dayOf(new Date(Date.now() - d * 86400000)), uid));
+  const values = await ctx.kv.getMany(exact);
+  exact.forEach((key, i) => {
+    if (values[i] !== undefined) rows.push({ key, value: values[i]! });
+  });
+  for (const kind of ["award", "notice", "copy", "archived"])
+    await rowsOf(ctx, kind + ":" + uid + ":", rows);
+  const index: Row[] = [];
+  await rowsOf(ctx, "by:" + uid + ":", index);
+  rows.push(...index);
+  for (const { key } of index) {
+    const [, , kind, messageId] = key.split(":");
+    if (!messageId) continue;
+    if (kind === "msg") {
+      const author = await ctx.kv.get("msg:" + messageId);
+      if (author === uid) rows.push({ key: "msg:" + messageId, value: author });
+      // Reactions others gave to the member's message reference it (indexed messages are
+      // never older than the `reaction:` layout, so there is no legacy `react:` row).
+      await rowsOf(ctx, "reaction:" + messageId + ":", references);
+    } else if (kind === "gave") {
+      const own = "reaction:" + messageId + ":" + uid,
+        value = await ctx.kv.get(own);
+      if (value !== undefined) rows.push({ key: own, value });
+      await rowsOf(ctx, "react:" + messageId + ":" + uid + ":", rows);
+    }
+  }
+  const seen = new Set<string>();
+  const unique = (list: Row[]) => list.filter((r) => !seen.has(r.key) && !!seen.add(r.key));
+  return { rows: unique(rows), references: unique(references) };
+}
+type Copy = { channelId: string; messageId: string; kind: string };
+/** Erased member whose published copies still await redaction (drives the status line). */
+const pendingKey = (uid: string) => "pending-copies:" + uid;
+/** Redacts one published announcement or recap row. False: it must be kept for a retry. */
+async function redact(ctx: Context, uid: string, copy: Copy): Promise<boolean> {
+  try {
+    const m = await ctx.server.channel({ id: copy.channelId }).message(copy.messageId);
+    if (!m || m.author.id !== ctx.bot.user.id) return true;
+    if (copy.kind === "level")
+      await m.edit({
+        content: ctx.i18n.t("erased"),
+        embeds: [],
+        components: [],
+        allowedMentions: { users: [] },
+      });
+    else {
+      const embed = m.embeds[0];
+      if (embed)
+        await m.edit({
+          embeds: [
+            {
+              ...embed,
+              description:
+                (embed.description ?? "")
+                  .split("\n")
+                  .filter((line) => !line.includes("<@" + uid + ">"))
+                  .join("\n") || "—",
+            },
+          ],
+          allowedMentions: { users: [] },
+        });
+    }
+    return true;
+  } catch (error) {
+    ctx.log.warn("levels: announcement redaction failed", { error: String(error) });
+    return false;
+  }
 }
 export async function personal(ctx: Context, uid: string, erase: boolean) {
-  const result: { key: string; value: Json }[] = [];
-  let cursor: string | undefined;
-  const ownedMessages = new Set<string>();
-  do {
-    const page = await ctx.kv.list({ prefix: "msg:", limit: 1000, cursor });
-    for (const row of page.items) if (row.value === uid) ownedMessages.add(row.key.slice(4));
-    cursor = page.cursor;
-  } while (cursor);
-  do {
-    const page = await ctx.kv.list({ limit: 1000, cursor });
-    for (const row of page.items) {
-      const [kind, a, b] = row.key.split(":");
-      const owned =
-        (["xp", "user", "cooldown", "voice", "archived", "award", "notice", "copy"].includes(
-          kind!,
-        ) &&
-          a === uid) ||
-        (kind === "day" && b === uid) ||
-        (kind === "msg" && row.value === uid) ||
-        ((kind === "react" || kind === "reaction") && (b === uid || ownedMessages.has(a!)));
-      if (owned) {
-        result.push(row);
-        if (erase) {
-          if (kind === "copy") {
-            const copy = row.value as { channelId: string; messageId: string; kind: string };
-            if (!ctx.features.enabled("privacyCopies"))
-              throw new Error("Grant discord.messages.read to erase published level announcements");
-            const m = await ctx.server.channel({ id: copy.channelId }).message(copy.messageId);
-            if (m && m.author.id === ctx.bot.user.id) {
-              if (copy.kind === "level")
-                await m.edit({
-                  content: ctx.i18n.t("erased"),
-                  embeds: [],
-                  components: [],
-                  allowedMentions: { users: [] },
-                });
-              else {
-                const embed = m.embeds[0];
-                if (embed)
-                  await m.edit({
-                    embeds: [
-                      {
-                        ...embed,
-                        description:
-                          (embed.description ?? "")
-                            .split("\n")
-                            .filter((line) => !line.includes("<@" + uid + ">"))
-                            .join("\n") || "—",
-                      },
-                    ],
-                    allowedMentions: { users: [] },
-                  });
-              }
-            }
-          }
-          await ctx.kv.delete(row.key);
-          if (kind === "archived") await ctx.kv.ranking("season:" + b).remove(uid);
-        }
-      }
+  const { rows: own, references } = await memberRows(ctx, uid);
+  if (!erase) return own;
+  const rows = [...own, ...references];
+  const erased: Row[] = [];
+  let kept = 0;
+  const copies = ctx.features.enabled("privacyCopies");
+  const deletions: string[] = [];
+  for (const row of rows) {
+    const [kind, , season] = row.key.split(":");
+    if (kind === "copy" && !(copies && (await redact(ctx, uid, row.value as Copy)))) {
+      // Kept only to redact the public message once discord.messages.read is granted.
+      kept++;
+      continue;
     }
-    cursor = page.cursor;
-  } while (cursor);
-  if (erase) await ctx.kv.ranking("xp").remove(uid);
-  return result;
+    if (kind === "archived") await ctx.kv.ranking("season:" + season).remove(uid);
+    deletions.push(row.key);
+    erased.push(row);
+  }
+  for (let i = 0; i < deletions.length; i += 100) {
+    const tx = ctx.kv.atomic();
+    for (const key of deletions.slice(i, i + 100)) tx.delete(key);
+    await tx.commit();
+  }
+  await ctx.kv.ranking("xp").remove(uid);
+  if (kept) await ctx.kv.set(pendingKey(uid), kept);
+  // Cleared only when no erased member has copies left, whoever was erased last.
+  const pending = (await ctx.kv.list({ prefix: "pending-copies:", limit: 1 })).items.length;
+  ctx.status.set(
+    "privacy-copies",
+    pending
+      ? "Published level-up or recap messages of erased members could not be redacted. Grant discord.messages.read (feature privacyCopies) and repeat their erasure."
+      : null,
+  );
+  return erased;
 }

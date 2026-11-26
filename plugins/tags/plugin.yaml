@@ -8,7 +8,7 @@ metadata:
   license: Apache-2.0
   authors: [Cicord]
 spec:
-  engine: ">=0.2.0-0"
+  engine: ">=0.2.0"
   entry: ./src/index.ts
   locales: ./locales
   capabilities:

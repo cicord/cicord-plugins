@@ -4,16 +4,50 @@ import {
   verifyReaders,
   allTickets,
   authorKey,
+  indexed,
   openKey,
+  openNumbers,
   ticketChannel,
+  ticketsByNumber,
   saveTicket,
+  type Ticket,
 } from "./tickets.ts";
 import { readPage, writePage, removeLogCopy } from "./transcript.ts";
+import { whoPrefix } from "./indexes.ts";
+import { removeOwn } from "./messages.ts";
+
+/** The tickets that name a member, from the `who:` index. Erasure also reads every open
+ * ticket: a member who only wrote in an open channel is not named by its record yet, and
+ * their messages must be hidden before a later close archives them. Until the schema-2
+ * migration has indexed every record, the hooks read all of them as 0.4.0 did. */
+async function memberTickets(ctx: Context, userId: string, open = false): Promise<Ticket[]> {
+  if (!(await indexed(ctx))) return allTickets(ctx);
+  const numbers = new Set<number>(open ? await openNumbers(ctx) : []);
+  let cursor: string | undefined;
+  do {
+    const page = await ctx.kv.list({
+      prefix: whoPrefix(userId),
+      limit: 1000,
+      ...(cursor ? { cursor } : {}),
+    });
+    for (const item of page.items) numbers.add(Number(item.key.slice(item.key.lastIndexOf(":") + 1)));
+    cursor = page.cursor;
+  } while (cursor);
+  return ticketsByNumber(ctx, [...numbers].sort((a, b) => a - b));
+}
+
+async function forgetMember(ctx: Context, userId: string) {
+  for (;;) {
+    const page = await ctx.kv.list({ prefix: whoPrefix(userId), limit: 100 });
+    for (const item of page.items) await ctx.kv.delete(item.key);
+    if (!page.cursor) return;
+  }
+}
 
 export const privacy = {
   async export(ctx: Context, userId: string): Promise<Json> {
     const records: Json[] = [];
-    for (const t of await allTickets(ctx)) {
+    for (const t of await memberTickets(ctx, userId)) {
       const own = t.author.id === userId;
       const notes = t.notes.filter((n) => n.by.id === userId);
       const events = t.events
@@ -72,7 +106,7 @@ export const privacy = {
     const names = new Set<string>();
     const member = await ctx.server.member(userId);
     if (member) names.add(member.displayName);
-    const tickets = await allTickets(ctx);
+    const tickets = await memberTickets(ctx, userId, true);
     for (const t of tickets)
       for (const p of [
         t.author,
@@ -126,7 +160,7 @@ export const privacy = {
         delete t.appeal;
         delete t.request;
         if (live && t.welcomeId)
-          await (await live.message(t.welcomeId))?.delete("Member privacy request");
+          await removeOwn(ctx, await live.message(t.welcomeId), "Member privacy request");
         if (live)
           await ctx.server.editChannel(live, {
             name: "ticket-" + t.number,
@@ -186,7 +220,7 @@ export const privacy = {
         });
       for (const c of t.copies ?? [])
         if (c.userId === userId) {
-          if (live) await (await live.message(c.messageId))?.delete("Member privacy request");
+          if (live) await removeOwn(ctx, await live.message(c.messageId), "Member privacy request");
           changed = true;
         }
       t.copies = t.copies?.filter((c) => c.userId !== userId);
@@ -210,15 +244,20 @@ export const privacy = {
           changed = true;
         }
       }
-      for (const copy of t.directCopies ?? [])
-        if (own || copy.authorId === userId) {
-          await ctx.server.retractDM(copy.messageId);
-          changed = true;
-        }
-      t.directCopies = t.directCopies?.filter((copy) => !own && copy.authorId !== userId);
+      const dms = (t.directCopies ?? []).filter((copy) => own || copy.authorId === userId);
+      if (dms.length && !ctx.features.enabled("modmail")) {
+        // Keep the receipts: they are the only way to retract once the grant returns.
+        ctx.log.warn("DM copies kept: modmail (discord.dm.send) is not granted", { ticket: t.id });
+        ctx.status.set("dmCopies", "DM copies of erased members wait for discord.dm.send");
+      } else {
+        for (const copy of dms) await ctx.server.retractDM(copy.messageId);
+        if (dms.length) changed = true;
+        t.directCopies = t.directCopies?.filter((copy) => !own && copy.authorId !== userId);
+      }
       for (const notice of t.notices ?? [])
         if (notice.users.includes(userId)) {
-          if (live) await (await live.message(notice.messageId))?.delete("Member privacy request");
+          if (live)
+            await removeOwn(ctx, await live.message(notice.messageId), "Member privacy request");
           changed = true;
         }
       t.notices = t.notices?.filter((n) => !n.users.includes(userId));
@@ -226,13 +265,16 @@ export const privacy = {
       // the current erasure subject and cannot be used when reading a later transcript.
       if (live) {
         const hidden = new Set(t.redactedMessageIds ?? []);
+        const manage = ctx.features.enabled("managedMessages");
+        let retainedBySubject = false;
         let before: string | undefined;
         for (;;) {
           const batch = await live.messages({ limit: 100, ...(before ? { before } : {}) });
           for (const m of batch)
             if (m.author.id === userId) {
               hidden.add(m.id);
-              if (t.archivePolicy) await m.delete("Member privacy request");
+              if (t.archivePolicy && manage) await m.delete("Member privacy request");
+              else if (t.archivePolicy) retainedBySubject = true;
             }
           if (batch.length < 100) break;
           const next = batch[batch.length - 1]!.id;
@@ -243,15 +285,25 @@ export const privacy = {
           t.redactedMessageIds = [...hidden];
           changed = true;
         }
+        if (retainedBySubject) {
+          // Without discord.messages.manage the member's own messages cannot be deleted
+          // from the read-only source: remove the retained channel instead.
+          await ctx.server.deleteChannel({ id: t.channelId }, "Member privacy request");
+          t.channelRemoved = true;
+          delete t.archivePolicy;
+          delete t.archiveRoles;
+          changed = true;
+        }
       }
       if (changed) {
         await removeLogCopy(ctx, t);
         erased++;
       }
-      // Invalidate retained snapshots even if this ticket did not yet mention the subject.
+      // Invalidate retained snapshots of every ticket that named the subject.
       delete t.erasing;
       await saveTicket(ctx, t, true);
     }
+    await forgetMember(ctx, userId);
     return { erased };
   },
 };

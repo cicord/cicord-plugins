@@ -15,4 +15,4 @@ The default destination accepts publicly readable sources. Explicit mappings can
 
 `/starboard top` checks the reader's live access to both source and destination. The `starred` event carries the message ID, author ID and star count. Subscription partners are optional.
 
-The member export lists the source IDs and star counts of their highlights. Erasure removes those entries, the ranking and the Discord copies. Reaction membership is fetched from Discord without persisting a list of voters. Set `enabled: false` to disable the instance.
+The member export lists the source IDs and star counts of their highlights. Erasure removes those entries, the ranking and the Discord copies, including a highlight still inside its ten-second coalescing window (its author is read from the source message). Reaction membership is fetched from Discord without persisting a list of voters. Set `enabled: false` to disable the instance.

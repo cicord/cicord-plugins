@@ -9,7 +9,7 @@ metadata:
   license: Apache-2.0
   keywords: [announcements, schedule, reminders, cron, events]
 spec:
-  engine: ">=0.2.0-0"
+  engine: ">=0.2.0"
   entry: ./src/index.ts
   capabilities:
     - storage.kv # persist plugin state

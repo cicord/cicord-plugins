@@ -120,7 +120,14 @@ async function schedule(ctx: Context, id: string, plan: Plan, after: number) {
 async function stat(ctx: Context, payload: Json, meta: { id: string }, kind: "ticket" | "case") {
   if (!ctx.config.enabled || !ctx.features.enabled("statistics")) return;
   const p = payload as Record<string, Json>;
-  const id = kind === "ticket" ? p.assignee : (p.moderatorId ?? p.moderator);
+  // moderation.case v2 carries `moderator: {id, name} | null` (null for automatic cases).
+  const moderator = p.moderator,
+    id =
+      kind === "ticket"
+        ? p.assignee
+        : moderator && typeof moderator === "object" && !Array.isArray(moderator)
+          ? moderator.id
+          : undefined;
   if (typeof id !== "string" || !staff(ctx, await ctx.server.member(id))) return;
   const receipt = `receipt:${id}:${meta.id}`;
   const key = kind + ":" + id;

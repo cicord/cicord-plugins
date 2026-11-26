@@ -1,5 +1,5 @@
 import type { Context, Json, Permission, OverwritePatch } from "@cicord/sdk";
-import { getRoom, patchRoom, roomSettings } from "./rooms.ts";
+import { getRoom, hubChannel, patchRoom, pendingKey, reserveRename, roomSettings } from "./rooms.ts";
 import type { Room } from "./rooms.ts";
 
 type State = "allow" | "deny" | "clear";
@@ -98,6 +98,16 @@ export async function memberData(ctx: Context, userId: string, erase: boolean) {
       erased++;
     }
   }
+  // Creation markers (two-minute TTL) name the member while a room is being created.
+  for (const hub of ctx.config.hubs ?? []) {
+    const id = hubChannel(ctx, hub)?.id;
+    if (!id || (await ctx.kv.get(pendingKey(id, userId))) === undefined) continue;
+    records.push({ creatingRoomIn: id });
+    if (erase) {
+      await ctx.kv.delete(pendingKey(id, userId));
+      erased++;
+    }
+  }
   do {
     const page = await ctx.kv.list({ prefix: "room:", limit: 50, cursor });
     for (const { key } of page.items) {
@@ -145,11 +155,14 @@ export async function memberData(ctx: Context, userId: string, erase: boolean) {
         if (
           (named && room.name === channel.name) ||
           (owns && (room.legacy || room.opened === undefined) && generated)
-        )
+        ) {
+          // Counted against the rename window, never refused.
+          await reserveRename(ctx, id, true);
           await ctx.server.editChannel(channel, {
             name: ctx.i18n.t("anonymousRoom", { number: room.n }),
             reason: "voice-rooms: erase owner name",
           });
+        }
         await patchRoom(ctx, id, (r) => {
           if (r.owner === userId) r.owner = ctx.bot.user.id;
           if (r.nameOwner === userId) {

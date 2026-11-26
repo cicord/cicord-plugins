@@ -1,4 +1,6 @@
 {
   "backoff": "Flux indisponible. Nouvel essai dans {minutes} min.",
-  "uncertain": "Envoi incertain. Vérifiez le salon avant de réessayer."
+  "uncertain": "L’envoi de « {title} » est incertain et ne sera pas renouvelé. Vérifiez le salon.",
+  "refused": "Discord a refusé la publication dans {channel} ({reason}). L’entrée reste en attente et sera réessayée à la prochaine vérification.",
+  "rejected": "Discord a rejeté l’entrée « {title} » ({reason}). Elle est ignorée et ne sera pas renvoyée."
 }

@@ -1,4 +1,4 @@
-import type { Message, MessagePayload } from "@cicord/sdk";
+import type { Json, Message, MessagePayload } from "@cicord/sdk";
 import {
   callRoute,
   createTestContext,
@@ -26,8 +26,9 @@ const grants = [
   "portal.routes",
 ];
 
-function setup(config: Record<string, unknown> = {}) {
+function setup(config: Record<string, unknown> = {}, features = ["discussionThread"]) {
   return createTestContext({
+    features,
     locales: { en, fr },
     schema,
     config: { managerRoles: ["mod"], ...config },
@@ -113,6 +114,22 @@ describe("/poll", () => {
         fromMessage: t.sent[0]!.id,
       },
     ]);
+  });
+
+  test("without the discussionThread grant a thread request is refused before posting", async () => {
+    const t = setup({}, []);
+    const r = await runCommand(plugin, t, "poll", {
+      user: "1",
+      channel: "polls",
+      options: { question: "Pizza night?", choices: "Yes | No", thread: true },
+    });
+    expect(r.replies).toEqual([en.threadUnavailable]);
+    expect(t.sent).toEqual([]);
+    expect(t.threads).toEqual([]);
+    expect(t.kv.get("poll:1")).toBeUndefined();
+    // The rest of the plugin works without the optional grant.
+    await start(t, {});
+    expect(t.sent).toHaveLength(1);
   });
 
   test("ping: anyone may ping a member or a mentionable role, only managers other roles", async () => {
@@ -570,4 +587,93 @@ test("results, autocomplete, portal and close check the current member against t
   }
   expect(h.published).toHaveLength(0);
   expect((await close("author")).replies).toEqual(["Poll #1 is closed."]);
+});
+
+describe("privacy", () => {
+  // Two members with every kind of record: a public ballot, an open anonymous ballot,
+  // native voter pages, authorship and closing.
+  async function world() {
+    const t = setup();
+    await start(t, { question: "Public?" }); // #1 by alice
+    const anon = await runCommand(plugin, t, "poll", {
+      user: "2",
+      channel: "polls",
+      options: { question: "Secret?", choices: "x | y", anonymous: true },
+    }); // #2 by bob
+    expect(anon.replies[0]).toContain("#2");
+    const vote = (poll: string, choice: number, user: string) =>
+      runComponent(plugin, t, `vote:${poll}:${choice}`, {
+        user,
+        channel: "polls",
+        message: t.sent.find((s) =>
+          (s.message as MessagePayload).embeds?.[0]?.title?.includes(
+            poll === "1" ? "Public?" : "Secret?",
+          ),
+        )!.id,
+      });
+    for (const user of ["1", "2"]) {
+      await vote("1", user === "1" ? 0 : 1, user);
+      await vote("2", 0, user);
+    }
+    const native: Poll = {
+      id: "3",
+      question: "Native?",
+      choices: ["a", "b"],
+      multiple: false,
+      style: "native",
+      authorId: "2",
+      channelId: t.channel("polls")!.id,
+      messageId: "m-native",
+      createdAt: "2026-11-01T00:00:00Z",
+      closesAt: "2026-11-02T00:00:00Z",
+      status: "closed",
+      closedBy: "1",
+      final: { counts: [1, 1], voterCount: 2 },
+      published: true,
+    };
+    await t.ctx.kv.set("poll:3", native as unknown as Json);
+    await t.ctx.kv.set("native:3:0", ["1", "2"]);
+    return t;
+  }
+
+  test("export lists a member's own ballots, voter pages and authorship, never anonymous ballots", async () => {
+    const t = await world();
+    const rows = (await plugin.privacy!.export(t.ctx, "1")) as Json[];
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        { pollId: "1", vote: [0] },
+        { pollId: "1", author: true, closer: false },
+        { pollId: "3", author: false, closer: true },
+        { pollId: "3", voter: true },
+      ]),
+    );
+    expect(JSON.stringify(rows)).not.toContain('"pollId":"2"');
+  });
+
+  test("erasing one member removes its records and keeps the other's", async () => {
+    const t = await world();
+    const before = await plugin.privacy!.export(t.ctx, "2");
+    const { erased } = await plugin.privacy!.erase(t.ctx, "1");
+    expect(erased).toBe(5); // two ballots (one anonymous), authorship, closing, voter page
+    expect(await plugin.privacy!.export(t.ctx, "1")).toEqual([]);
+    expect(t.kv.get("vote:1:1")).toBeUndefined();
+    expect(t.kv.get("vote:2:1")).toBeUndefined();
+    expect((t.kv.get("poll:1") as unknown as Poll).authorId).toBe("");
+    expect((t.kv.get("poll:3") as unknown as Poll).closedBy).toBeNull();
+    expect(t.kv.get("native:3:0")).toEqual(["2"]);
+    // Bob: ballots (including the open anonymous one), authorship and voter page intact.
+    expect(t.kv.get("vote:1:2")).toEqual([1]);
+    expect(t.kv.get("vote:2:2")).toEqual([0]);
+    expect((t.kv.get("poll:2") as unknown as Poll).authorId).toBe("2");
+    expect(await plugin.privacy!.export(t.ctx, "2")).toEqual(before);
+    // Tallies still count the remaining ballot.
+    const r = await callRoute(plugin, t, "GET /polls/1");
+    expect((r.body as { voters: number }).voters).toBe(1);
+  });
+
+  test("onStart records the KV schema version", async () => {
+    const t = setup();
+    await plugin.onStart!(t.ctx);
+    expect(t.kv.get("meta:schema")).toBe(1);
+  });
 });

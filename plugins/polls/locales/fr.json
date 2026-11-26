@@ -10,6 +10,7 @@
   "nativeOptions": "Les sondages natifs exigent 1 à 768 heures entières et des réponses de 55 caractères au plus. L’anonymat, la pondération, la limite de choix et les restrictions de rôle sont indisponibles.",
   "future": "Saisissez une date future au format ISO 8601.",
   "scheduledOptions": "Les sondages programmés ne prennent pas en charge les mentions ni les fils.",
+  "threadUnavailable": "Les fils de discussion ne sont pas activés pour les sondages sur ce serveur. Publiez le sondage sans `thread`.",
   "unknown": "Sondage introuvable.",
   "authorOnly": "Seuls l’auteur et les gestionnaires du sondage peuvent le clore.",
   "scheduled": "Le sondage nº {id} est programmé.",
