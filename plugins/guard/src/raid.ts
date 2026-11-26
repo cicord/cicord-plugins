@@ -4,13 +4,29 @@ import { exempt, recently } from "./rules.ts";
 import { sanction } from "./sanctions.ts";
 
 type Join = { id: string; at: number; young: boolean };
-type Raid = { started: number; until: number; rate: number; enforced: boolean };
+type Measure = "overlay" | "invites";
+type Raid = {
+  started: number;
+  until: number;
+  rate: number;
+  enforced: boolean;
+  phase?: "pending" | "active" | "closing";
+  pending?: Measure[];
+  invitesUntil?: number;
+  wake?: string;
+  alertNonce?: string;
+  announced?: boolean;
+  alerted?: boolean;
+};
+const RETRY_MS = 5000;
+const readRaid = (ctx: Context) => ctx.kv.get<Raid>("raid");
+const saveRaid = (ctx: Context, r: Raid) => ctx.kv.set("raid", r);
 export const joins = async (ctx: Context) =>
   ((await ctx.kv.get<Join[]>("joins")) ?? []).filter(
     (x) => x.at >= Date.now() - ctx.config.raid.seconds * 1000,
   );
 
-async function measures(ctx: Context, until: number) {
+async function applyOverlay(ctx: Context, until: number) {
   if (!ctx.features.enabled("raidOverlay")) throw new Error("raidOverlay grant required");
   const config = ctx.config.raid.measures;
   const channels: Record<
@@ -28,76 +44,187 @@ async function measures(ctx: Context, until: number) {
     server: { verificationLevel: config.verificationLevel },
     channels,
   });
-  if (ctx.features.enabled("pauseInvites")) {
-    const duration =
-      parseInt(config.pauseInvites, 10) * (config.pauseInvites.endsWith("h") ? 3600000 : 60000);
-    await ctx.server.incident({
-      invitesDisabledUntil: new Date(Math.min(until, Date.now() + duration)),
-    });
-  }
 }
-export async function open(ctx: Context, rate: number) {
-  const previous = await ctx.kv.get<Raid>("raid"),
-    now = Date.now();
-  const next: Raid = {
-    started: previous?.started ?? now,
-    until: now + ctx.config.raid.calmMinutes * 60000,
-    rate,
-    enforced: ctx.config.mode === "enforce",
-  };
-  if (next.enforced) await measures(ctx, next.until);
-  await ctx.kv.set("raid", next, { ttlSeconds: 7 * 86400 });
-  if (previous) return;
-  const names = next.enforced
-    ? [
-        "verificationLevel",
-        ...(ctx.config.raid.measures.slowmode.channels.length ? ["slowmode"] : []),
-        ...(ctx.config.raid.measures.lockChannels.length ? ["lock"] : []),
-        ...(ctx.features.enabled("pauseInvites") ? ["pauseInvites"] : []),
-      ]
-    : [];
-  await ctx.events.publish(
-    "raid",
-    { state: "started", joinsPerMinute: rate, measures: names },
-    { idempotencyKey: "start:" + next.started },
-  );
-  if (ctx.config.staffChannel)
+
+// Schedule first. Once the desired state is visible it always has a recoverable wakeup.
+async function arm(ctx: Context, r: Raid, at: number, executing?: string) {
+  const old = r.wake;
+  const task = await ctx.schedule.after(Math.max(1, at - Date.now()), "reconcileRaid", {
+    started: r.started,
+  });
+  r.wake = task.id;
+  r.alertNonce ??= task.id.slice(0, 25);
+  await saveRaid(ctx, r);
+  if (old && old !== executing) await ctx.schedule.cancel(old);
+}
+
+async function announce(ctx: Context, r: Raid) {
+  if (!r.announced) {
+    const measures = r.enforced
+      ? [
+          "verificationLevel",
+          ...(ctx.config.raid.measures.slowmode.channels.length ? ["slowmode"] : []),
+          ...(ctx.config.raid.measures.lockChannels.length ? ["lock"] : []),
+          ...(r.invitesUntil ? ["pauseInvites"] : []),
+        ]
+      : [];
+    await ctx.events.publish(
+      "raid",
+      { state: "started", joinsPerMinute: r.rate, measures },
+      { idempotencyKey: "start:" + r.started },
+    );
+    r.announced = true;
+    await saveRaid(ctx, r);
+  }
+  if (r.alerted) return;
+  if (ctx.config.staffChannel) {
     await ctx.server.channel(ctx.config.staffChannel).send({
       content: tr(ctx, "message.joinSurgeDetected") + " (" + ctx.config.mode + ")",
+      nonce: r.alertNonce,
+      enforceNonce: true,
       components: [
         {
           type: "row",
           components: [
-            { type: "button", id: "lift:" + now, label: tr(ctx, "message.lift") },
-            { type: "button", id: "extend:" + now, label: tr(ctx, "message.extend") },
-            {
-              type: "button",
-              id: "review:" + now,
-              label: tr(ctx, "message.reviewArrivals"),
-            },
+            { type: "button", id: "lift:" + r.started, label: tr(ctx, "message.lift") },
+            { type: "button", id: "extend:" + r.started, label: tr(ctx, "message.extend") },
+            { type: "button", id: "review:" + r.started, label: tr(ctx, "message.reviewArrivals") },
           ],
         },
       ],
     });
+  }
+  r.alerted = true;
+  await saveRaid(ctx, r);
+}
+
+async function settle(ctx: Context, r: Raid) {
+  let noticePending = false;
+  try {
+    await announce(ctx, r);
+  } catch {
+    noticePending = true;
+  }
+  try {
+    for (const measure of [...(r.pending ?? [])]) {
+      if (measure === "overlay") await applyOverlay(ctx, r.until);
+      else if (r.invitesUntil && r.invitesUntil > Date.now()) {
+        if (!ctx.features.enabled("pauseInvites")) throw new Error("pauseInvites grant required");
+        await ctx.server.incident({ invitesDisabledUntil: new Date(r.invitesUntil) });
+      }
+      r.pending = r.pending!.filter((m) => m !== measure);
+      await saveRaid(ctx, r);
+    }
+  } catch {
+    ctx.status.set("raid", tr(ctx, "status.raidPending"));
+    return;
+  }
+  r.phase = "active";
+  if (noticePending) {
+    ctx.status.set("raid", tr(ctx, "status.raidNoticePending"));
+    await saveRaid(ctx, r);
+    return;
+  }
+  ctx.status.set("raid", null);
+  await arm(ctx, r, r.until);
+}
+
+export async function open(ctx: Context, rate: number) {
+  const previous = await readRaid(ctx),
+    now = Date.now();
+  if (previous?.phase === "closing") return "closing";
+  const until = now + ctx.config.raid.calmMinutes * 60000,
+    enforced = ctx.config.mode === "enforce";
+  const config = ctx.config.raid.measures;
+  const pause = enforced && ctx.features.enabled("pauseInvites");
+  const pauseMs =
+    parseInt(config.pauseInvites, 10) * (config.pauseInvites.endsWith("h") ? 3600000 : 60000);
+  const started =
+    previous?.started ?? Math.max(now, ((await ctx.kv.get<number>("raid:last-started")) ?? 0) + 1);
+  if (!previous) await ctx.kv.set("raid:last-started", started);
+  const r: Raid = {
+    ...previous,
+    started,
+    until,
+    rate,
+    enforced,
+    phase: "pending",
+    pending: enforced ? ["overlay", ...(pause ? ["invites" as const] : [])] : [],
+    invitesUntil: pause ? Math.min(until, now + pauseMs) : undefined,
+    // Previously published versions did not persist announcement receipts.
+    announced: previous?.announced ?? !!previous,
+    alerted: previous?.alerted ?? !!previous,
+  };
+  await arm(ctx, r, Math.min(until, now + RETRY_MS));
+  await settle(ctx, r);
+  return r.phase;
+}
+
+async function finishClose(ctx: Context, r: Raid) {
+  try {
+    if (r.enforced) await ctx.server.overlays.remove("raid");
+    await ctx.events.publish(
+      "raid",
+      { state: "ended", joinsPerMinute: r.rate, measures: [] },
+      { idempotencyKey: "end:" + r.started },
+    );
+  } catch {
+    ctx.status.set("raid", tr(ctx, "status.raidClosing"));
+    return false;
+  }
+  // Direct Discord incident settings expire at their own recorded deadline.
+  await ctx.kv
+    .atomic()
+    .set(
+      "raidHistory:" + r.started,
+      { started: r.started, ended: Date.now(), rate: r.rate, enforced: r.enforced },
+      { ttlSeconds: MONTH },
+    )
+    .delete("raid")
+    .delete("arrivals")
+    .commit();
+  ctx.status.set("raid", null);
+  if (r.wake) await ctx.schedule.cancel(r.wake);
+  return true;
 }
 export async function close(ctx: Context) {
-  const raid = await ctx.kv.get<Raid>("raid");
-  if (!raid) return;
-  if (raid.enforced) await ctx.server.overlays.remove("raid");
-  // The incident deadline is bounded by the overlay's end; another incident owner
-  // may require a longer pause. Do not clear guild-wide incident settings here.
-  await ctx.kv.delete("raid");
-  await ctx.kv.delete("arrivals");
-  await ctx.kv.set(
-    "raidHistory:" + raid.started,
-    { started: raid.started, ended: Date.now(), rate: raid.rate, enforced: raid.enforced },
-    { ttlSeconds: MONTH },
-  );
-  await ctx.events.publish(
-    "raid",
-    { state: "ended", joinsPerMinute: raid.rate, measures: [] },
-    { idempotencyKey: "end:" + raid.started },
-  );
+  const r = await readRaid(ctx);
+  if (!r) return true;
+  r.phase = "closing";
+  await arm(ctx, r, Date.now() + RETRY_MS);
+  return finishClose(ctx, r);
+}
+export async function reconcileRaid(ctx: Context, started: number, wake: string) {
+  const r = await readRaid(ctx);
+  if (!r || r.started !== started || r.wake !== wake) return;
+  if (
+    r.phase === "closing" ||
+    r.until <= Date.now() ||
+    (r.enforced && ctx.config.mode !== "enforce")
+  ) {
+    r.phase = "closing";
+    await arm(ctx, r, Date.now() + RETRY_MS, wake);
+    await finishClose(ctx, r);
+    return;
+  }
+  // Reserve the next attempt before doing any Discord IO. A crashed handler,
+  // a paused runtime and a failed incident each retain the desired deadline.
+  await arm(ctx, r, Math.min(r.until, Date.now() + RETRY_MS), wake);
+  await settle(ctx, r);
+}
+
+export async function publicRaid(ctx: Context) {
+  const r = await readRaid(ctx);
+  return r
+    ? {
+        started: r.started,
+        until: r.until,
+        rate: r.rate,
+        enforced: r.enforced,
+        phase: r.phase ?? "active",
+        pending: r.pending ?? [],
+      }
+    : null;
 }
 export async function onJoin(ctx: Context, m: Member) {
   if (exempt(ctx, m)) return;
@@ -136,8 +263,15 @@ export async function onJoin(ctx: Context, m: Member) {
   }
 }
 export async function quiet(ctx: Context) {
-  const r = await ctx.kv.get<Raid>("raid");
-  if (r && r.until <= Date.now()) await close(ctx);
+  const r = await readRaid(ctx);
+  if (!r) return;
+  if (
+    r.until <= Date.now() ||
+    r.phase === "closing" ||
+    (r.enforced && ctx.config.mode !== "enforce")
+  )
+    await close(ctx);
+  else if (!r.wake) await arm(ctx, r, r.until); // Upgrade a live legacy incident.
 }
 export async function control(ctx: Context, i: ComponentInteraction) {
   const [action, stamp] = i.componentId.split(":");
@@ -146,12 +280,12 @@ export async function control(ctx: Context, i: ComponentInteraction) {
   if (!staff(i.member) || !raid || String(raid.started) !== stamp)
     return reply("message.unavailable");
   if (action === "lift") {
-    await close(ctx);
-    return reply("message.lifted");
+    return reply((await close(ctx)) ? "message.lifted" : "status.raidClosing");
   }
   if (action === "extend") {
-    await open(ctx, raid.rate);
-    return reply("message.extended");
+    return reply(
+      (await open(ctx, raid.rate)) === "active" ? "message.extended" : "status.raidPending",
+    );
   }
   const arrivals = (await ctx.kv.get<string[]>("arrivals")) ?? [];
   if (action === "review") {
@@ -202,7 +336,12 @@ export async function control(ctx: Context, i: ComponentInteraction) {
     return;
   }
   const selected = await ctx.kv.get<{ stamp: number; ids: string[] }>(key);
-  if (!raid.enforced || !selected || selected.stamp !== raid.started)
+  if (
+    !raid.enforced ||
+    (raid.phase && raid.phase !== "active") ||
+    !selected ||
+    selected.stamp !== raid.started
+  )
     return reply("message.noActiveConfirmation");
   await ctx.kv.delete(key);
   for (const id of selected.ids) {

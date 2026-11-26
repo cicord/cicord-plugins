@@ -24,5 +24,8 @@
   "message.reviewCompleted": "Review completed.",
   "status.inviteLookup": "Server invitations could not be read. Check ManageServer.",
   "status.imageRead": "An attachment could not be analyzed.",
-  "contextMenus.Block image.name": "Block image"
+  "contextMenus.Block image.name": "Block image",
+  "status.raidPending": "Raid recorded. Some restrictions are pending and will be retried automatically.",
+  "status.raidNoticePending": "Raid measures are in place. A staff notification is pending and will be retried.",
+  "status.raidClosing": "Guard is lifting raid restrictions and will retry until complete."
 }

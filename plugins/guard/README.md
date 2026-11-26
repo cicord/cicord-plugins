@@ -50,3 +50,10 @@ Moderator routes serve `GET /violations`, `GET /raids`, and `GET /blocklist`. Se
 Message history stores IDs, counters and a comparison hint for up to ten minutes. Guard reads Discord content for exact comparisons and stores no message text or attachment bytes. Each member retains up to 100 violations for 30 days. Raid history contains aggregate counts for 30 days. Join-window identities expire with the window, the review list expires after one day, and a staff confirmation expires after one minute. Export and erasure include the member’s entries in shared lists. Operator-maintained domain and image hashes persist until removed.
 
 Guard requests permanent bans for ban rules and staff-confirmed raid bans. Timeout and quarantine rules forward their configured duration to moderation.
+
+During an enforcement pause, Guard records the raid immediately. The staff route
+reports `phase: pending` and the outstanding measures. A durable task retries
+failed measures until their original deadline, including after reload. The
+controller registers a separate wakeup for expiry. The runtime Plan shows
+whether a requested overlay has reached Discord. A failed lift remains
+`closing` until the restriction is withdrawn.

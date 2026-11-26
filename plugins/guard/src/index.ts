@@ -10,7 +10,7 @@ import {
 import { MONTH, object, rows, serial, staff, tr } from "./data.ts";
 import { domain, exempt, inspect, refreshFeeds } from "./rules.ts";
 import { record } from "./sanctions.ts";
-import { close, control, onJoin, open, quiet } from "./raid.ts";
+import { close, control, onJoin, open, publicRaid, quiet, reconcileRaid } from "./raid.ts";
 
 const prefixes = ["history:", "violations:", "automod:", "selection:", "failed:", "lock:member:"];
 async function memberData(ctx: Context, id: string, erase: boolean) {
@@ -130,8 +130,16 @@ export default definePlugin({
       // One signal per member per window so one person cannot simulate a join surge.
       await ctx.kv.set("failed:" + id, true, { ttlSeconds: ctx.config.raid.seconds });
       const count = (await rows(ctx, "failed:", ctx.config.raid.failedVerifications)).length;
-      if (count >= ctx.config.raid.failedVerifications) await open(ctx, 0);
+      if (count >= ctx.config.raid.failedVerifications)
+        await serial(ctx, "raid", () => open(ctx, 0));
       await ctx.kv.set(seen, true, { ttlSeconds: MONTH });
+    },
+  },
+  tasks: {
+    async reconcileRaid(ctx, payload, task) {
+      const started = object(payload).started;
+      if (typeof started !== "number" || !task?.id) throw new Error("invalid raid wakeup");
+      await serial(ctx, "raid", () => reconcileRaid(ctx, started, task.id));
     },
   },
   schedules: {
@@ -182,15 +190,32 @@ export default definePlugin({
         on: subcommand({
           description: "Start raid measures",
           async run(ctx, i) {
-            if (staff(i.member)) await open(ctx, 0);
-            await i.reply(tr(ctx, "message.requestProcessed"));
+            if (!staff(i.member)) {
+              await i.reply(tr(ctx, "message.unavailable"));
+              return;
+            }
+            const phase = await serial(ctx, "raid", () => open(ctx, 0));
+            await i.reply(
+              tr(
+                ctx,
+                phase === "active"
+                  ? "message.requestProcessed"
+                  : phase === "closing"
+                    ? "status.raidClosing"
+                    : "status.raidPending",
+              ),
+            );
           },
         }),
         off: subcommand({
           description: "Lift raid measures",
           async run(ctx, i) {
-            if (staff(i.member)) await close(ctx);
-            await i.reply(tr(ctx, "message.requestProcessed"));
+            if (!staff(i.member)) {
+              await i.reply(tr(ctx, "message.unavailable"));
+              return;
+            }
+            const closed = await serial(ctx, "raid", () => close(ctx));
+            await i.reply(tr(ctx, closed ? "message.requestProcessed" : "status.raidClosing"));
           },
         }),
       },
@@ -220,7 +245,7 @@ export default definePlugin({
       async handler(ctx, r): Promise<RouteResponse> {
         if (!staff(r.viewer?.member)) return { status: 403 };
         return {
-          active: (await ctx.kv.get("raid")) ?? null,
+          active: await publicRaid(ctx),
           history: (await rows(ctx, "raidHistory:", 100)).map((r) => r.value),
         };
       },

@@ -11,6 +11,8 @@ export interface RaidState {
   until: number;
   rate: number;
   enforced: boolean;
+  phase: "pending" | "active" | "closing";
+  pending: ("overlay" | "invites")[];
 }
 export interface Routes {
   "GET /violations": {

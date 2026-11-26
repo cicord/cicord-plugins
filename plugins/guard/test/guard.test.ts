@@ -3,7 +3,7 @@ import { createTestContext, callRoute, type TestContextOptions } from "@cicord/s
 import { afterEach, expect, test, vi } from "vite-plus/test";
 import schema from "../config.schema.json" with { type: "json" };
 import plugin from "../src/index.ts";
-import { open, quiet } from "../src/raid.ts";
+import { open, quiet, publicRaid, close, reconcileRaid } from "../src/raid.ts";
 import { sanction } from "../src/sanctions.ts";
 import { linksIn } from "../src/rules.ts";
 const setup = (
@@ -227,4 +227,37 @@ test("sanctions send a duration only for timeout and quarantine", async () => {
       ...(["timeout", "quarantine"].includes(action) ? { durationMinutes: 10 } : {}),
     })),
   );
+});
+
+test("a failed incident step and a failed lift retry without reopening a finished raid", async () => {
+  const t = setup({ mode: "enforce", raid: { calmMinutes: 1 } }, ["raidOverlay", "pauseInvites"]);
+  const grant = vi.fn().mockResolvedValue(undefined);
+  const lift = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("temporary failure"))
+    .mockResolvedValue(undefined);
+  const incident = vi.fn().mockRejectedValueOnce(new Error("pause")).mockResolvedValue(undefined);
+  const ctx: Context = {
+    ...t.ctx,
+    server: {
+      ...t.ctx.server,
+      incident,
+      overlays: { ...t.ctx.server.overlays, apply: grant, remove: lift },
+    },
+  };
+  expect(await open(ctx, 20)).toBe("pending");
+  const first = await ctx.kv.get<{ started: number; wake: string; pending: string[] }>("raid");
+  expect(first!.pending).toEqual(["invites"]);
+  await reconcileRaid(ctx, first!.started, first!.wake);
+  expect((await publicRaid(ctx))?.phase).toBe("active");
+  expect(grant).toHaveBeenCalledTimes(1);
+  expect(incident).toHaveBeenCalledTimes(2);
+  expect(await close(ctx)).toBe(false);
+  const closing = await ctx.kv.get<{ started: number; wake: string; phase: string }>("raid");
+  expect(closing!.phase).toBe("closing");
+  await reconcileRaid(ctx, closing!.started, closing!.wake);
+  expect(await publicRaid(ctx)).toBeNull();
+  await reconcileRaid(ctx, first!.started, first!.wake);
+  expect(lift).toHaveBeenCalledTimes(2);
+  expect(grant).toHaveBeenCalledTimes(1);
 });

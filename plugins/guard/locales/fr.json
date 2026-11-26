@@ -24,5 +24,8 @@
   "message.reviewCompleted": "Examen terminé.",
   "status.inviteLookup": "Les invitations du serveur sont illisibles. Vérifiez Gérer le serveur.",
   "status.imageRead": "Une pièce jointe n’a pas pu être analysée.",
-  "contextMenus.Block image.name": "Bloquer cette image"
+  "contextMenus.Block image.name": "Bloquer cette image",
+  "status.raidPending": "Raid enregistré. Certaines restrictions sont en attente et seront réessayées automatiquement.",
+  "status.raidNoticePending": "Les mesures du raid sont en place. Une notification au staff est en attente.",
+  "status.raidClosing": "Guard lève les restrictions et réessaiera jusqu’à leur retrait."
 }
