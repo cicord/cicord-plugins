@@ -11,7 +11,7 @@
 export type TicketStatus = "open" | "closed";
 export type Priority = "low" | "normal" | "high" | "urgent";
 /** Where the ticket was opened: the Discord panel or a portal. */
-export type TicketSource = "discord" | "portal";
+export type TicketSource = "discord" | "portal" | "modmail" | "interop";
 
 /** A Discord user as the server shows them. */
 export interface Person {
@@ -67,6 +67,9 @@ export interface MyTicket {
   /** Name only. */
   assignee: { displayName: string } | null;
   source: TicketSource;
+  type: string;
+  labels: string[];
+  rating: number | null;
   createdAt: string;
   closedAt: string | null;
   lastActivityAt: string | null;
@@ -97,6 +100,9 @@ export interface StaffTicket {
   label: Label | null;
   assignee: Person | null;
   source: TicketSource;
+  type: string;
+  labels: string[];
+  rating: number | null;
 }
 
 /** The text of an embed of a ticket message (bot messages: replies, notices). */
@@ -129,6 +135,9 @@ export interface StaffTicketDetail extends Omit<StaffTicket, "messages" | "chann
   summary: { messages: number; participants: Person[] } | null;
   /** What `StaffTicket.messages` counts. */
   messageCount: number;
+  firstResponseAt: string | null;
+  appeal: { number: number; status: string | null } | null;
+  notes: { by: Person; at: string; content: string }[];
   events: TicketEvent[];
   /**
    * The last 50 messages of the ticket channel, oldest first; null when the channel is gone
@@ -142,6 +151,20 @@ export interface ApiError {
 }
 
 export interface Routes {
+  "GET /types": { response: { items: { key: string; name: string }[] } };
+  "GET /tickets/stats": { response: { rated: number; mean: number | null } };
+  "GET /tickets/:id/transcript": {
+    query: { format?: "html" | "markdown" };
+    response: { format: "html" | "markdown"; content: string };
+  };
+  "GET /tickets/:id/cases": {
+    response: {
+      cases: { number: number; action: string; status: string; reason: string; at: string }[];
+    };
+  };
+  "POST /tickets/:id/notes": { body: { content: string }; response: StaffTicketDetail };
+  "POST /tickets/:id/rating": { body: { rating: number }; response: { rating: number } };
+
   // ── members (their own tickets only)
 
   /** The viewer's tickets: open ones first, newest first. */
@@ -153,7 +176,7 @@ export interface Routes {
    * 201. 409 `limit` when the member already has `maxOpenPerMember` open tickets.
    */
   "POST /tickets": {
-    body: { subject: string; description: string; label?: string | null };
+    body: { subject: string; description: string; label?: string | null; type?: string };
     response: MyTicket;
   };
 
@@ -169,7 +192,7 @@ export interface Routes {
    * Who can be assigned, by display name: the holders of the staff roles (bots excluded),
    * the server owner and the viewer.
    */
-  "GET /staff": { response: { items: Person[] } };
+  "GET /staff": { query: { type?: string }; response: { items: Person[] } };
   /** `userId`: a staff member's id, `me`, or null to unassign. */
   "POST /tickets/:id/assign": { body: { userId: string | null }; response: StaffTicket };
   "PATCH /tickets/:id": {

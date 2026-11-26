@@ -1,0 +1,43 @@
+{
+  "input": {
+    "type": "object",
+    "properties": {
+      "userId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 20
+      }
+    },
+    "required": ["userId"],
+    "additionalProperties": false
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "tickets": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "subject": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": ["id", "type", "subject", "status"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["tickets"],
+    "additionalProperties": false
+  }
+}

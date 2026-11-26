@@ -1,0 +1,34 @@
+{
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "memberId": {
+      "type": "string"
+    },
+    "type": {
+      "type": "string"
+    },
+    "labels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "assignee": {
+      "type": "string"
+    },
+    "durationMinutes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "rating": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    }
+  },
+  "required": ["id", "memberId", "type", "labels"],
+  "additionalProperties": false
+}

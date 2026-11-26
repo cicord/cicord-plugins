@@ -1,0 +1,51 @@
+{
+  "input": {
+    "type": "object",
+    "properties": {
+      "userId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 20
+      },
+      "subject": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100
+      },
+      "type": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 24
+      },
+      "description": {
+        "type": "string",
+        "maxLength": 2000
+      },
+      "caseNumber": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "required": [
+      "userId",
+      "subject"
+    ],
+    "additionalProperties": false
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "channelId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "channelId"
+    ],
+    "additionalProperties": false
+  }
+}
