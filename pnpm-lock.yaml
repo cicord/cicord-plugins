@@ -189,8 +189,8 @@ importers:
   .:
     devDependencies:
       '@cicord/sdk':
-        specifier: file:vendor/cicord-sdk-0.1.10.tgz
-        version: file:vendor/cicord-sdk-0.1.10.tgz
+        specifier: file:vendor/cicord-sdk-0.2.0-dev.99ea0de.tgz
+        version: file:vendor/cicord-sdk-0.2.0-dev.99ea0de.tgz
       '@types/node':
         specifier: ^26.6.6
         version: 26.6.6
@@ -221,9 +221,9 @@ packages:
   '@blazediff/core@1.10.0':
     resolution: {integrity: sha512-AOQff0zgR7cGsZL+4E7hVkmujoPUpm0J9xzWGWZj5wCjd3gmxESXAPfKyuzs93VdpQNFhHlBhfOjrcZ+XTERtQ==}
 
-  '@cicord/sdk@file:vendor/cicord-sdk-0.1.10.tgz':
-    resolution: {integrity: sha512-0ulZR+GiOhTcKCk+srtTtlmN3Dbw5sRY4+0omVC4g7rcTkzW6WptPXrjXjn41DhGbd84smZ7jAkX+hBP0UnX3A==, tarball: file:vendor/cicord-sdk-0.1.10.tgz}
-    version: 0.1.10
+  '@cicord/sdk@file:vendor/cicord-sdk-0.2.0-dev.99ea0de.tgz':
+    resolution: {integrity: sha512-z7/XI2rr1ErikEvoGB1dPTweVqwgTs64An85j/9DAWTo8GgGhlDJuSvupYciOe+qh1pA2mn3iOxotQCGEj7a+g==, tarball: file:vendor/cicord-sdk-0.2.0-dev.99ea0de.tgz}
+    version: 0.2.0-dev.99ea0de
 
   '@jridgewell/resolve-uri@3.1.3':
     resolution: {integrity: sha512-lhTtjtoEArWBjismtfS761S9Hlyn+nIZqOZVYoZ1Xn82PMNMVnk+jj/NhC4fAXGTs7ydONcJiR5vyQBTMDu27g==}
@@ -1277,7 +1277,7 @@ snapshots:
 
   '@blazediff/core@1.10.0': {}
 
-  '@cicord/sdk@file:vendor/cicord-sdk-0.1.10.tgz': {}
+  '@cicord/sdk@file:vendor/cicord-sdk-0.2.0-dev.99ea0de.tgz': {}
 
   '@jridgewell/resolve-uri@3.1.3': {}
 

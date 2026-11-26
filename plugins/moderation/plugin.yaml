@@ -3,17 +3,19 @@ apiVersion: cicord.dev/v1alpha1
 kind: Plugin
 metadata:
   name: moderation
-  version: 0.1.1
+  version: 0.2.0
   displayName: Moderation
-  description: /warn, /timeout, /kick and /ban with an audit log, expiring warnings, automatic escalation, flood protection, member DMs and an optional Slack or Discord webhook.
+  description: Staff moderation with warnings, expiring bans, reviewed message purges, case history and private notes.
   license: Apache-2.0
   keywords: [moderation, warnings, audit, automod]
 spec:
-  engine: ">=0.1.0"
+  engine: ">=0.2.0-0"
   entry: ./src/index.ts
   capabilities:
     - discord.messages.send      # audit log
     - discord.messages.manage    # delete flood messages
+    - scheduler                  # persistent temporary-ban expiry
+    - discord.messages.read      # preview and filter the messages to purge
     - discord.channels.read
     - discord.members.read
     - discord.members.moderate   # timeout, kick, ban
@@ -24,7 +26,7 @@ spec:
     - events.publish             # moderation.case, for the audit log
   # ServerMembers: join/leave/update log. ServerMessages: flood protection, which only needs
   # who posts and when, never the content (no MessageContent).
-  intents: [ServerMembers, ServerMessages]
+  intents: [ServerMembers, ServerMessages, ServerModeration]
   network:
     allow: [hooks.slack.com, discord.com]
   config:

@@ -25,4 +25,7 @@ fi
 if compgen -G "$dir/test/*.test.ts" >/dev/null; then
   pnpm exec vp test run "$dir/"
 fi
+if [[ -f "$dir/test/runtime.mjs" ]]; then
+  node --test "$dir/test/runtime.mjs"
+fi
 echo "✓ $dir"

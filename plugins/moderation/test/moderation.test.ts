@@ -1,8 +1,9 @@
-import type { Embed, Message, MessagePayload } from "@cicord/sdk";
+import type { Json, Embed, Message, MessagePayload } from "@cicord/sdk";
 import {
   callRoute,
   createTestContext,
   runCommand,
+  runComponent,
   type TestContextOptions,
 } from "@cicord/sdk/testing";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
@@ -11,6 +12,8 @@ import plugin from "../src/index.ts";
 
 const grants = [
   "discord.messages.send",
+  "scheduler",
+  "discord.messages.read",
   "discord.messages.manage",
   "discord.channels.read",
   "discord.members.read",
@@ -386,5 +389,130 @@ describe("webhook and routes", () => {
     expect((await callRoute(plugin, t, "GET /warnings/2", { viewer: "1" })).body).toEqual({
       items: [],
     });
+  });
+});
+
+describe("durable bans", () => {
+  test("one expiry releases only its own ban and creates one resolution across redelivery", async () => {
+    const t = setup();
+    await runCommand(plugin, t, "ban", {
+      user: "1",
+      options: { member: user(t, "2"), duration: 1, reason: "incident" },
+    });
+    const expiry = t.scheduled.find((task) => task.task === "expireBan")!;
+    expect(expiry.delayMs).toBe(60_000);
+    expect(await t.ctx.server.bans()).toHaveLength(1);
+    await plugin.tasks!.expireBan!(t.ctx, expiry.payload);
+    await plugin.tasks!.expireBan!(t.ctx, expiry.payload);
+    expect(await t.ctx.server.bans()).toHaveLength(0);
+    expect(await t.ctx.kv.get("cases")).toBe(2);
+    expect(await t.ctx.kv.get("case:1")).toMatchObject({ status: "expired" });
+    expect(await t.ctx.kv.get("case:2")).toMatchObject({ action: "unban", status: "lifted" });
+  });
+  test("an older expiration leaves a replacement permanent ban in place", async () => {
+    const t = setup();
+    const target = user(t, "2");
+    await runCommand(plugin, t, "ban", { user: "1", options: { member: target, duration: 1 } });
+    const expiry = t.scheduled[0]!;
+    await runCommand(plugin, t, "ban", {
+      user: "1",
+      options: { member: target, reason: "replacement" },
+    });
+    await plugin.tasks!.expireBan!(t.ctx, expiry.payload);
+    expect((await t.ctx.server.bans())[0]?.reason).toBe("mia: replacement");
+    expect(await t.ctx.kv.get("case:1")).toMatchObject({ status: "superseded" });
+  });
+  test("redelivery after Discord unbanned the member completes the reserved resolution", async () => {
+    const t = setup();
+    await runCommand(plugin, t, "ban", {
+      user: "1",
+      options: { member: user(t, "2"), duration: 1 },
+    });
+    const task = t.scheduled[0]!;
+    const state = (await t.ctx.kv.get("ban-expiry:1")) as Record<string, Json>;
+    const resolution = await t.ctx.kv.increment("cases");
+    await t.ctx.kv.set("ban-expiry:1", {
+      ...state,
+      release: {
+        number: resolution,
+        member: { id: "2", name: "troll" },
+        moderator: null,
+        at: new Date().toISOString(),
+        action: "unban",
+        reason: "expired",
+      },
+    });
+    await t.ctx.server.unban("2");
+    await plugin.tasks!.expireBan!(t.ctx, task.payload);
+    await plugin.tasks!.expireBan!(t.ctx, task.payload);
+    expect(await t.ctx.kv.get("cases")).toBe(2);
+    expect(await t.ctx.kv.get("case:2")).toMatchObject({ number: 2, action: "unban" });
+    expect(t.moderation.filter((a) => a.action === "unban")).toHaveLength(1);
+  });
+});
+
+describe("case access and approval", () => {
+  test("a member sees their cases and never their staff notes", async () => {
+    const t = setup();
+    await runCommand(plugin, t, "warn", {
+      user: "1",
+      options: { member: user(t, "2"), reason: "rule" },
+    });
+    await runCommand(plugin, t, "note", {
+      user: "1",
+      options: { member: user(t, "2"), text: "private note" },
+    });
+    const own = await callRoute(plugin, t, "GET /members/2", { viewer: "2" });
+    expect(JSON.stringify(own.body)).toContain("rule");
+    expect(JSON.stringify(own.body)).not.toContain("private note");
+    expect((await callRoute(plugin, t, "GET /members/2", { viewer: "5" })).status).toBe(403);
+    expect(
+      JSON.stringify((await callRoute(plugin, t, "GET /members/2", { viewer: "1" })).body),
+    ).toContain("private note");
+    expect(JSON.stringify(logs(t))).not.toContain("private note");
+    const denied = await runCommand(plugin, t, "case void", { user: "1", options: { number: 1 } });
+    expect(denied.replies[0]).toBe("Administrator access required.");
+    await runCommand(plugin, t, "case void", { user: "100", options: { number: 1 } });
+    expect(await t.ctx.kv.get("case:1")).toMatchObject({ status: "void" });
+    expect((await callRoute(plugin, t, "GET /warnings/2", { viewer: "1" })).body).toMatchObject({
+      items: [],
+    });
+  });
+  test("a purge consumes the owner's exact preview once, excluding later messages", async () => {
+    const t = setup();
+    const ch = t.ctx.server.channel("general");
+    const a = await ch.send("sample");
+    await runCommand(plugin, t, "purge", {
+      user: "100",
+      channel: "general",
+      options: { count: 50, contains: "sample" },
+    });
+    expect(await ch.message(a.id)).toBeDefined();
+    const b = await ch.send("sample");
+    await runComponent(plugin, t, "purge-confirm:1", { user: "6", channel: "general" });
+    expect(await ch.message(a.id)).toBeDefined();
+    await runComponent(plugin, t, "purge-confirm:1", { user: "100", channel: "general" });
+    expect(await ch.message(a.id)).toBeUndefined();
+    expect(await ch.message(b.id)).toBeDefined();
+    await runComponent(plugin, t, "purge-confirm:1", { user: "100", channel: "general" });
+    expect(await t.ctx.kv.get("cases")).toBe(1);
+  });
+  test("old cases are indexed in bounded batches and migration can resume", async () => {
+    const t = setup();
+    for (let n = 1; n <= 30; n++)
+      await t.ctx.kv.set(`case:${n}`, {
+        number: n,
+        member: { id: "2", name: "alice" },
+        moderator: null,
+        at: new Date().toISOString(),
+        reason: "test",
+        action: "warn",
+      });
+    await plugin.onStart!(t.ctx);
+    expect(t.scheduled[0]?.task).toBe("migrateCases");
+    await plugin.tasks!.migrateCases!(t.ctx, undefined);
+    await plugin.onStart!(t.ctx);
+    expect(await t.ctx.kv.get("meta:schema")).toBe(2);
+    expect((await t.ctx.kv.list({ prefix: "case-user:2:", limit: 100 })).items).toHaveLength(30);
   });
 });

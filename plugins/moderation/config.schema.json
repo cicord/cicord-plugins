@@ -17,6 +17,15 @@
       "default": 30,
       "x-cicord-access": "moderator"
     },
+    "purge": {
+      "description": "Limits for a staff-confirmed message purge.",
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "properties": {
+        "maxCount": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 500 }
+      }
+    },
     "escalation": {
       "description": "Automatic action when a member reaches a number of active warnings.",
       "type": "array",
@@ -28,9 +37,9 @@
         "required": ["warnings", "action"],
         "properties": {
           "warnings": { "type": "integer", "minimum": 1, "maximum": 100 },
-          "action": { "enum": ["timeout", "kick", "ban"] },
+          "action": { "enum": ["timeout", "kick", "ban", "tempban"] },
           "durationMinutes": {
-            "description": "Timeout length.",
+            "description": "Duration of a timeout or temporary ban, in minutes.",
             "type": "integer",
             "minimum": 1,
             "maximum": 40320,

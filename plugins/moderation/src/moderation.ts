@@ -1,19 +1,32 @@
 /** Cases, warnings, the audit log and the webhook, independent of the handlers. */
 import type { Context, Embed, Json, User } from "@cicord/sdk";
 
-type Action = "warn" | "timeout" | "untimeout" | "kick" | "ban" | "clear";
+type Action =
+  | "warn"
+  | "timeout"
+  | "untimeout"
+  | "kick"
+  | "ban"
+  | "tempban"
+  | "unban"
+  | "note"
+  | "purge"
+  | "clear";
 
-export interface Case {
+export type Case = {
   number: number;
   action: Action;
-  member: { id: string; name: string };
+  member: { id: string; name: string } | null;
   /** null for automatic actions. */
   moderator: { id: string; name: string } | null;
   reason: string;
   durationMinutes?: number;
+  status?: "active" | "expired" | "lifted" | "void" | "superseded";
+  expiresAt?: string;
+  source?: { type: "command" | "escalation" | "plugin" | "automod"; plugin?: string };
   evidence?: string;
   at: string;
-}
+};
 
 /** Stored under `warn:<userId>:<case number>` with a TTL (warnings expire). */
 export interface Warning {
@@ -30,6 +43,10 @@ const COLORS: Record<Action, string> = {
   untimeout: "#2ecc71",
   kick: "#e74c3c",
   ban: "#992d22",
+  tempban: "#992d22",
+  unban: "#2ecc71",
+  note: "#95a5a6",
+  purge: "#f39c12",
   clear: "#2ecc71",
 };
 
@@ -39,6 +56,10 @@ const TITLES: Record<Action, string> = {
   untimeout: "Timeout removed",
   kick: "Kick",
   ban: "Ban",
+  tempban: "Temporary ban",
+  unban: "Ban lifted",
+  note: "Staff note",
+  purge: "Purge",
   clear: "Warnings cleared",
 };
 
@@ -56,7 +77,9 @@ export function duration(minutes: number): string {
 
 function caseEmbed(c: Case): Embed {
   const fields: NonNullable<Embed["fields"]> = [
-    { name: "Member", value: `<@${c.member.id}> (${c.member.name})`, inline: true },
+    ...(c.member
+      ? [{ name: "Member", value: `<@${c.member.id}> (${c.member.name})`, inline: true }]
+      : []),
     { name: "Moderator", value: c.moderator ? `<@${c.moderator.id}>` : "automatic", inline: true },
   ];
   if (c.durationMinutes)
@@ -73,6 +96,19 @@ function caseEmbed(c: Case): Embed {
   };
 }
 
+export async function readCase(ctx: Context, number: number) {
+  return ctx.kv.get<Case>(`case:${number}`);
+}
+
+/** Lexical KV pagination lists newer cases first without scanning all cases. */
+export async function indexCase(ctx: Context, c: Case) {
+  if (c.member)
+    await ctx.kv.set(
+      `case-user:${c.member.id}:${String(Number.MAX_SAFE_INTEGER - c.number).padStart(16, "0")}`,
+      c.number,
+    );
+}
+
 /** Records a case and writes it to the audit log (and the webhook). */
 export async function recordCase(ctx: Context, c: Omit<Case, "number" | "at">): Promise<Case> {
   const full: Case = {
@@ -80,14 +116,27 @@ export async function recordCase(ctx: Context, c: Omit<Case, "number" | "at">): 
     number: await ctx.kv.increment("cases"),
     at: new Date().toISOString(),
   };
-  await ctx.kv.set(`case:${full.number}`, full as unknown as Json);
+  return saveNewCase(ctx, full);
+}
+
+export async function saveNewCase(ctx: Context, full: Case): Promise<Case> {
+  const key = `case:${full.number}`;
+  const already = await ctx.kv.get<Case>(key);
+  if (already) {
+    await indexCase(ctx, already);
+    return already;
+  }
+  full.source ??= { type: full.moderator ? "command" : "escalation" };
+  full.status ??= "active";
+  await ctx.kv.set(key, full as unknown as Json);
+  await indexCase(ctx, full);
   await ctx.server.channel(ctx.config.logChannel).send({
     embeds: [caseEmbed(full)],
     allowedMentions: { users: false, roles: false, everyone: false },
   });
   await notifyWebhook(
     ctx,
-    `Case #${full.number} · ${TITLES[full.action]}: ${full.member.name} — ${full.reason || "no reason"}${full.moderator ? ` (by ${full.moderator.name})` : ""}`,
+    `Case #${full.number} · ${TITLES[full.action]}: ${full.member?.name ?? "channel"} — ${full.reason || "no reason"}${full.moderator ? ` (by ${full.moderator.name})` : ""}`,
   );
   // moderation.case: other plugins (audit-log) can record sanctions.
   await ctx.events.publish("case", full as unknown as Json);

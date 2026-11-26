@@ -17,6 +17,18 @@ import {
   type Warning,
 } from "./moderation.ts";
 
+import { applyBan, expireBan, liftBan } from "./bans.ts";
+
+import {
+  caseCommand,
+  historyCommand,
+  noteCommand,
+  listCases,
+  memberHistory,
+  migrateCases,
+} from "./cases.ts";
+import { purge, finishPurge } from "./purge.ts";
+
 const DAY = 86_400;
 const MINUTE_MS = 60_000;
 
@@ -46,7 +58,7 @@ async function dm(ctx: Context, member: Member, text: string): Promise<boolean> 
 async function sanction(
   ctx: Context,
   member: Member,
-  action: "timeout" | "untimeout" | "kick" | "ban",
+  action: "timeout" | "untimeout" | "kick" | "ban" | "tempban",
   reason: string,
   moderator: Moderator,
   opts: { minutes?: number; deleteMessages?: boolean } = {},
@@ -57,6 +69,7 @@ async function sanction(
     timeout: `You were timed out on **${server}** for ${duration(opts.minutes ?? 0)}${why}`,
     untimeout: `Your timeout on **${server}** was removed.`,
     kick: `You were kicked from **${server}**${why}`,
+    tempban: `You were temporarily banned from **${server}** for ${duration(opts.minutes ?? 0)}${why}`,
     ban: `You were banned from **${server}**${why}`,
   }[action];
   const delivered = await dm(ctx, member, text);
@@ -71,12 +84,17 @@ async function sanction(
     case "kick":
       await member.kick(auditReason);
       break;
+    case "tempban":
     case "ban":
-      await member.ban({
-        reason: auditReason,
-        ...(opts.deleteMessages ? { deleteMessagesSeconds: DAY } : {}),
-      });
-      break;
+      await applyBan(
+        ctx,
+        who(member.user, member.displayName),
+        moderator,
+        reason,
+        !!opts.deleteMessages,
+        action === "tempban" ? opts.minutes : undefined,
+      );
+      return delivered;
   }
   await recordCase(ctx, {
     action,
@@ -161,7 +179,7 @@ async function sanctionCommand(
   ctx: Context,
   interaction: CommandInteraction,
   member: Member,
-  action: "timeout" | "untimeout" | "kick" | "ban",
+  action: "timeout" | "untimeout" | "kick" | "ban" | "tempban",
   reason: string,
   opts: { minutes?: number; deleteMessages?: boolean } = {},
 ) {
@@ -169,6 +187,7 @@ async function sanctionCommand(
     timeout: `⏳ ${member.mention} is timed out for ${duration(opts.minutes ?? 0)}.`,
     untimeout: `✅ The timeout of ${member.mention} was removed.`,
     kick: `👢 ${member.mention} was kicked.`,
+    tempban: `🔨 ${member.mention} was banned for ${duration(opts.minutes ?? 0)}.`,
     ban: `🔨 ${member.mention} was banned.`,
   };
   let delivered: boolean;
@@ -190,7 +209,14 @@ async function sanctionCommand(
 }
 
 export default definePlugin({
+  async onStart(ctx) {
+    await migrateCases(ctx);
+  },
   commands: {
+    case: caseCommand,
+    history: historyCommand,
+    note: noteCommand,
+    purge,
     warn: command({
       description: "Warn a member (warnings expire; repeated warnings escalate)",
       ephemeral: true,
@@ -344,6 +370,12 @@ export default definePlugin({
       options: {
         member: { type: "user", description: "Member", required: true },
         reason: { type: "string", description: "Why (sent to the member)" },
+        duration: {
+          type: "integer",
+          description: "Temporary ban length in minutes",
+          minValue: 1,
+          maxValue: 525600,
+        },
         delete_messages: {
           type: "boolean",
           description: "Also delete their messages of the last 24 h",
@@ -355,13 +387,57 @@ export default definePlugin({
           reason = "",
           delete_messages: deleteMessages = false,
         } = interaction.options;
+        const minutes = interaction.options.duration;
+        const present = await ctx.server.member(user.id);
+        if (!present) {
+          if (
+            !ctx.server.ownerId ||
+            !interaction.member ||
+            user.id === ctx.server.ownerId ||
+            user.id === interaction.user.id ||
+            user.bot
+          ) {
+            await interaction.reply("This user cannot be banned.");
+            return;
+          }
+          await applyBan(ctx, who(user), moderatorOf(interaction), reason, deleteMessages, minutes);
+          await interaction.reply(`🔨 ${user.mention} was banned.`);
+          return;
+        }
         const member = await target(ctx, interaction, user.id);
         if (member)
-          await sanctionCommand(ctx, interaction, member, "ban", reason, { deleteMessages });
+          await sanctionCommand(ctx, interaction, member, minutes ? "tempban" : "ban", reason, {
+            deleteMessages,
+            ...(minutes ? { minutes } : {}),
+          });
+      },
+    }),
+
+    unban: command({
+      description: "Lift a ban",
+      ephemeral: true,
+      permissions: ["BanMembers"],
+      options: {
+        member: { type: "user", description: "User to unban", required: true },
+        reason: { type: "string", description: "Reason", required: true },
+      },
+      async run(ctx, it) {
+        await liftBan(ctx, who(it.options.member), who(it.user), it.options.reason);
+        await it.reply("Ban lifted.");
       },
     }),
   },
 
+  components: { "purge-confirm": finishPurge, "purge-cancel": finishPurge },
+  tasks: {
+    migrateCases,
+    async expireBan(ctx, payload) {
+      const data = payload as { number?: number; user?: string } | undefined;
+      if (!data || !Number.isSafeInteger(data.number) || typeof data.user !== "string")
+        throw new Error("Invalid expiry payload");
+      await expireBan(ctx, data.number!, data.user);
+    },
+  },
   events: {
     async memberJoin(ctx, member) {
       if (ctx.config.log.joins)
@@ -419,6 +495,8 @@ export default definePlugin({
   },
 
   routes: {
+    "GET /members/:id": { access: "member", handler: memberHistory },
+    "GET /cases": { access: "moderator", handler: listCases },
     /** Active warnings of a member (staff portal). */
     "GET /warnings/:userId": {
       access: "moderator",

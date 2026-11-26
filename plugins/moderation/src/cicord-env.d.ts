@@ -3,9 +3,12 @@ declare module "@cicord/sdk" {
   interface PluginConfig {
     logChannel: string;
     warningDays: number;
+    purge: {
+      maxCount: number;
+    };
     escalation: {
       warnings: number;
-      action: "timeout" | "kick" | "ban";
+      action: "timeout" | "kick" | "ban" | "tempban";
       durationMinutes: number;
     }[];
     dmMembers: boolean;
