@@ -1,0 +1,79 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "description": "Enable this pilot on this instance.",
+      "default": false
+    },
+    "feeds": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable feed identifier",
+            "pattern": "^[a-z][a-z0-9-]{0,39}$"
+          },
+          "url": {
+            "type": "string",
+            "description": "Public HTTPS URL approved in network.allow",
+            "pattern": "^https://",
+            "x-cicord-network-url": true
+          },
+          "channel": {
+            "type": "string",
+            "description": "Declared channel key",
+            "x-cicord-ref": "channel"
+          },
+          "keywords": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "Include entries matching this word",
+              "maxLength": 80
+            },
+            "maxItems": 32,
+            "default": []
+          },
+          "mentionRole": {
+            "type": "string",
+            "description": "Declared role key",
+            "x-cicord-ref": "role"
+          },
+          "template": {
+            "type": "string",
+            "description": "Message template with {title}, {url} and {role}",
+            "maxLength": 500,
+            "default": "{role} **{title}**\n{url}"
+          }
+        },
+        "required": ["id", "url", "channel"]
+      },
+      "maxItems": 16,
+      "minItems": 1
+    },
+    "pollMinutes": {
+      "type": "integer",
+      "description": "Interval between successful checks",
+      "minimum": 5,
+      "maximum": 1440,
+      "default": 15
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "if": {
+    "properties": {
+      "enabled": {
+        "const": true
+      }
+    },
+    "required": ["enabled"]
+  },
+  "then": {
+    "required": ["feeds"]
+  }
+}

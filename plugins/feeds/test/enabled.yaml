@@ -1,0 +1,5 @@
+enabled: true
+feeds:
+  - id: project
+    url: https://news.example.org/feed.xml
+    channel: general

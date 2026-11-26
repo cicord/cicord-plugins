@@ -1,0 +1,30 @@
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: tags
+  version: 0.1.0
+  displayName: Tags
+  description: Find and share reviewed Markdown replies and staff-managed answers.
+  license: Apache-2.0
+  authors: [Cicord]
+spec:
+  engine: ">=0.2.0"
+  entry: ./src/index.ts
+  locales: ./locales
+  capabilities:
+    - storage.kv # Instance-owned settings and durable counters.
+    - discord.messages.send # Reply with a tag.
+    - discord.members.read # Resolve current member permissions and roles.
+    - discord.channels.read # Check source and destination audiences.
+    - portal.routes # Staff tag editor and member catalog.
+  config: { schema: ./config.schema.json }
+  optional:
+    - feature: files
+      capabilities: [files.read]
+    - feature: autoReplies
+      capabilities: [discord.messages.read]
+      intents: [ServerMessages, MessageContent]
+  interop:
+    types: ./src/contracts.ts
+    provides: { queries: [search] }
+  routes: { types: ./src/routes.ts }

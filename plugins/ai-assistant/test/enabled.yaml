@@ -1,0 +1,5 @@
+enabled: true
+documentBaseURL: https://docs.example.org/
+fallbackContact:
+  text: Help desk
+  url: https://community.example.org/help

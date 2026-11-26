@@ -1,0 +1,21 @@
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: feeds
+  version: 0.1.0
+  displayName: Feeds
+  description: Announces new RSS, Atom and JSON Feed entries in configured channels.
+  license: Apache-2.0
+  authors: [Cicord]
+spec:
+  engine: ">=0.2.0"
+  entry: ./src/index.ts
+  locales: ./locales
+  capabilities:
+    - storage.kv # Instance-owned settings and durable counters.
+    - scheduler # Poll due feeds.
+    - http.fetch # Fetch bounded public feed documents.
+    - discord.channels.read # Resolve publication channels.
+    - discord.messages.send # Publish new entries.
+  config: { schema: ./config.schema.json }
+  network: { configurable: true, allow: [] }

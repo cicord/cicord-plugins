@@ -1,0 +1,9 @@
+{
+  "missing": "Aucun tag correspondant.",
+  "disabled": "Les tags sont désactivés.",
+  "choose": "Choisissez un tag.",
+  "commands.tag.name": "tag",
+  "commands.tag.description": "Partager une réponse enregistrée",
+  "commands.tag.options.name.description": "Nom du tag ou alias",
+  "commands.tag.options.user.description": "Mentionner un membre"
+}

@@ -1,0 +1,4 @@
+{
+  "backoff": "Flux indisponible. Nouvel essai dans {minutes} min.",
+  "uncertain": "Envoi incertain. Vérifiez le salon avant de réessayer."
+}

@@ -1,0 +1,52 @@
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: ai-assistant
+  version: 0.1.0
+  displayName: Knowledge assistant
+  description: Answers questions from reviewed knowledge with citations and an operator-set daily token budget.
+  license: Apache-2.0
+  authors: [Cicord]
+spec:
+  engine: ">=0.2.0"
+  entry: ./src/index.ts
+  locales: ./locales
+  capabilities:
+    - storage.kv # Instance-owned settings and durable counters.
+    - http.fetch # Ask Anthropic using host-injected credentials.
+    - files.read # Read reviewed knowledge files.
+    - storage.index # Search knowledge passages.
+    - discord.members.read # Resolve current member permissions and roles.
+    - discord.channels.read # Check source access before every answer.
+    - discord.messages.send # Deliver answers.
+    - scheduler # Prepare searchable knowledge.
+    - portal.routes # Staff review of opted-in unanswered questions.
+  config: { schema: ./config.schema.json }
+  network: { allow: [api.anthropic.com] }
+  secrets:
+    - name: API_KEY
+      description: Anthropic API credential
+      required: true
+      hosts: [api.anthropic.com]
+  optional:
+    - feature: tags
+      capabilities: [plugins.query:tags.search]
+    - feature: tickets
+      capabilities: [plugins.call:tickets.open]
+    - feature: helpChannels
+      capabilities: [discord.messages.read]
+      intents: [ServerMessages, MessageContent]
+  interop:
+    consumes: { queries: [tags.search], actions: [tickets.open] }
+  routes: { types: ./src/routes.ts }
+  privacy:
+    records:
+      - name: member activity
+        policy: erase
+        description: Opt-out, rate limit, pending support handoff, feedback and unanswered questions.
+        retention: Session handoffs 15 minutes, review records 7 days, opt-out until changed.
+      - name: solved posts
+        policy: erase
+        description: Explicitly enabled knowledge excerpts and their references.
+        retention: 30 days or earlier erasure.
+  delivery: at-least-once

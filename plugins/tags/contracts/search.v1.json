@@ -1,0 +1,60 @@
+{
+  "input": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "maxLength": 2048
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50
+      }
+    },
+    "required": ["query", "limit"],
+    "additionalProperties": false
+  },
+  "output": {
+    "type": "object",
+    "required": ["entries"],
+    "properties": {
+      "entries": {
+        "type": "array",
+        "maxItems": 50,
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "aliases": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "keywords": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "url": {
+              "type": "string"
+            },
+            "channel": {
+              "type": "string"
+            }
+          },
+          "required": ["name", "text", "aliases", "keywords"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "additionalProperties": false
+  }
+}

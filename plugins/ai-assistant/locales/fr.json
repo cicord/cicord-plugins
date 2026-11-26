@@ -1,0 +1,19 @@
+{
+  "disabled": "L’assistant est désactivé.",
+  "unknown": "Je n’ai pas trouvé de réponse dans les sources approuvées.",
+  "budget": "Le budget quotidien de jetons est épuisé.",
+  "unavailable": "L’assistant est temporairement indisponible.",
+  "human": "Parler à une personne",
+  "optout": "Votre préférence a été enregistrée.",
+  "limited": "Patientez avant de poser une nouvelle question.",
+  "ticket": "Votre demande de support a été ouverte.",
+  "feedback": "Merci pour votre avis.",
+  "restricted": "Vous ne pouvez pas utiliser l’assistant ici.",
+  "commands.ask.name": "demander",
+  "commands.ask.description": "Interroger la base de connaissances",
+  "commands.ask.question.description": "Obtenir une réponse sourcée",
+  "commands.ask.question.options.question.description": "Votre question",
+  "commands.ask.optout.name": "participation",
+  "commands.ask.optout.description": "Modifier votre préférence de participation",
+  "commands.ask.optout.options.enabled.description": "Désactiver le traitement par l’assistant pour votre compte"
+}

@@ -1,0 +1,19 @@
+{
+  "disabled": "The assistant is disabled.",
+  "unknown": "I couldn’t find an answer in the approved sources.",
+  "budget": "The daily token budget is exhausted.",
+  "unavailable": "The assistant is temporarily unavailable.",
+  "human": "Talk to a human",
+  "optout": "Your assistant preference has been saved.",
+  "limited": "Please wait before asking again.",
+  "ticket": "Your support request was opened.",
+  "feedback": "Thank you for your feedback.",
+  "restricted": "You cannot use the assistant here.",
+  "commands.ask.name": "ask",
+  "commands.ask.description": "Ask about community knowledge",
+  "commands.ask.question.description": "Get an answer with sources",
+  "commands.ask.question.options.question.description": "Your question",
+  "commands.ask.optout.name": "optout",
+  "commands.ask.optout.description": "Change your participation preference",
+  "commands.ask.optout.options.enabled.description": "Disable assistant processing for your account"
+}

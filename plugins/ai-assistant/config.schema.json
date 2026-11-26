@@ -1,0 +1,141 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "description": "Enable this pilot on this instance.",
+      "default": false
+    },
+    "fallbackContact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "Human support contact label",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "url": {
+          "type": "string",
+          "description": "HTTPS link to human support",
+          "pattern": "^https://",
+          "maxLength": 1024
+        }
+      },
+      "required": ["text", "url"]
+    },
+    "documentBaseURL": {
+      "type": "string",
+      "description": "HTTPS URL of reviewed documentation directory",
+      "pattern": "^https://",
+      "maxLength": 1024
+    },
+    "model": {
+      "type": "string",
+      "description": "Anthropic model identifier",
+      "default": "claude-haiku-5-5",
+      "pattern": "^[a-zA-Z0-9._-]{1,80}$"
+    },
+    "maxOutputTokens": {
+      "type": "integer",
+      "description": "Maximum generated tokens per answer",
+      "minimum": 64,
+      "maximum": 2048,
+      "default": 800
+    },
+    "dailyTokenBudget": {
+      "type": "integer",
+      "description": "Maximum daily input and output tokens",
+      "minimum": 256,
+      "maximum": 10000000,
+      "default": 500000
+    },
+    "minRelevance": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.35,
+      "description": "Minimum source score"
+    },
+    "channels": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "Declared channel key",
+        "x-cicord-ref": "channel"
+      },
+      "maxItems": 32,
+      "default": []
+    },
+    "allowedRoles": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "Declared role key",
+        "x-cicord-ref": "role"
+      },
+      "maxItems": 32,
+      "default": []
+    },
+    "excludedRoles": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "Declared role key",
+        "x-cicord-ref": "role"
+      },
+      "maxItems": 32,
+      "default": []
+    },
+    "memberInterval": {
+      "type": "integer",
+      "description": "Minimum seconds between member questions",
+      "minimum": 1,
+      "maximum": 3600,
+      "default": 30
+    },
+    "channelInterval": {
+      "type": "integer",
+      "description": "Minimum seconds between channel questions",
+      "minimum": 1,
+      "maximum": 3600,
+      "default": 5
+    },
+    "keepUnanswered": {
+      "type": "boolean",
+      "description": "Keep unanswered questions in a staff queue for seven days.",
+      "default": false
+    },
+    "solvedForums": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "x-cicord-ref": "channel"
+      },
+      "maxItems": 16,
+      "default": [],
+      "description": "Explicitly allow staff-curated solved posts from these channels to be indexed for up to 30 days."
+    },
+    "threadContextMessages": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10,
+      "default": 0,
+      "description": "Number of earlier messages from the same help thread to include in an answer."
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "if": {
+    "properties": {
+      "enabled": {
+        "const": true
+      }
+    },
+    "required": ["enabled"]
+  },
+  "then": {
+    "required": ["fallbackContact", "documentBaseURL"]
+  }
+}

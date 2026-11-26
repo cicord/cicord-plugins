@@ -1,0 +1,4 @@
+{
+  "backoff": "Feed unavailable. Retrying in {minutes} min.",
+  "uncertain": "Delivery is uncertain. Check the channel before retrying."
+}
