@@ -6,7 +6,7 @@ import {
   runCommand,
   runComponent,
 } from "@cicord/sdk/testing";
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect, test, vi } from "vite-plus/test";
 import en from "../locales/en.json" with { type: "json" };
 import fr from "../locales/fr.json" with { type: "json" };
 import schema from "../config.schema.json" with { type: "json" };
@@ -16,6 +16,7 @@ import { parseChoices, suggestPolls, type Poll } from "../src/polls.ts";
 const grants = [
   "discord.messages.send",
   "discord.messages.read",
+  "discord.members.read",
   "discord.channels.read",
   "discord.threads.manage",
   "storage.kv",
@@ -39,7 +40,17 @@ function setup(config: Record<string, unknown> = {}) {
       admins: { name: "Admins", permissions: ["Administrator"] },
       managers: { name: "Server managers", permissions: ["ManageServer"] },
     },
-    channels: { polls: { name: "polls" }, general: { name: "general" } },
+    channels: {
+      polls: { name: "polls" },
+      general: { name: "general" },
+      private: {
+        name: "private",
+        overwrites: {
+          "@everyone": { deny: ["ViewChannel"] },
+          staff: { allow: ["ViewChannel", "ReadMessageHistory"] },
+        },
+      },
+    },
     members: [
       { id: "1", username: "alice" },
       { id: "2", username: "bob" },
@@ -471,4 +482,70 @@ test("anonymous manual closure hides the operator and voter identities in both v
   await runComponent(plugin, h, "end:1", { user: "1", message });
   for (const event of h.published)
     expect(event.payload).toMatchObject({ closedBy: null, voters: [] });
+});
+
+test("native single-choice totals need no voter enumeration; multi-choice deduplicates across answer pages", async () => {
+  const single = setup(),
+    one = await start(single, { style: "native" }),
+    readOnce = vi.spyOn(one.message, "pollVoters");
+  single.votePoll(one.message.id, 1, "42");
+  expect((await callRoute(plugin, single, "GET /polls/1")).body).toMatchObject({ voters: 1 });
+  expect(readOnce).not.toHaveBeenCalled();
+  const h = setup(),
+    { message } = await start(h, { style: "native", multiple: true });
+  for (let i = 1000; i < 1125; i++) {
+    h.votePoll(message.id, 1, String(i));
+    if (i % 2 === 0) h.votePoll(message.id, 2, String(i));
+  }
+  const reads = vi.spyOn(message, "pollVoters");
+  const response = await callRoute(plugin, h, "GET /polls/1");
+  expect(response.body).toMatchObject({
+    voters: 125,
+    choices: [{ votes: 125 }, { votes: 63 }, { votes: 0 }],
+  });
+  expect(JSON.stringify(response.body)).not.toContain("1124");
+  expect(reads).toHaveBeenCalledTimes(3);
+  reads.mockClear();
+  await plugin.tasks!.close!(h.ctx, { id: "1" });
+  expect(reads).toHaveBeenCalledTimes(3);
+  expect(h.published[1]?.payload).toMatchObject({
+    voterCount: 125,
+    choices: [{ votes: 125 }, { votes: 63 }, { votes: 0 }],
+  });
+});
+test("results, autocomplete, portal and close check the current member against the source after revocation", async () => {
+  const h = setup();
+  h.addMember({ id: "author", roles: ["staff"] });
+  h.addMember({ id: "manager", roles: ["staff", "mod"] });
+  await runCommand(plugin, h, "poll", {
+    user: "author",
+    channel: "private",
+    options: { question: "Restricted topic", choices: "A|B" },
+  });
+  const results = (user: string) =>
+    runCommand(plugin, h, "polls results", { user, channel: "general", options: { poll: "1" } });
+  const close = (user: string) =>
+    runCommand(plugin, h, "polls close", { user, channel: "general", options: { poll: "1" } });
+  const completions = (user: string, subcommand: string) =>
+    runAutocomplete(plugin, h, "polls " + subcommand, {
+      user,
+      channel: "general",
+      focused: "poll",
+    });
+  expect(description((await results("manager")).replies[0])).toContain("**1. A**");
+  expect((await completions("manager", "close")).map((p) => p.name)).toEqual([
+    "#1 Restricted topic",
+  ]);
+  expect((await callRoute(plugin, h, "GET /polls/1", { viewer: "manager" })).status).toBe(200);
+  h.removeMember("manager");
+  h.addMember({ id: "manager", roles: ["mod"] });
+  for (const id of ["2", "manager"]) {
+    expect((await results(id)).replies).toEqual(["No such poll."]);
+    expect(await completions(id, "results")).toEqual([]);
+    expect(await completions(id, "close")).toEqual([]);
+    expect((await close(id)).replies).toEqual(["No such poll."]);
+    expect((await callRoute(plugin, h, "GET /polls/1", { viewer: id })).status).toBe(404);
+  }
+  expect(h.published).toHaveLength(0);
+  expect((await close("author")).replies).toEqual(["Poll #1 is closed."]);
 });

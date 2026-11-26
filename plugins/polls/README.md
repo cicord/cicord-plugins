@@ -21,11 +21,11 @@ roleWeights:
     weight: 2
 ```
 
-Leave eligibility and weights empty for native polls. Discord supplies their final choice counts. Native answers have a 55-character maximum.
+Leave eligibility and weights empty for native polls. Discord supplies their live and final choice counts. For native multi-select polls the reported participant total deduplicates voters across every answer and page. Native answers have a 55-character maximum.
 
 ## Results, grants and retention
 
-`GET /polls/:id` returns aggregate results. Anonymous viewers can read public source channels. Private channels additionally require a member who can currently read the source. The plugin publishes `polls.closed` v1 within the bot and v2 across the server. V2 includes the distinct voter count. Above 10,000 participants it omits the ID array and sets `votersTruncated`. A consumer granted `plugins.query:polls.voters` can request up to 1,000 distinct participants per page to award participation. A member-delegated call also checks channel access.
+`GET /polls/:id` returns aggregate results. Anonymous viewers can read public source channels. Private channels require a member who can currently read the source. Discord results, autocomplete, voting controls and closure also check current source-channel access. Removing that access hides the poll even from its author or a poll manager. The plugin publishes `polls.closed` v1 within the bot and v2 across the server. V2 includes the distinct voter count. Above 10,000 participants it omits the ID array and sets `votersTruncated`. A consumer granted `plugins.query:polls.voters` can request up to 1,000 distinct participants per page to award participation. A member-delegated call also checks channel access.
 
 Anonymous button and menu polls keep ballots only during voting. Closing deletes them before publishing. Both event versions suppress voters and the closing operator, and the voter query returns an empty page. Non-anonymous ballots and archived poll metadata stay available for results and reward queries until member erasure or instance data removal. Erasure covers ballot keys, native voter pages and creator/closer references. Discord controls the visibility and retention of votes on its native poll messages.
 

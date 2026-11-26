@@ -17,6 +17,7 @@ import {
 } from "@cicord/sdk";
 import {
   MAX_CHOICES,
+  nativeTally,
   closedEvent,
   findMessage,
   getPoll,
@@ -63,19 +64,8 @@ async function closePoll(ctx: Context, poll: Poll, by: string | null) {
       poll.style === "native" ? await findMessage(ctx, poll.channelId, poll.messageId) : undefined;
     if (poll.style === "native" && !native?.poll) throw new Error("Discord poll is unavailable");
     const result = native && !native.poll?.finalized ? await native.endPoll() : native;
-    let t = await tally(ctx, poll);
-    if (result?.poll) {
-      const ids = new Set<string>();
-      for (const a of result.poll.answers) {
-        let after: string | undefined;
-        for (;;) {
-          const users = await result.pollVoters(a.id, after);
-          for (const id of users) ids.add(id);
-          if (users.length < 100) break;
-          after = users[users.length - 1];
-        }
-      }
-      t = { counts: result.poll.answers.map((a) => a.votes), voters: [...ids].sort() };
+    const t = result ? await nativeTally(result, true) : await tally(ctx, poll);
+    if (result) {
       for (let offset = 0; offset < t.voters.length; offset += 1000)
         await ctx.kv.set(`native:${poll.id}:${offset}`, t.voters.slice(offset, offset + 1000));
     }
@@ -83,7 +73,7 @@ async function closePoll(ctx: Context, poll: Poll, by: string | null) {
       ...poll,
       status: "closed",
       closing: false,
-      final: { counts: t.counts, voterCount: t.voters.length },
+      final: { counts: t.counts, voterCount: t.voterCount ?? t.voters.length },
     };
     await savePoll(ctx, poll);
   }
@@ -218,6 +208,10 @@ async function openPoll(
 ): Promise<Poll | undefined> {
   const id = interaction.componentId.split(":")[1] ?? "";
   const poll = await getPoll(ctx, id);
+  if (poll && !canRead(poll, interaction.member)) {
+    await interaction.reply({ content: ctx.i18n.t("gone"), ephemeral: true });
+    return undefined;
+  }
   if (!poll || poll.status !== "open") {
     if (poll) await interaction.update(renderPoll(poll, await tally(ctx, poll), ctx));
     else await interaction.reply({ content: ctx.i18n.t("gone"), ephemeral: true });
@@ -261,6 +255,10 @@ function pingMentions(
   return { allowed: everyone ? none : { ...none, roles: [ping.id] } };
 }
 
+function canRead(poll: Poll, member: Member | undefined): boolean {
+  return member?.canView({ id: poll.channelId }) ?? false;
+}
+
 /** Autocomplete of the `poll` option: open polls (`/polls close`) or every poll. */
 function pollOption(onlyOpen: boolean) {
   return {
@@ -269,12 +267,13 @@ function pollOption(onlyOpen: boolean) {
     required: true,
     maxLength: 100,
     async autocomplete(ctx: Context, interaction: AutocompleteInteraction, focused: FocusedOption) {
-      let polls = await listPolls(ctx);
+      const member = await ctx.server.member(interaction.user.id);
+      if (!member) return [];
+      let polls = (await listPolls(ctx)).filter((p) => canRead(p, member));
       if (onlyOpen) {
         polls = polls.filter(
           (p) =>
-            p.status === "open" &&
-            (p.authorId === interaction.user.id || isManager(ctx, interaction.member)),
+            p.status === "open" && (p.authorId === interaction.user.id || isManager(ctx, member)),
         );
       }
       return suggestPolls(polls, focused.value);
@@ -481,7 +480,7 @@ export default definePlugin({
           options: { poll: pollOption(true) },
           async run(ctx, interaction) {
             const poll = await getPoll(ctx, pollId(interaction.options.poll));
-            if (!poll) {
+            if (!poll || !canRead(poll, interaction.member)) {
               await interaction.reply(ctx.i18n.t("unknown"));
               return;
             }
@@ -494,8 +493,10 @@ export default definePlugin({
               return;
             }
             const final = await closePoll(ctx, poll, interaction.user.id);
-            const message = await findMessage(ctx, poll.channelId, poll.messageId);
-            if (message && poll.style !== "native") await message.edit(final);
+            if (poll.style !== "native") {
+              const message = await findMessage(ctx, poll.channelId, poll.messageId);
+              if (message) await message.edit(final);
+            }
             await interaction.reply(ctx.i18n.t("closed", { id: poll.id }));
           },
         }),
@@ -504,7 +505,7 @@ export default definePlugin({
           options: { poll: pollOption(false) },
           async run(ctx, interaction) {
             const poll = await getPoll(ctx, pollId(interaction.options.poll));
-            if (!poll) {
+            if (!poll || !canRead(poll, interaction.member)) {
               await interaction.reply(ctx.i18n.t("unknown"));
               return;
             }
@@ -595,8 +596,8 @@ export default definePlugin({
       )
         return;
       const final = await closePoll(ctx, poll, null);
-      const message = await findMessage(ctx, poll.channelId, poll.messageId);
       if (poll.style === "native") return;
+      const message = await findMessage(ctx, poll.channelId, poll.messageId);
       if (message) await message.edit(final);
       else await ctx.server.channel({ id: poll.channelId }).send(final);
     },
@@ -611,8 +612,9 @@ export default definePlugin({
         const poll = await getPoll(ctx, request.params.id);
         if (
           !poll ||
-          (!ctx.server.audience({ id: poll.channelId }).public &&
-            !request.viewer?.member?.canView({ id: poll.channelId }))
+          (request.viewer
+            ? !canRead(poll, request.viewer.member)
+            : !ctx.server.audience({ id: poll.channelId }).public)
         )
           return { status: 404, body: { error: { code: "not_found", message: "no such poll" } } };
         const t = await tally(ctx, poll);

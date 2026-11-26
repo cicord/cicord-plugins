@@ -64,14 +64,43 @@ export async function savePoll(ctx: Context, poll: Poll): Promise<void> {
   await ctx.kv.set(pollKey(poll.id), poll as unknown as Json);
 }
 
+/** A single-choice count needs only Discord's answer totals. Multiselect
+ * participants can appear on several pages and on more than one answer. */
+export async function nativeTally(message: Message, includeVoterIds: boolean): Promise<Tally> {
+  if (!message.poll) throw new Error("Discord poll results are unavailable");
+  const counts = message.poll.answers.map((a) => a.votes);
+  const total = counts.reduce((n, v) => n + v, 0);
+  if (!includeVoterIds && !message.poll.multiselect) {
+    return { counts, voters: [], voterCount: total };
+  }
+  const ids = new Set<string>();
+  for (const answer of message.poll.answers) {
+    if (!answer.votes) continue;
+    let after: string | undefined;
+    for (;;) {
+      const page = await message.pollVoters(answer.id, after);
+      for (const id of page) ids.add(id);
+      if (page.length < 100) break;
+      after = page.at(-1);
+    }
+  }
+  return {
+    counts,
+    voterCount: message.poll.multiselect ? ids.size : total,
+    voters: includeVoterIds ? [...ids].sort() : [],
+  };
+}
+
 /** Counts votes (one KV key per voter, so concurrent votes never overwrite each other). */
 export async function tally(ctx: Context, poll: Poll): Promise<Tally> {
   if (poll.final)
     return { counts: poll.final.counts, voters: [], voterCount: poll.final.voterCount };
   if (poll.style === "native") {
+    if (poll.status === "scheduled")
+      return { counts: poll.choices.map(() => 0), voters: [], voterCount: 0 };
     const message = await findMessage(ctx, poll.channelId, poll.messageId);
     if (!message?.poll) throw new Error("Discord poll results are unavailable");
-    return { counts: message.poll.answers.map((a) => a.votes), voters: [] };
+    return nativeTally(message, false);
   }
   const counts = poll.choices.map(() => 0);
   const voters: string[] = [];
