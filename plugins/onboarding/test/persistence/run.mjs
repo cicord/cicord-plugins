@@ -40,7 +40,10 @@ try {
     },
   );
   process.stdout.write(result);
-  if (!result.includes("--- PASS: TestCommunityPublishedMigrations"))
+  if (
+    !result.includes("--- PASS: TestCommunityPublishedMigrations (") ||
+    (process.env.CICORD_TEST_POSTGRES_URL && result.includes("--- SKIP:"))
+  )
     throw Error("migration acceptance did not execute");
 } finally {
   await rm(tmp, { recursive: true, force: true });

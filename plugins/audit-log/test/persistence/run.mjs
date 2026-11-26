@@ -16,7 +16,7 @@ try {
       Replace: { [resolve(core, "internal/plugin/registry_audit_test.go")]: fixture },
     }),
   );
-  execFileSync(
+  const result = execFileSync(
     "go",
     [
       "test",
@@ -30,13 +30,20 @@ try {
     ],
     {
       cwd: core,
-      stdio: "inherit",
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "inherit"],
       env: {
         ...process.env,
         CICORD_AUDIT_PLUGIN: fileURLToPath(new URL("../..", import.meta.url)),
       },
     },
   );
+  process.stdout.write(result);
+  if (
+    !result.includes("--- PASS: TestAuditLogPublishedMigration (") ||
+    (process.env.CICORD_TEST_POSTGRES_URL && result.includes("--- SKIP:"))
+  )
+    throw new Error("Expected migration fixture and database backends did not run");
 } finally {
   await rm(tmp, { recursive: true, force: true });
 }
