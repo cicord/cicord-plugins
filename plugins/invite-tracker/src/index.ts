@@ -4,11 +4,21 @@ import {
   query,
   type Context,
   type Json,
+  type RouteResponse,
   type ServerInvite,
 } from "@cicord/sdk";
-import type { InviteAttribution, InviteCounts } from "./contracts.ts";
+import {
+  changeMember,
+  count,
+  ranking,
+  progress,
+  migrate,
+  initializeIndex,
+  related,
+  type Entry,
+} from "./storage.ts";
+import type { InviteAttribution } from "./contracts.ts";
 
-type Entry = InviteAttribution & { at: number; fake: boolean; left: boolean };
 type Snapshot = { uses: number; code: string; inviterId?: string; vanity?: boolean };
 type Cache = {
   invites: Map<string, Snapshot>;
@@ -72,38 +82,30 @@ function attribute(cache: Cache, fresh: Map<string, Snapshot>): InviteAttributio
   if (--pending.remaining === 0) cache.pending.shift();
   return pending.attribution;
 }
-async function entries(ctx: Context) {
-  const all: { id: string; entry: Entry }[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await ctx.kv.list<Entry>({ prefix: "member:", limit: 1000, cursor });
-    for (const i of page.items) all.push({ id: i.key.slice(7), entry: i.value });
-    cursor = page.cursor;
-  } while (cursor);
-  return all;
-}
-async function ranking(ctx: Context) {
-  const counts = new Map<string, InviteCounts>();
-  for (const { entry: e } of await entries(ctx)) {
-    if (!e.inviterId) continue;
-    const row = counts.get(e.inviterId) ?? { valid: 0, fake: 0, left: 0 };
-    if (e.fake) row.fake++;
-    else if (!e.left) row.valid++;
-    if (e.left) row.left++;
-    counts.set(e.inviterId, row);
-  }
-  return [...counts]
-    .map(([userId, c]) => ({ userId, ...c }))
-    .sort((a, b) => b.valid - a.valid || a.userId.localeCompare(b.userId));
-}
-async function count(ctx: Context, id: string) {
-  const row = (await ranking(ctx)).find((x) => x.userId === id);
-  return { valid: row?.valid ?? 0, fake: row?.fake ?? 0, left: row?.left ?? 0 };
+async function publishJoined(
+  ctx: Context,
+  userId: string,
+  at: number,
+  a: InviteAttribution,
+  fake: boolean,
+) {
+  await ctx.events.publish(
+    "joined",
+    {
+      userId,
+      ...(a.inviterId ? { inviterId: a.inviterId } : {}),
+      ...(a.code ? { code: a.code } : {}),
+      fake,
+    },
+    { version: 1, idempotencyKey: `join:${userId}:${at}` },
+  );
 }
 export default definePlugin({
   async onStart(ctx) {
     caches.set(ctx, { invites: await refresh(ctx), pending: [] });
+    await initializeIndex(ctx);
   },
+  tasks: { migrate },
   events: {
     inviteCreate(ctx, invite) {
       return serial(ctx, async () => {
@@ -117,33 +119,33 @@ export default definePlugin({
     },
     memberJoin(ctx, m) {
       return serial(ctx, async () => {
+        const at = m.joinedAt?.getTime() ?? Date.now();
+        const previous = await ctx.kv.get<Entry>("member:" + m.id);
+        if (previous?.at === at) {
+          await publishJoined(ctx, m.id, at, previous, previous.fake);
+          return;
+        }
         const fresh = await refresh(ctx),
           cache = caches.get(ctx);
         let a: InviteAttribution = {};
         if (cache) a = attribute(cache, fresh);
         else caches.set(ctx, { invites: fresh, pending: [] });
-        const at = m.joinedAt?.getTime() ?? Date.now();
-        const previous = await ctx.kv.get<Entry>("member:" + m.id);
-        if (previous?.at === at) return;
         const fake = at - m.user.createdAt.getTime() < ctx.config.minAccountDays * 86400000;
-        await ctx.kv.set("member:" + m.id, { ...a, at, fake, left: false });
-        await ctx.events.publish(
-          "joined",
-          { userId: m.id, ...a, fake },
-          { version: 1, idempotencyKey: `join:${m.id}:${at}` },
-        );
+        await changeMember(ctx, m.id, () => ({ ...a, at, fake, left: false }));
+        await publishJoined(ctx, m.id, at, a, fake);
       });
     },
     memberLeave(ctx, user) {
       return serial(ctx, async () => {
-        const key = "member:" + user.id,
-          e = await ctx.kv.get<Entry>(key);
-        if (e && !e.left)
-          await ctx.kv.set(key, {
-            ...e,
-            left: true,
-            fake: e.fake || Date.now() - e.at < ctx.config.minStayDays * 86400000,
-          });
+        await changeMember(ctx, user.id, (e) =>
+          e && !e.left
+            ? {
+                ...e,
+                left: true,
+                fake: e.fake || Date.now() - e.at < ctx.config.minStayDays * 86400000,
+              }
+            : e,
+        );
       });
     },
   },
@@ -153,6 +155,11 @@ export default definePlugin({
       ephemeral: true,
       options: { user: { type: "user", description: "Member" } },
       async run(ctx, it) {
+        const state = await progress(ctx);
+        if (!state?.ready) {
+          await it.reply(ctx.i18n.t("indexing", { n: state?.processed ?? 0 }));
+          return;
+        }
         const c = await count(ctx, it.options.user?.id ?? it.user.id);
         await it.reply(ctx.i18n.t("counts", c));
       },
@@ -161,7 +168,12 @@ export default definePlugin({
       description: "Top inviters by valid invitations",
       ephemeral: true,
       async run(ctx, it) {
-        const top = (await ranking(ctx)).slice(0, 10);
+        const state = await progress(ctx);
+        if (!state?.ready) {
+          await it.reply(ctx.i18n.t("indexing", { n: state?.processed ?? 0 }));
+          return;
+        }
+        const top = await ranking(ctx, 10);
         await it.reply(
           top.map((r, i) => `${i + 1}. <@${r.userId}> · ${r.valid}`).join("\n") ||
             ctx.i18n.t("empty"),
@@ -191,25 +203,51 @@ export default definePlugin({
       },
     }),
   },
-  routes: { "GET /leaderboard": { access: "member", handler: (ctx) => ranking(ctx) } },
+  routes: {
+    "GET /leaderboard": {
+      access: "member",
+      async handler(ctx, req): Promise<RouteResponse> {
+        const limit = Number(req.query.limit ?? 100),
+          offset = Number(req.query.offset ?? 0);
+        if (
+          !Number.isSafeInteger(limit) ||
+          limit < 1 ||
+          limit > 100 ||
+          !Number.isSafeInteger(offset) ||
+          offset < 0
+        )
+          return { status: 400, body: { error: "Expected limit 1–100 and a nonnegative offset" } };
+        const state = await progress(ctx);
+        if (!state?.ready)
+          return { status: 503, body: { error: "indexing", processed: state?.processed ?? 0 } };
+        return ranking(ctx, limit, offset);
+      },
+    },
+  },
   privacy: {
     async export(ctx, id) {
-      return (await entries(ctx)).filter(
-        (x) => x.id === id || x.entry.inviterId === id,
-      ) as unknown as Json;
+      const records: Json[] = [];
+      for (const uid of await related(ctx, id)) {
+        const entry = await ctx.kv.get<Entry>("member:" + uid);
+        if (entry && (uid === id || entry.inviterId === id)) {
+          const { indexed: _indexed, ...data } = entry;
+          records.push({ id: uid, entry: data });
+        }
+      }
+      return records;
     },
     async erase(ctx, id) {
       let erased = 0;
-      for (const { id: user, entry } of await entries(ctx)) {
-        if (user === id) {
-          await ctx.kv.delete("member:" + user);
-          erased++;
-        } else if (entry.inviterId === id) {
-          delete entry.inviterId;
-          delete entry.code;
-          await ctx.kv.set("member:" + user, entry);
-          erased++;
-        }
+      for (const uid of await related(ctx, id)) {
+        const entry = await ctx.kv.get<Entry>("member:" + uid);
+        if (!entry || (uid !== id && entry.inviterId !== id)) continue;
+        await changeMember(ctx, uid, (e) => {
+          if (uid === id) return undefined;
+          if (e?.inviterId !== id) return e;
+          const { inviterId: _inv, code: _code, ...rest } = e;
+          return rest;
+        });
+        erased++;
       }
       return { erased };
     },

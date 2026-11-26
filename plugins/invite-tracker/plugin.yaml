@@ -14,6 +14,7 @@ spec:
   delivery: at-least-once
   capabilities:
     - discord.invites.read
+    - scheduler # resumable invite count and leaderboard index migration
     - storage.kv
     - events.publish
     - portal.routes

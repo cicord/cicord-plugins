@@ -5,5 +5,6 @@
   "commands.invites.name": "invites",
   "commands.invites.description": "Count invitations for a member",
   "commands.invite-leaderboard.name": "invite-leaderboard",
-  "commands.invite-leaderboard.description": "Top inviters by valid invitations"
+  "commands.invite-leaderboard.description": "Top inviters by valid invitations",
+  "indexing": "Building the invite index ({n} records checked). Try again shortly."
 }
