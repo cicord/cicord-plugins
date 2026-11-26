@@ -146,7 +146,7 @@ export async function editCase(ctx: Context, number: number, change: Partial<Cas
 
 /** Lexical KV pagination lists newer cases first without scanning all cases. */
 export async function indexCase(ctx: Context, c: Case) {
-  if (c.moderator && c.action !== "note") {
+  if (c.moderator && !c.moderator.id.startsWith("deleted-user-") && c.action !== "note") {
     const marker = "stats-case:" + c.number,
       counter = "moderator-total:" + c.moderator.id;
     for (let i = 0; i < 10; i++) {
@@ -307,8 +307,8 @@ async function deliver(ctx: Context, number: number) {
   if (!d.event2) {
     const v2 = {
       ...v1,
-      ...(c.source ? { source: c.source } : {}),
-      ...(c.status ? { status: c.status } : {}),
+      source: c.source ?? { type: c.moderator ? "command" : "escalation" },
+      status: c.status ?? "active",
       ...(c.expiresAt ? { expiresAt: c.expiresAt } : {}),
     };
     await ctx.events.publish("case", v2, { version: 2, idempotencyKey: `case:${number}:v2` });

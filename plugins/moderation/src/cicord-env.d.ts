@@ -46,6 +46,49 @@ declare module "@cicord/sdk" {
 export {};
 
 declare module "@cicord/sdk" {
+  interface PublishedEvents {
+    "appeal.v1": {
+      case: number;
+      status: "pending" | "accepted" | "rejected";
+      userId: string;
+    };
+    "case.v1": {
+      action: string;
+      at: string;
+      member: {
+        id: string;
+        name: string;
+      } | null;
+      moderator: {
+        id: string;
+        name: string;
+      } | null;
+      number: number;
+      reason: string;
+    };
+    "case.v2": {
+      action: string;
+      at: string;
+      expiresAt?: string;
+      member: {
+        id: string;
+        name: string;
+      } | null;
+      moderator: {
+        id: string;
+        name: string;
+      } | null;
+      number: number;
+      reason: string;
+      source: Record<string, unknown>;
+      status: string;
+    };
+    "caseUpdated.v1": {
+      by: string;
+      changes: string[];
+      number: number;
+    };
+  }
   interface EventContracts {
     "moderation.appeal.v1": {
       case: number;
