@@ -11,8 +11,14 @@ import en from "../locales/en.json" with { type: "json" };
 import fr from "../locales/fr.json" with { type: "json" };
 import schema from "../config.schema.json" with { type: "json" };
 import plugin from "../src/index.ts";
-import { liftBanIfCurrent } from "../src/bans.ts";
-import { deliverCase, saveNewCase, type Case } from "../src/moderation.ts";
+import { liftBanIfCurrent, preserveBanTasksForErasure } from "../src/bans.ts";
+import {
+  deliverCase,
+  expireCaseLog,
+  redactCaseDelivery,
+  saveNewCase,
+  type Case,
+} from "../src/moderation.ts";
 
 const grants = [
   "discord.messages.send",
@@ -406,7 +412,7 @@ describe("webhook and routes", () => {
       {
         url: "https://discord.com/api/webhooks/1/x",
         body: {
-          content: "Case #1 · Warning: troll — spam (by mia)",
+          content: "Case #1 · Warning",
           allowed_mentions: { parse: [] },
         },
       },
@@ -721,12 +727,12 @@ describe("ownership and delivery recovery", () => {
       reason: "rule",
       at: new Date().toISOString(),
     };
-    const remove = t.ctx.kv.delete.bind(t.ctx.kv);
-    vi.spyOn(t.ctx.kv, "delete")
-      .mockImplementationOnce(async () => {
-        throw new Error("lost acknowledgment");
-      })
-      .mockImplementation(remove);
+    const set = t.ctx.kv.set.bind(t.ctx.kv);
+    vi.spyOn(t.ctx.kv, "set").mockImplementation(async (key, value, opts) => {
+      if (key === "case-log:21" && value && typeof value === "object" && "messageId" in value)
+        throw new Error("lost receipt write");
+      await set(key, value, opts);
+    });
     await saveNewCase(t.ctx, c);
     vi.advanceTimersByTime(301_000);
     const channel = t.ctx.server.channel("mod-log");
@@ -738,6 +744,69 @@ describe("ownership and delivery recovery", () => {
     expect(await t.ctx.kv.get("case-delivery:21")).toBeDefined();
   });
 
+  test("erasure and retention retract delivered staff copies, even when the receipt expired", async () => {
+    const t = setup();
+    const c: Case = {
+      number: 41,
+      at: new Date().toISOString(),
+      member: { id: "2", name: "private" },
+      moderator: null,
+      action: "warn",
+      reason: "private reason",
+    };
+    const ch = t.ctx.server.channel("mod-log");
+    await saveNewCase(t.ctx, c);
+    const first = await t.ctx.kv.get<{ messageId: string }>("case-log:41");
+    expect(first).toBeDefined();
+    await redactCaseDelivery(t.ctx, 41);
+    await redactCaseDelivery(t.ctx, 41);
+    expect(await ch.message(first!.messageId)).toBeUndefined();
+    await saveNewCase(t.ctx, { ...c, number: 42 });
+    const known = await t.ctx.kv.get<{ messageId: string }>("case-log:42");
+    const cleanup = t.scheduled.find(
+      (x) =>
+        x.task === "expireCaseLog" &&
+        (x.payload as { messageId?: string }).messageId === known?.messageId,
+    )!;
+    await t.ctx.kv.delete("case-log:42");
+    await expireCaseLog(t.ctx, cleanup.payload);
+    expect(await ch.message(known!.messageId)).toBeUndefined();
+  });
+
+  test("a legacy ban keeps opaque expiry across erasure and never restores its subject on release", async () => {
+    const t = setup();
+    const userId = "2",
+      alias = "deleted-user-abc";
+    await runCommand(plugin, t, "ban", {
+      user: "1",
+      options: { member: user(t, userId), duration: 1 },
+    });
+    const original = t.scheduled.find((x) => x.task === "expireBan")!;
+    expect(original.payload).toBe("ban/b");
+    await t.ctx.schedule.cancel(original.id);
+    const raw = await t.ctx.schedule.after(60_000, "expireBan", { number: 1, user: userId });
+    const p = await t.ctx.kv.get<Record<string, Json>>("ban-expiry:1");
+    delete p!.opaqueJobs;
+    await t.ctx.kv.set("ban-expiry:1", { ...p!, taskId: raw.id });
+    await preserveBanTasksForErasure(t.ctx, userId, alias);
+    await preserveBanTasksForErasure(t.ctx, userId, alias);
+    const timers = t.scheduled.filter((x) => x.task === "expireBan");
+    expect(timers.map((x) => x.payload)).toEqual(["ban/b"]);
+    await plugin.tasks!.expireBan!(t.ctx, timers[0]!.payload);
+    expect(await t.ctx.server.bans()).toHaveLength(0);
+    expect(await t.ctx.kv.get("active-ban:2")).toBeUndefined();
+    expect(await t.ctx.kv.get("ban-expiry:1")).toBeUndefined();
+    expect(await t.ctx.kv.get("case:1")).toMatchObject({
+      member: { id: alias },
+      status: "expired",
+    });
+    expect(await t.ctx.kv.get("case:2")).toMatchObject({ member: { id: alias }, action: "unban" });
+    expect(
+      t.scheduled
+        .filter((x) => x.task === "bindBanEvidence")
+        .every((x) => typeof x.payload === "string" && !/[0-9]/.test(x.payload)),
+    ).toBe(true);
+  });
   test("delivery retries an interrupted event and reconciles a staff message after losing its acknowledgment", async () => {
     const t = setup();
     const c: Case = {

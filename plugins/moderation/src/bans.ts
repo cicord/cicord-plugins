@@ -1,5 +1,12 @@
 import type { AuditLogEntry, Context, Json } from "@cicord/sdk";
-import { caseTTL, recordCase, saveNewCase, withModerationLock, type Case } from "./moderation.ts";
+import {
+  caseIndexKey,
+  caseTTL,
+  recordCase,
+  saveNewCase,
+  withModerationLock,
+  type Case,
+} from "./moderation.ts";
 
 type Person = NonNullable<Case["member"]>;
 type BanProof = { entryId: string; actorId: string; checkedAt: number; entryAt?: number };
@@ -12,6 +19,8 @@ type Expiry = {
   caseSaved?: boolean;
   proof?: BanProof;
   nextCheck?: number;
+  opaqueJobs?: boolean;
+  erasedTarget?: string;
 };
 
 type BanOptions = { source?: Case["source"]; beforeDiscord?(sanction: Case): Promise<void> };
@@ -22,6 +31,51 @@ const pending = new Map<string, Promise<void>>();
 const activeKey = (user: string) => `active-ban:${user}`;
 const expiryKey = (number: number) => `ban-expiry:${number}`;
 const marker = (c: Case) => `[cicord ${c.action} #${c.number}] `;
+
+// Use only alphabetic case-local references in the scheduler. A case counter or
+// clock value must never be mistaken for an erased Discord user ID.
+const alphabet = "abcdefghij";
+const encode = (value: number) => String(value).replace(/[0-9]/g, (d) => alphabet[Number(d)]!);
+function decode(value: string): number {
+  if (!/^[a-j]{1,16}$/.test(value)) return NaN;
+  return Number(Array.from(value, (letter) => String(alphabet.indexOf(letter))).join(""));
+}
+type Job = { number: number; legacyUser?: string; check?: number; release?: number };
+function jobRef(number: number, phase?: "check" | "release", generation?: number) {
+  return phase ? `ban/${encode(number)}/${phase}/${encode(generation!)}` : `ban/${encode(number)}`;
+}
+function parseJob(input: Json | undefined): Job {
+  if (typeof input === "string") {
+    const [prefix, ref, phase, value, extra] = input.split("/");
+    const number = decode(ref ?? ""),
+      generation = decode(value ?? "");
+    if (prefix === "ban" && Number.isSafeInteger(number) && number > 0 && extra === undefined) {
+      if (phase === undefined) return { number };
+      if (
+        (phase === "release" || phase === "check") &&
+        Number.isSafeInteger(generation) &&
+        generation > 0
+      )
+        return { number, [phase]: generation };
+    }
+  } else if (
+    input &&
+    typeof input === "object" &&
+    !Array.isArray(input) &&
+    typeof input.number === "number" &&
+    Number.isSafeInteger(input.number) &&
+    input.number > 0 &&
+    typeof input.user === "string"
+  ) {
+    return {
+      number: input.number,
+      legacyUser: input.user,
+      check: typeof input.check === "number" ? input.check : undefined,
+      release: typeof input.release === "number" ? input.release : undefined,
+    };
+  }
+  throw new Error("Invalid ban task reference");
+}
 
 /** Serialize Discord and KV changes for one member across concurrent commands and tasks. */
 async function forMember<T>(ctx: Context, user: string, work: () => Promise<T>): Promise<T> {
@@ -41,30 +95,34 @@ async function forMember<T>(ctx: Context, user: string, work: () => Promise<T>):
   }
 }
 
-async function setStatus(ctx: Context, number: number, status: Case["status"]) {
+async function setStatus(
+  ctx: Context,
+  number: number,
+  status: Case["status"],
+  erasedTarget?: string,
+) {
   const key = `case:${number}`;
   for (let i = 0; i < 5; i++) {
     const old = await ctx.kv.getEntry<Case>(key);
-    if (!old || old.value.status === status || old.value.status === "void") return;
-    const ttlSeconds = caseTTL(old.value.at);
-    if (!ttlSeconds) return;
-    if (
-      (
-        await ctx.kv
-          .atomic()
-          .check(key, old.version)
-          .set(key, { ...old.value, status } as Json, { ttlSeconds })
-          .commit()
-      ).ok
-    )
+    if (!old || (!erasedTarget && (old.value.status === status || old.value.status === "void")))
       return;
+    const ttlSeconds = caseTTL(old.value.at);
+    const tx = ctx.kv.atomic().check(key, old.version);
+    if (!ttlSeconds) tx.delete(key);
+    else {
+      const value = { ...old.value, status: old.value.status === "void" ? "void" : status };
+      if (erasedTarget) value.member = { id: erasedTarget, name: "Deleted user" };
+      tx.set(key, value as Json, { ttlSeconds });
+    }
+    if ((await tx.commit()).ok) return;
   }
   throw new Error("Case changed while recording ban status");
 }
 
 async function retire(ctx: Context, p: Expiry, status: "lifted" | "superseded" | "expired") {
-  await setStatus(ctx, p.sanction.number, status);
+  await setStatus(ctx, p.sanction.number, status, p.erasedTarget);
   const user = p.sanction.member!.id;
+  if (p.erasedTarget) await ctx.kv.delete(caseIndexKey(user, p.sanction.number));
   const key = activeKey(user);
   const current = await ctx.kv.getEntry<number>(key);
   if (current?.value === p.sanction.number)
@@ -173,7 +231,12 @@ async function materialize(ctx: Context, p: Expiry) {
   if (active !== undefined && active > number) return;
   await ctx.kv.set(activeKey(user), number);
   if (!p.caseSaved) {
-    await saveNewCase(ctx, p.sanction);
+    await saveNewCase(
+      ctx,
+      p.erasedTarget
+        ? { ...p.sanction, member: { id: p.erasedTarget, name: "Deleted user" }, reason: "" }
+        : p.sanction,
+    );
     p.caseSaved = true;
     const c = p.sanction;
     // Keep only what an expiration, checkpoint or conditional release needs.
@@ -217,26 +280,24 @@ async function checkpoint(ctx: Context, p: Expiry, result: Check) {
     delay = 20_000;
   }
   p.nextCheck = Date.now() + delay;
-  await ctx.schedule.after(delay, "bindBanEvidence", {
-    number: p.sanction.number,
-    user: p.sanction.member!.id,
-    check: p.nextCheck,
-  });
+  await ctx.schedule.after(
+    delay,
+    "bindBanEvidence",
+    jobRef(p.sanction.number, "check", p.nextCheck),
+  );
   await store(ctx, p);
 }
 
 export async function bindBanEvidence(ctx: Context, payload?: Json) {
-  const job = payload as
-    | { number: number; user: string; check?: number; release?: number }
-    | undefined;
-  if (!job || !Number.isSafeInteger(job.number) || typeof job.user !== "string")
-    throw new Error("Invalid ban evidence task");
-  await forMember(ctx, job.user, async () => {
+  const job = parseJob(payload);
+  const user = (await ctx.kv.get<Expiry>(expiryKey(job.number)))?.sanction.member?.id;
+  if (!user || (job.legacyUser && job.legacyUser !== user)) return;
+  await forMember(ctx, user, async () => {
     const p = await ctx.kv.get<Expiry>(expiryKey(job.number));
-    if (!p || p.sanction.member?.id !== job.user) return;
+    if (!p || p.sanction.member?.id !== user) return;
     if (job.release !== undefined) {
       if (p.release?.number === job.release)
-        await releaseCurrent(ctx, job.user, job.number, p.release.moderator, p.release.reason);
+        await releaseCurrent(ctx, user, job.number, p.release.moderator, p.release.reason);
       return;
     }
     if (job.check === undefined || p.nextCheck !== job.check) return;
@@ -277,18 +338,13 @@ export async function applyBan(
     const p: Expiry = {
       sanction: c,
       floor: before?.id ?? "0",
+      opaqueJobs: true,
       nextCheck: at.getTime() + 20_000,
       ...(previous ? { supersedes: previous } : {}),
     };
     if (minutes)
-      p.taskId = (
-        await ctx.schedule.after(minutes * 60000, "expireBan", { number, user: member.id })
-      ).id;
-    await ctx.schedule.after(20_000, "bindBanEvidence", {
-      number,
-      user: member.id,
-      check: p.nextCheck!,
-    });
+      p.taskId = (await ctx.schedule.after(minutes * 60000, "expireBan", jobRef(number))).id;
+    await ctx.schedule.after(20_000, "bindBanEvidence", jobRef(number, "check", p.nextCheck!));
     await store(ctx, p);
     await options.beforeDiscord?.(c);
     const auditReason = marker(c) + `${moderator?.name ?? "automatic"}: ${reason || "no reason"}`;
@@ -336,11 +392,11 @@ async function releaseCurrent(
       status: "lifted",
       source: { type: moderator ? "command" : "escalation" },
     };
-    await ctx.schedule.after(20_000, "bindBanEvidence", {
-      number,
-      user,
-      release: p.release.number,
-    });
+    await ctx.schedule.after(
+      20_000,
+      "bindBanEvidence",
+      jobRef(number, "release", p.release.number),
+    );
     await store(ctx, p);
   }
   if (result.kind === "verified") {
@@ -367,16 +423,82 @@ async function releaseCurrent(
     await retire(ctx, p, "lifted");
     return false;
   }
-  if (!p.caseSaved) await saveNewCase(ctx, p.sanction);
-  await saveNewCase(ctx, p.release);
+  if (!p.caseSaved)
+    await saveNewCase(
+      ctx,
+      p.erasedTarget
+        ? { ...p.sanction, member: { id: p.erasedTarget, name: "Deleted user" }, reason: "" }
+        : p.sanction,
+    );
+  await saveNewCase(
+    ctx,
+    p.erasedTarget
+      ? { ...p.release, member: { id: p.erasedTarget, name: "Deleted user" }, reason: "" }
+      : p.release,
+  );
   await retire(ctx, p, p.release.moderator ? "lifted" : "expired");
   return true;
 }
 
-export async function expireBan(ctx: Context, number: number, user: string) {
+export async function expireBan(ctx: Context, payload?: Json) {
+  const job = parseJob(payload);
+  const saved = await ctx.kv.get<Expiry>(expiryKey(job.number));
+  const user = saved?.sanction.member?.id;
+  if (!user || saved?.sanction.action !== "tempban" || (job.legacyUser && job.legacyUser !== user))
+    return;
   await forMember(ctx, user, () =>
-    releaseCurrent(ctx, user, number, null, `Temporary ban #${number} expired`),
+    releaseCurrent(ctx, user, job.number, null, `Temporary ban #${job.number} expired`),
   );
+}
+
+/** Schedule replacements before retiring old raw-ID timers. A failed migration
+ * is recoverable from the ledger on the next erase or database restore. */
+export async function preserveBanTasksForErasure(ctx: Context, user: string, pseudonym: string) {
+  let cursor: string | undefined;
+  do {
+    const page = await ctx.kv.list<Expiry>({
+      prefix: "ban-expiry:",
+      limit: 50,
+      ...(cursor ? { cursor } : {}),
+    });
+    for (const { key, value } of page.items) {
+      if (value.sanction.member?.id !== user) continue;
+      await forMember(ctx, user, async () => {
+        const p = await ctx.kv.get<Expiry>(key);
+        if (!p || p.sanction.member?.id !== user) return;
+        p.erasedTarget = pseudonym;
+        const old = p.taskId,
+          number = p.sanction.number;
+        if (!p.opaqueJobs) {
+          if (p.sanction.action === "tempban") {
+            const at = Date.parse(p.sanction.expiresAt ?? "");
+            if (!Number.isFinite(at)) throw new Error("Missing temporary ban expiry");
+            p.taskId = (
+              await ctx.schedule.after(Math.max(1, at - Date.now()), "expireBan", jobRef(number))
+            ).id;
+          }
+          if (p.release)
+            await ctx.schedule.after(
+              1,
+              "bindBanEvidence",
+              jobRef(number, "release", p.release.number),
+            );
+          else if (p.nextCheck !== undefined || !p.proof) {
+            p.nextCheck ??= Date.now();
+            await ctx.schedule.after(
+              Math.max(1, p.nextCheck - Date.now()),
+              "bindBanEvidence",
+              jobRef(number, "check", p.nextCheck),
+            );
+          }
+          p.opaqueJobs = true;
+        }
+        await store(ctx, p);
+        if (old && old !== p.taskId) await ctx.schedule.cancel(old);
+      });
+    }
+    cursor = page.cursor;
+  } while (cursor);
 }
 
 export async function liftBanIfCurrent(
@@ -394,14 +516,23 @@ export async function liftBan(ctx: Context, member: Person, moderator: Person, r
   return forMember(ctx, member.id, async () => {
     const number = await ctx.kv.get<number>(activeKey(member.id));
     await ctx.server.unban(member.id, reason);
+    let target = member;
     if (number) {
       const p = await ctx.kv.get<Expiry>(expiryKey(number));
-      if (p) await retire(ctx, p, "lifted");
-      else {
+      if (p) {
+        if (p.erasedTarget) target = { id: p.erasedTarget, name: "Deleted user" };
+        await retire(ctx, p, "lifted");
+      } else {
         await setStatus(ctx, number, "lifted");
         await ctx.kv.delete(activeKey(member.id));
       }
     }
-    return recordCase(ctx, { action: "unban", member, moderator, reason, status: "lifted" });
+    return recordCase(ctx, {
+      action: "unban",
+      member: target,
+      moderator,
+      reason: target === member ? reason : "",
+      status: "lifted",
+    });
   });
 }

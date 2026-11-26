@@ -144,6 +144,10 @@ export async function editCase(ctx: Context, number: number, change: Partial<Cas
   throw new Error("Case changed concurrently.");
 }
 
+export function caseIndexKey(user: string, number: number) {
+  return `case-user:${user}:${String(Number.MAX_SAFE_INTEGER - number).padStart(16, "0")}`;
+}
+
 /** Lexical KV pagination lists newer cases first without scanning all cases. */
 export async function indexCase(ctx: Context, c: Case) {
   if (c.moderator && !c.moderator.id.startsWith("deleted-user-") && c.action !== "note") {
@@ -168,11 +172,7 @@ export async function indexCase(ctx: Context, c: Case) {
   }
   const ttlSeconds = caseTTL(c.at);
   if (c.member && ttlSeconds > 0)
-    await ctx.kv.set(
-      `case-user:${c.member.id}:${String(Number.MAX_SAFE_INTEGER - c.number).padStart(16, "0")}`,
-      c.number,
-      { ttlSeconds },
-    );
+    await ctx.kv.set(caseIndexKey(c.member.id, c.number), c.number, { ttlSeconds });
 }
 
 /** Records a case and writes it to the audit log (and the webhook). */
@@ -192,7 +192,88 @@ type Delivery = {
   event2?: boolean;
   webhookAttempted?: boolean;
   staffAttemptedAt?: number;
+  withdraw?: boolean;
 };
+
+type Receipt = {
+  number: number;
+  channelId: string;
+  nonce: string;
+  at: number;
+  messageId?: string;
+  cleanup?: string;
+};
+const receiptKey = (number: number) => `case-log:${number}`;
+
+async function recordedMessage(ctx: Context, r: Receipt) {
+  const channel = ctx.server.channel({ id: r.channelId });
+  const owns = (m: import("@cicord/sdk").Message) =>
+    m.author.id === ctx.bot.user.id &&
+    m.embeds.some((e) => e.footer?.text === `Case delivery ${r.nonce}`);
+  if (r.messageId) {
+    const message = await channel.message(r.messageId);
+    if (message && !owns(message)) throw new Error("Staff log receipt could not be verified");
+    return message;
+  }
+  const recent = await channel.messages({ limit: 100 });
+  const found = recent.find(owns);
+  if (!found && recent.length === 100 && recent.every((m) => m.createdAt.getTime() >= r.at))
+    throw new Error(
+      "Staff log delivery is uncertain after 100 newer messages; staff review required",
+    );
+  return found;
+}
+
+async function withdrawCaseCopy(ctx: Context, number: number, fallback?: Receipt) {
+  const key = deliveryKey(number),
+    pending = await ctx.kv.get<Delivery>(key);
+  const receipt =
+    (await ctx.kv.get<Receipt>(receiptKey(number))) ??
+    fallback ??
+    (pending?.staffAttemptedAt === undefined
+      ? undefined
+      : {
+          number,
+          channelId: pending.channelId,
+          nonce: pending.taskId.slice(0, 25),
+          at: pending.staffAttemptedAt,
+        });
+  if (pending) {
+    // A recovery task that runs after a failed erasure must only withdraw.
+    const c = await readCase(ctx, number);
+    await ctx.kv.set(
+      key,
+      { ...pending, withdraw: true },
+      { ttlSeconds: Math.max(1, c ? caseTTL(c.at) : 1) },
+    );
+  }
+  if (receipt)
+    await (await recordedMessage(ctx, receipt))?.delete("Moderation case privacy or retention");
+  if (pending) await ctx.schedule.cancel(pending.taskId);
+  if (receipt?.cleanup) await ctx.schedule.cancel(receipt.cleanup);
+  await ctx.kv.delete(key);
+  await ctx.kv.delete(receiptKey(number));
+}
+
+export function redactCaseDelivery(ctx: Context, number: number) {
+  return withModerationLock(ctx, `case-delivery-lock:${number}`, () =>
+    withdrawCaseCopy(ctx, number),
+  );
+}
+
+export async function expireCaseLog(ctx: Context, payload?: Json) {
+  const r = payload as Receipt | undefined;
+  if (
+    !r ||
+    !Number.isSafeInteger(r.number) ||
+    typeof r.channelId !== "string" ||
+    typeof r.nonce !== "string"
+  )
+    throw new Error("Invalid staff log cleanup task");
+  await withModerationLock(ctx, `case-delivery-lock:${r.number}`, () =>
+    withdrawCaseCopy(ctx, r.number, r),
+  );
+}
 
 const deliveryKey = (number: number) => `case-delivery:${number}`;
 const sending = new Map<number, Promise<void>>();
@@ -281,6 +362,7 @@ async function deliver(ctx: Context, number: number) {
   const key = deliveryKey(number);
   const d = await ctx.kv.get<Delivery>(key);
   if (!d) return;
+  if (d.withdraw) return withdrawCaseCopy(ctx, number);
   const c = await readCase(ctx, number);
   const ttlSeconds = c ? caseTTL(c.at) : 0;
   if (!c || c.action === "note" || !ttlSeconds) {
@@ -318,47 +400,60 @@ async function deliver(ctx: Context, number: number) {
   if (!d.webhookAttempted && (ctx.secrets.has("WEBHOOK_URL") || ctx.config.webhook?.url)) {
     d.webhookAttempted = true;
     await ctx.kv.set(key, d, { ttlSeconds });
-    await notifyWebhook(
-      ctx,
-      `Case #${number} · ${ctx.i18n.t("actions." + c.action)}: ${c.member?.name ?? "channel"} — ${c.reason || "no reason"}${c.moderator ? ` (by ${c.moderator.name})` : ""}`,
-    );
+    await notifyWebhook(ctx, `Case #${number} · ${ctx.i18n.t("actions." + c.action)}`);
   }
   const channel = ctx.server.channel({ id: d.channelId });
   const nonce = d.taskId.slice(0, 25);
   const footer = `Case delivery ${nonce}`;
-  let found = false;
-  if (d.staffAttemptedAt !== undefined) {
-    const recent = await channel.messages({ limit: 100 });
-    found = recent.some(
-      (m) => m.author.id === ctx.bot.user.id && m.embeds.some((e) => e.footer?.text === footer),
-    );
-    // Discord only remembers an enforced nonce for a few minutes. When a busy
-    // channel has moved beyond the recorded attempt we cannot prove absence.
-    if (
-      !found &&
-      Date.now() - d.staffAttemptedAt > 120_000 &&
-      recent.length === 100 &&
-      recent.every((m) => m.createdAt.getTime() >= d.staffAttemptedAt!)
-    )
-      throw new Error(
-        "Staff log delivery is uncertain after 100 newer messages; staff review required",
-      );
-  } else {
-    d.staffAttemptedAt = Date.now();
-    await ctx.kv.set(key, d, { ttlSeconds });
+  const existing = await ctx.kv.get<Receipt>(receiptKey(number));
+  let receipt: Receipt = existing ?? {
+    number,
+    channelId: d.channelId,
+    nonce,
+    at: d.staffAttemptedAt ?? Date.now(),
+  };
+  let messageId = receipt.messageId;
+  if (!messageId && d.staffAttemptedAt !== undefined) {
+    // In the short nonce window Discord deduplicates another send. Beyond it,
+    // require enough history to prove that a previous request did not publish.
+    if (Date.now() - d.staffAttemptedAt > 120_000)
+      messageId = (await recordedMessage(ctx, receipt))?.id;
+    else {
+      const recent = await channel.messages({ limit: 100 });
+      messageId = recent.find(
+        (m) => m.author.id === ctx.bot.user.id && m.embeds.some((e) => e.footer?.text === footer),
+      )?.id;
+    }
   }
-  if (!found) {
+  if (!existing) {
+    receipt.cleanup = (await ctx.schedule.after(ttlSeconds * 1000, "expireCaseLog", receipt)).id;
+    await ctx.kv.set(receiptKey(number), receipt, { ttlSeconds });
+  }
+  if (!messageId) {
+    d.staffAttemptedAt ??= receipt.at;
+    await ctx.kv.set(key, d, { ttlSeconds });
     let evidence: string | undefined;
     if (c.evidence && c.evidenceChannelId) {
       const relation = ctx.server.compareAudience({ id: c.evidenceChannelId }, channel);
       if (relation === "same" || relation === "narrower") evidence = c.evidence;
     }
-    await channel.send({
-      embeds: [{ ...caseEmbed(ctx, { ...c, evidence }), footer: { text: footer } }],
-      nonce,
-      enforceNonce: true,
-      allowedMentions: { users: false, roles: false, everyone: false },
-    });
+    messageId = (
+      await channel.send({
+        embeds: [{ ...caseEmbed(ctx, { ...c, evidence }), footer: { text: footer } }],
+        nonce,
+        enforceNonce: true,
+        allowedMentions: { users: false, roles: false, everyone: false },
+      })
+    ).id;
+  }
+  if (!existing?.messageId) {
+    // The scheduled cleanup retains a nonpersonal pointer even if the runtime is
+    // offline when the bounded receipt expires. Both tasks are idempotent.
+    const oldCleanup = receipt.cleanup;
+    const durable: Receipt = { number, channelId: d.channelId, nonce, at: receipt.at, messageId };
+    durable.cleanup = (await ctx.schedule.after(ttlSeconds * 1000, "expireCaseLog", durable)).id;
+    await ctx.kv.set(receiptKey(number), durable, { ttlSeconds });
+    if (oldCleanup) await ctx.schedule.cancel(oldCleanup);
   }
   await ctx.kv.delete(key);
   await ctx.schedule.cancel(d.taskId);

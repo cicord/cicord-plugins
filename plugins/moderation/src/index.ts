@@ -17,6 +17,7 @@ import {
   activeWarnings,
   duration,
   deliverCase,
+  expireCaseLog,
   logLine,
   recordCase,
   warnPrefix,
@@ -611,12 +612,8 @@ export default definePlugin({
     migrateCases,
     bindBanEvidence,
     deliverCase,
-    async expireBan(ctx, payload) {
-      const data = payload as { number?: number; user?: string } | undefined;
-      if (!data || !Number.isSafeInteger(data.number) || typeof data.user !== "string")
-        throw new Error("Invalid expiry payload");
-      await expireBan(ctx, data.number!, data.user);
-    },
+    expireCaseLog,
+    expireBan,
   },
   events: {
     auditLogEntry: staffRoleChange,
