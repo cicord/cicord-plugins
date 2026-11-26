@@ -42,9 +42,8 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-cicord
         with:
-          version: ${{ (github.ref_name == 'feature/0.2.0' || github.head_ref == 'feature/0.2.0') && '99ea0de6f92981d4d584a92c4d75527f868c5482' || vars.CICORD_VERSION || 'main' }}
-          feature-build: ${{ github.ref_name == 'feature/0.2.0' || github.head_ref == 'feature/0.2.0' }}
-          token: ${{ secrets.CICORD_SOURCE_TOKEN || github.token }}
+          version: ${{ (github.ref_name == 'feature/0.2.0' || github.base_ref == 'feature/0.2.0' || (github.head_ref == 'feature/0.2.0' && github.event.pull_request.head.repo.full_name == github.repository)) && '8c2f477fae8b5e3ec321c744353ea130e6e4d3f6' || vars.CICORD_VERSION || 'main' }}
+          feature-build: ${{ github.ref_name == 'feature/0.2.0' || github.base_ref == 'feature/0.2.0' || (github.head_ref == 'feature/0.2.0' && github.event.pull_request.head.repo.full_name == github.repository) }}
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -64,9 +63,8 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-cicord
         with:
-          version: ${{ (github.ref_name == 'feature/0.2.0' || github.head_ref == 'feature/0.2.0') && '99ea0de6f92981d4d584a92c4d75527f868c5482' || vars.CICORD_VERSION || 'main' }}
-          feature-build: ${{ github.ref_name == 'feature/0.2.0' || github.head_ref == 'feature/0.2.0' }}
-          token: ${{ secrets.CICORD_SOURCE_TOKEN || github.token }}
+          version: ${{ (github.ref_name == 'feature/0.2.0' || github.base_ref == 'feature/0.2.0' || (github.head_ref == 'feature/0.2.0' && github.event.pull_request.head.repo.full_name == github.repository)) && '8c2f477fae8b5e3ec321c744353ea130e6e4d3f6' || vars.CICORD_VERSION || 'main' }}
+          feature-build: ${{ github.ref_name == 'feature/0.2.0' || github.base_ref == 'feature/0.2.0' || (github.head_ref == 'feature/0.2.0' && github.event.pull_request.head.repo.full_name == github.repository) }}
       - name: Check index.yaml
         env:
           EVENT: ${{ github.event_name }}
