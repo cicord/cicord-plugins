@@ -17,3 +17,30 @@ declare module "@cicord/sdk" {
   }
 }
 export {};
+
+declare module "@cicord/sdk" {
+  interface PublishedEvents {
+    "ended.v1": {
+      attendees?: string[];
+      channelId?: string;
+      eventId: string;
+    };
+    "started.v1": {
+      attendees?: string[];
+      channelId?: string;
+      eventId: string;
+    };
+  }
+  interface EventContracts {
+    "community-events.ended.v1": {
+      attendees?: string[];
+      channelId?: string;
+      eventId: string;
+    };
+    "community-events.started.v1": {
+      attendees?: string[];
+      channelId?: string;
+      eventId: string;
+    };
+  }
+}

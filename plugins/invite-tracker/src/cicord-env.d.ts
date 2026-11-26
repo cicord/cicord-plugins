@@ -6,3 +6,37 @@ declare module "@cicord/sdk" {
   }
 }
 export {};
+
+declare module "@cicord/sdk" {
+  interface PublishedEvents {
+    "joined.v1": {
+      code?: string;
+      fake: boolean;
+      inviterId?: string;
+      userId: string;
+    };
+  }
+  interface EventContracts {
+    "invite-tracker.joined.v1": {
+      code?: string;
+      fake: boolean;
+      inviterId?: string;
+      userId: string;
+    };
+  }
+  interface QueryContracts {
+    "invite-tracker.count": {input: {
+      userId: string;
+    }; output: {
+      fake: number;
+      left: number;
+      valid: number;
+    }};
+    "invite-tracker.inviterOf": {input: {
+      userId: string;
+    }; output: {
+      code?: string;
+      inviterId?: string;
+    }};
+  }
+}

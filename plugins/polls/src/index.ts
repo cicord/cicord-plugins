@@ -115,7 +115,7 @@ async function closePoll(ctx: Context, poll: Poll, by: string | null) {
       voterCount: t.voterCount,
       ...(!poll.anonymous && t.voterCount > 10000 ? { votersTruncated: true } : { voters }),
     };
-    await ctx.events.publish("closed", legacy as unknown as Json, {
+    await ctx.events.publish("closed", legacy, {
       version: 1,
       idempotencyKey: `close:${poll.id}:v1`,
     });
