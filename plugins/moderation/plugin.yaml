@@ -15,6 +15,7 @@ spec:
   delivery: at-least-once
   privacy:
     records:
+      - {name: discord-staff-log-copies, policy: erase, description: Withdraw indexed case and member event notices from Discord.}
       - {name: cases, policy: retain, description: Redact identities and free text in closed cases., retention: "365 days", justification: "Staff need a bounded record of prior enforcement."}
       - {name: active-sanctions, policy: retain, description: Minimum subject and expiry generation for live sanctions., retention: Until lifted or expired, justification: "A data request must not bypass a current ban or quarantine."}
       - {name: private-notes, policy: erase, description: Erase private notes on a member request.}

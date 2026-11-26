@@ -18,7 +18,6 @@ import {
   duration,
   deliverCase,
   expireCaseLog,
-  logLine,
   recordCase,
   warnPrefix,
   who,
@@ -41,6 +40,7 @@ import {
 } from "./cases.ts";
 import { purge, finishPurge, previewPurge } from "./purge.ts";
 
+import { writeActivity, expireActivity } from "./activity.ts";
 import { serialize } from "./queue.ts";
 import {
   QuarantineRefusal,
@@ -48,7 +48,7 @@ import {
   release,
   trackQuarantine,
   staffRoleChange,
-  recoverQuarantine,
+  quarantineTask,
   excludeSavedRole,
 } from "./quarantine.ts";
 import {
@@ -601,13 +601,12 @@ export default definePlugin({
 
   components: { "purge-confirm": finishPurge, "purge-cancel": finishPurge },
   tasks: {
+    expireActivity,
     async applyQuarantine(ctx, payload) {
-      const p = payload as { user: string; number: number };
-      await recoverQuarantine(ctx, p.user, p.number);
+      await quarantineTask(ctx, payload, true);
     },
     async expireQuarantine(ctx, payload) {
-      const p = payload as { user: string; number: number };
-      await release(ctx, p.user, p.number, null, "Quarantine expired", true);
+      await quarantineTask(ctx, payload, false);
     },
     migrateCases,
     bindBanEvidence,
@@ -619,8 +618,9 @@ export default definePlugin({
     auditLogEntry: staffRoleChange,
     async memberJoin(ctx, member) {
       if (!ctx.plugins.has("audit-log") && ctx.config.log.joins)
-        await logLine(
+        await writeActivity(
           ctx,
+          member.id,
           ctx.i18n.t("moderation.join", { member: member.mention, user: member.user.username }),
           "#2ecc71",
         );
@@ -628,8 +628,9 @@ export default definePlugin({
     async memberLeave(ctx, user) {
       recent.delete(user.id);
       if (!ctx.plugins.has("audit-log") && ctx.config.log.leaves)
-        await logLine(
+        await writeActivity(
           ctx,
+          user.id,
           ctx.i18n.t("moderation.leave", { member: user.mention, user: user.username }),
           "#e74c3c",
         );
@@ -647,7 +648,8 @@ export default definePlugin({
       const removed = previous.roles.filter((r) => !after.has(r.id)).map((r) => `-${r.name}`);
       if (added.length + removed.length > 0)
         changes.push(`roles: ${[...added, ...removed].join(" ")}`);
-      if (changes.length > 0) await logLine(ctx, `✏️ ${member.mention}: ${changes.join("; ")}`);
+      if (changes.length > 0)
+        await writeActivity(ctx, member.id, `✏️ ${member.mention}: ${changes.join("; ")}`);
     },
 
     /** Flood protection. Only authors and timestamps are used (no MessageContent). */

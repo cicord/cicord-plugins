@@ -15,8 +15,11 @@ type Quarantine = {
   overlay: boolean;
   pending?: Case;
   task?: string;
+  caseOnlyTasks?: boolean;
+  redacted?: boolean;
 };
 const key = (user: string) => "quarantine:" + user;
+const bindingKey = (number: number) => "quarantine-case:" + number;
 const overlayId = (user: string) => "quarantine-" + user;
 const save = (ctx: Context, q: Quarantine) => ctx.kv.set(key(q.user), q as unknown as Json);
 
@@ -99,13 +102,13 @@ export async function quarantine(
     q.pending = c;
     // Both handlers inspect the case generation. Scheduling them before persisting
     // intent makes a crash before the first Discord request harmless.
-    await ctx.schedule.after(1000, "applyQuarantine", { user: m.id, number });
-    const task = await ctx.schedule.after(minutes * 60000, "expireQuarantine", {
-      number,
-      user: m.id,
-    });
-    q.task = task.id;
-    await save(ctx, q);
+    await scheduleCaseTasks(ctx, q);
+    const tx = ctx.kv
+      .atomic()
+      .set(key(m.id), q as unknown as Json)
+      .set(bindingKey(number), m.id);
+    if (old) tx.delete(bindingKey(old.number));
+    await tx.commit();
     await enforce(ctx, q, current);
     if (old) {
       if (old.task) await ctx.schedule.cancel(old.task);
@@ -116,13 +119,61 @@ export async function quarantine(
   });
 }
 
+async function scheduleCaseTasks(ctx: Context, q: Quarantine) {
+  if (q.pending) await ctx.schedule.after(1000, "applyQuarantine", { number: q.number });
+  const delay = Math.max(1, Date.parse(q.until) - Date.now());
+  const expiry = await ctx.schedule.after(delay, "expireQuarantine", { number: q.number });
+  q.task = expiry.id;
+  q.caseOnlyTasks = true;
+}
+
+/** Legacy jobs carried a Discord user ID. Keep the replacement wakeups independent
+ * of the privacy API's subsequent removal of member-bearing task payloads. */
+export async function preserveQuarantineForErasure(ctx: Context, user: string, deleted: string) {
+  await serialize(key(user), async () => {
+    const q = await ctx.kv.get<Quarantine>(key(user));
+    if (!q) return;
+    if (!q.caseOnlyTasks) await scheduleCaseTasks(ctx, q);
+    q.redacted = true;
+    // The runtime keeps the subject only while its declared assignments must stay suspended.
+    if (q.overlay && Date.parse(q.until) > Date.now())
+      await ctx.server.overlays.apply({
+        id: overlayId(user),
+        reason: "Quarantine case #" + q.number,
+        until: new Date(q.until),
+        members: { [user]: { suspendDeclaredRoles: true } },
+      });
+    if (q.pending) {
+      q.pending.reason = "";
+      delete q.pending.evidence;
+      delete q.pending.evidenceChannelId;
+      q.pending.member = { id: deleted, name: "Deleted user" };
+      if (q.pending.moderator?.id === user)
+        q.pending.moderator = { id: deleted, name: "Deleted user" };
+    }
+    await ctx.kv
+      .atomic()
+      .set(key(user), q as unknown as Json)
+      .set(bindingKey(q.number), user)
+      .commit();
+  });
+}
+
+export async function quarantineTask(ctx: Context, payload: Json | undefined, apply: boolean) {
+  const p = payload as { number?: number; user?: string } | undefined;
+  if (!p?.number || !Number.isSafeInteger(p.number)) throw new Error("Invalid quarantine case.");
+  const user = (await ctx.kv.get<string>(bindingKey(p.number))) ?? p.user;
+  if (!user) return;
+  if (apply) await recoverQuarantine(ctx, user, p.number);
+  else await release(ctx, user, p.number, null, "Quarantine expired", true);
+}
 async function enforce(ctx: Context, q: Quarantine, m: Member) {
   const c = q.pending;
   if (!c || Date.parse(q.until) <= Date.now()) return;
   if (q.overlay)
     await ctx.server.overlays.apply({
       id: overlayId(m.id),
-      reason: c.reason,
+      reason: "Quarantine case #" + q.number,
       until: new Date(q.until),
       members: { [m.id]: { suspendDeclaredRoles: true } },
     });
@@ -153,6 +204,7 @@ export async function release(
     const q = await ctx.kv.get<Quarantine>(key(user));
     if (!q || (expected !== undefined && q.number !== expected)) return false;
     const m = await ctx.server.member(user);
+    if (q.redacted) await ctx.kv.set("quarantine-release-echo:" + user, true, { ttlSeconds: 120 });
     if (m) {
       for (const id of q.restore) {
         const role = ctx.server.role({ id });
@@ -172,7 +224,7 @@ export async function release(
         by: moderator?.id ?? "cicord",
       });
     }
-    await ctx.kv.delete(key(user));
+    await ctx.kv.atomic().delete(key(user)).delete(bindingKey(q.number)).commit();
     if (q.task && !expired) await ctx.schedule.cancel(q.task);
     return true;
   });
@@ -240,4 +292,11 @@ export async function excludeSavedRole(ctx: Context, user: string, role: string)
     await save(ctx, q);
     return true;
   });
+}
+
+export async function hideErasedActivity(ctx: Context, user: string) {
+  return (
+    !!(await ctx.kv.get<Quarantine>(key(user)))?.redacted ||
+    !!(await ctx.kv.get("quarantine-release-echo:" + user))
+  );
 }

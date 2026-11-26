@@ -459,14 +459,6 @@ async function deliver(ctx: Context, number: number) {
   await ctx.schedule.cancel(d.taskId);
 }
 
-/** Plain audit log line (joins, leaves, updates). */
-export async function logLine(ctx: Context, text: string, color = "#95a5a6"): Promise<void> {
-  await ctx.server.channel(ctx.config.logChannel).send({
-    embeds: [{ description: text, color, timestamp: new Date().toISOString() }],
-    allowedMentions: { users: false, roles: false, everyone: false },
-  });
-}
-
 /** Posts to the optional webhook. Failures are logged, never thrown. */
 async function notifyWebhook(ctx: Context, text: string): Promise<void> {
   const hook = ctx.config.webhook;

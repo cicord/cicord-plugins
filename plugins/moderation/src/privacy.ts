@@ -1,6 +1,9 @@
 import type { Context, Json } from "@cicord/sdk";
-import { type Case, warnPrefix } from "./moderation.ts";
+import { type Case, caseTTL, redactCaseDelivery, warnPrefix } from "./moderation.ts";
+import { preserveBanTasksForErasure } from "./bans.ts";
+import { preserveQuarantineForErasure } from "./quarantine.ts";
 import { memberCase } from "./cases.ts";
+import { eraseActivity } from "./activity.ts";
 import type { Appeal } from "./appeals.ts";
 
 async function pages<T extends Json>(
@@ -14,6 +17,44 @@ async function pages<T extends Json>(
     for (const row of p.items) await each(row.key, row.value);
     cursor = p.cursor;
   } while (cursor);
+}
+type PendingCopy = { number: number; revoke: boolean };
+async function finishCopyErasure(ctx: Context, k: string, copy: PendingCopy) {
+  await redactCaseDelivery(ctx, copy.number);
+  if (copy.revoke && ctx.features.enabled("appeals"))
+    await ctx.portal.revoke({ kind: "case", id: String(copy.number) });
+  await ctx.kv.delete(k);
+}
+
+async function redactCase(ctx: Context, k: string, user: string, deleted: string, prefix: string) {
+  for (let retry = 0; retry < 8; retry++) {
+    const entry = await ctx.kv.getEntry<Case>(k);
+    if (!entry) return 0;
+    const c = entry.value,
+      subject = c.member?.id === user;
+    if (!subject && c.moderator?.id !== user) return 0;
+    const receipt = prefix + c.number,
+      copy = { number: c.number, revoke: subject };
+    // The receipt contains a pseudonym and an opaque case number. If Discord
+    // refuses the withdrawal after the user index has gone, the next request
+    // still finds it and cannot report completion until withdrawal succeeds.
+    const tx = ctx.kv.atomic().check(k, entry.version).set(receipt, copy);
+    const ttlSeconds = caseTTL(c.at);
+    if (!ttlSeconds || c.action === "note") tx.delete(k);
+    else {
+      const removed = { id: deleted, name: "Deleted user" };
+      c.reason = "";
+      delete c.evidence;
+      delete c.evidenceChannelId;
+      if (subject) c.member = removed;
+      if (c.moderator?.id === user) c.moderator = removed;
+      tx.set(k, c, { ttlSeconds });
+    }
+    if (!(await tx.commit()).ok) continue;
+    await finishCopyErasure(ctx, receipt, copy);
+    return 1;
+  }
+  throw new Error("The case changed during erasure; retry the privacy request.");
 }
 export const privacy = {
   async export(ctx: Context, user: string) {
@@ -30,34 +71,17 @@ export const privacy = {
   async erase(ctx: Context, user: string) {
     let erased = 0;
     const deleted = await ctx.privacy.pseudonym(user);
-    await pages<Case>(ctx, "case:", async (k, c) => {
-      if (c.member?.id !== user && c.moderator?.id !== user) return;
-      if (c.action === "note") {
-        await ctx.kv.delete(k);
-        erased++;
-        return;
-      }
-      const activeBan =
-        c.member?.id === user && (await ctx.kv.get<number>("active-ban:" + user)) === c.number;
-      const q = await ctx.kv.get<{ number: number }>("quarantine:" + user);
-      // Keep a live sanction's minimal target so it can still be released safely.
-      const keepTarget = activeBan || q?.number === c.number;
-      const remaining = Math.ceil((Date.parse(c.at) + 365 * 86400000 - Date.now()) / 1000);
-      if (remaining <= 0 && !keepTarget) {
-        await ctx.kv.delete(k);
-      } else {
-        const tombstone = { id: deleted, name: "Deleted user" };
-        c.reason = "";
-        delete c.evidence;
-        delete c.evidenceChannelId;
-        if (c.member?.id === user)
-          c.member = keepTarget ? { id: user, name: "Deleted user" } : tombstone;
-        if (c.moderator?.id === user) c.moderator = tombstone;
-        await ctx.kv.set(k, c, keepTarget ? {} : { ttlSeconds: remaining });
-      }
-      if (ctx.features.enabled("appeals"))
-        await ctx.portal.revoke({ kind: "case", id: String(c.number) });
+    await preserveBanTasksForErasure(ctx, user, deleted);
+    await preserveQuarantineForErasure(ctx, user, deleted);
+    erased += await eraseActivity(ctx, user);
+    const prefix = "privacy-copy:" + deleted + ":";
+    await pages<PendingCopy>(ctx, prefix, async (k, copy) => {
+      await finishCopyErasure(ctx, k, copy);
       erased++;
+    });
+    await pages<Case>(ctx, "case:", async (k, c) => {
+      if (c.member?.id === user || c.moderator?.id === user)
+        erased += await redactCase(ctx, k, user, deleted, prefix);
     });
     await pages<Appeal>(ctx, "appeal:", async (k, a) => {
       if (a.userId === user) {

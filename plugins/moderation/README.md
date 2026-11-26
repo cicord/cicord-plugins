@@ -90,3 +90,11 @@ Set the instance locale to `fr` to select French throughout the server, or leave
 it unset to follow the interaction and server locale. To exclude an assignment
 that was already absent from Discord during quarantine, authorized staff can use
 `DELETE /quarantines/:id/roles/:role` with the member and role IDs before release.
+
+Case and membership notices posted by this version retain a Discord reference until
+erasure or their scheduled one-year withdrawal. Erasure removes their staff-channel
+copies, revokes case links and leaves a retry receipt if Discord is unavailable.
+Pre-upgrade notices without a reference or delivery marker may need manual
+removal. New external webhook notifications contain only the case number and
+action. Older messages already delivered to another service remain under that
+service's retention policy.

@@ -214,3 +214,30 @@ test("a staff decision on an older ban never releases the current ban", async ()
   expect(await t.ctx.kv.get("active-ban:member")).toBe(2);
   expect(t.moderation.filter((a) => a.action === "unban")).toHaveLength(0);
 });
+
+test("privacy erases identifying Discord copies but preserves the pending quarantine release", async () => {
+  const t = setup(),
+    m = t.member("member")!;
+  await plugin.events!.memberJoin!(t.ctx, m);
+  const c = await quarantine(t.ctx, m, "sensitive staff reason", 60, null, { type: "command" });
+  const log = t.ctx.server.channel("log");
+  const visible = () => log.messages({ limit: 50 });
+  expect(JSON.stringify((await visible()).map((x) => x.embeds))).toContain(
+    "sensitive staff reason",
+  );
+  const erased = await plugin.privacy!.erase(t.ctx, m.id);
+  expect(erased.erased).toBeGreaterThan(0);
+  const after = JSON.stringify((await visible()).map((x) => x.embeds));
+  expect(after).not.toContain("sensitive staff reason");
+  expect(after).not.toContain("<@member>");
+  const stored = await t.ctx.kv.get<Case>("case:" + c.number);
+  expect(stored?.member?.id).toMatch(/^deleted-user-/);
+  const wake = t.scheduled.find((v) => v.task === "expireQuarantine");
+  expect(wake?.payload).toEqual({ number: c.number });
+  // This is the delivery the core can still claim after its generic user-payload purge.
+  await plugin.tasks!.expireQuarantine!(t.ctx, wake!.payload);
+  expect(m.hasRole("restricted")).toBe(false);
+  expect(m.hasRole("member")).toBe(true);
+  expect(await t.ctx.kv.get("quarantine:" + m.id)).toBeUndefined();
+  expect(await t.ctx.kv.get("quarantine-case:" + c.number)).toBeUndefined();
+});
