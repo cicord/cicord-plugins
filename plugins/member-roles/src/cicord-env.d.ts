@@ -23,3 +23,39 @@ declare module "@cicord/sdk" {
   }
 }
 export {};
+
+declare module "@cicord/sdk" {
+  interface PublishedEvents {
+    "tempRoleExpired.v1": {
+      expiresAt: number;
+      roleId: string;
+      userId: string;
+    };
+  }
+  interface EventContracts {
+    "member-roles.tempRoleExpired.v1": {
+      expiresAt: number;
+      roleId: string;
+      userId: string;
+    };
+  }
+  interface ActionContracts {
+    "member-roles.grantTemporary": {input: {
+      durationSeconds: number;
+      reason?: string;
+      role: string;
+      userId: string;
+    }; output: {
+      expiresAt: number;
+      roleId: string;
+      userId: string;
+    }};
+    "member-roles.revoke": {input: {
+      reason?: string;
+      role: string;
+      userId: string;
+    }; output: {
+      revoked: boolean;
+    }};
+  }
+}
