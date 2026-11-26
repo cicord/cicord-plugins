@@ -39,7 +39,7 @@ export async function archive(ctx: Context, t: Ticket) {
     const batch = await channel.messages({ limit: 100, ...(before ? { before } : {}) });
     if (!batch.length) break;
     const lines: Line[] = [];
-    for (const m of await redactLive(ctx, t, batch)) {
+    for (const m of redactLive(t, batch)) {
       const userId = copied.get(m.id);
       if (m.author.bot && !userId) continue;
       const by = userId ? personForCopy(t, userId) : person(m.author, m.member);
@@ -84,7 +84,7 @@ function html(s: string) {
 
 export async function renderTranscript(ctx: Context, t: Ticket, format: "html" | "markdown") {
   if (!t.expiresAt || Date.now() >= t.expiresAt) return undefined;
-  const heading = `Ticket #${t.number}: ${t.subject}`;
+  const heading = ctx.i18n.t("archiveHeading", { number: t.number, subject: t.subject });
   const lines: Line[] = [{ author: t.author, at: t.createdAt, text: t.description }];
   for (let page = (t.transcriptPages ?? 0) - 1; page >= 0; page--)
     lines.push(...(await readPage(ctx, t, page)).reverse());
@@ -93,7 +93,9 @@ export async function renderTranscript(ctx: Context, t: Ticket, format: "html" |
   const wrap = (body: string) =>
     format === "markdown"
       ? "# " + markdown(heading) + "\n\n" + body
-      : '<!doctype html><html lang="en"><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'"><meta name="viewport" content="width=device-width"><style>body{max-width:52rem;margin:2rem auto;font:1rem system-ui;padding:1rem}p{white-space:pre-wrap;overflow-wrap:anywhere}time{color:#555}</style><title>' +
+      : '<!doctype html><html lang="' +
+        html(ctx.i18n.t("language")) +
+        '"><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'"><meta name="viewport" content="width=device-width"><style>body{max-width:52rem;margin:2rem auto;font:1rem system-ui;padding:1rem}p{white-space:pre-wrap;overflow-wrap:anywhere}time{color:#555}</style><title>' +
         html(heading) +
         "</title><h1>" +
         html(heading) +
@@ -170,7 +172,7 @@ export async function postArchive(ctx: Context, t: Ticket) {
     }
   }
   const log = await channel.send({
-    content: `Ticket #${t.number} closed. ${link}`,
+    content: ctx.i18n.t("summary", { number: t.number, link }),
     ...(files.length ? { files } : {}),
     allowedMentions: { everyone: false, roles: false, users: false },
   });

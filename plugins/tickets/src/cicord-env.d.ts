@@ -22,21 +22,107 @@ declare module "@cicord/sdk" {
     staffRoles: string[];
     logChannel?: string;
     panel: {
-      title: string;
-      description: string;
-      buttonLabel: string;
+      title?: string;
+      description?: string;
+      buttonLabel?: string;
       color: string;
     };
-    welcomeMessage: string;
+    welcomeMessage?: string;
     channelName: string;
     maxOpenPerMember: number;
     labels: {
       key: string;
-      name: string;
+      name?: string;
       emoji?: string;
     }[];
     recordRetentionDays: number;
     appealType?: string;
+    locale?: "en" | "fr";
   }
 }
 export {};
+
+declare module "@cicord/sdk" {
+  interface PublishedEvents {
+    "closed.v1": {
+      assignee?: string;
+      durationMinutes?: number;
+      id: string;
+      labels: string[];
+      memberId: string;
+      rating?: number;
+      type: string;
+    };
+    "opened.v1": {
+      assignee?: string;
+      durationMinutes?: number;
+      id: string;
+      labels: string[];
+      memberId: string;
+      rating?: number;
+      type: string;
+    };
+    "rated.v1": {
+      assignee?: string;
+      durationMinutes?: number;
+      id: string;
+      labels: string[];
+      memberId: string;
+      rating: number;
+      type: string;
+    };
+  }
+  interface EventContracts {
+    "tickets.closed.v1": {
+      assignee?: string;
+      durationMinutes?: number;
+      id: string;
+      labels: string[];
+      memberId: string;
+      rating?: number;
+      type: string;
+    };
+    "tickets.opened.v1": {
+      assignee?: string;
+      durationMinutes?: number;
+      id: string;
+      labels: string[];
+      memberId: string;
+      rating?: number;
+      type: string;
+    };
+    "tickets.rated.v1": {
+      assignee?: string;
+      durationMinutes?: number;
+      id: string;
+      labels: string[];
+      memberId: string;
+      rating: number;
+      type: string;
+    };
+  }
+  interface QueryContracts {
+    "tickets.openFor": {input: {
+      userId: string;
+    }; output: {
+      tickets: {
+        id: string;
+        status: string;
+        subject: string;
+        type: string;
+      }[];
+    }};
+  }
+  interface ActionContracts {
+    "tickets.open": {input: {
+      caseNumber?: number;
+      description?: string;
+      subject: string;
+      type?: string;
+      userId: string;
+    }; output: {
+      channelId: string;
+      id: string;
+    }};
+  }
+}

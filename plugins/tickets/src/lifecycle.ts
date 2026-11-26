@@ -55,11 +55,11 @@ export async function maintenance(ctx: Context) {
       Date.now() - Date.parse(t.createdAt) >= ctx.config.firstResponseMinutes * 60000
     ) {
       const roles = type?.staffRoles.map((k) => ctx.server.role(k)) ?? [];
-      const marker = "First response · " + t.createdAt;
+      const marker = "⏱ " + t.createdAt;
       if (!(await sentNotice(ctx, channel, marker)))
         await channel.send({
-          embeds: [{ footer: { text: marker }, description: "First response requested." }],
-          content: `First response overdue. ${roles.map((r) => r.mention).join(" ")}`,
+          embeds: [{ footer: { text: marker }, description: ctx.i18n.t("responseRequested") }],
+          content: ctx.i18n.t("responseOverdue", { staff: roles.map((r) => r.mention).join(" ") }),
           allowedMentions: { roles: roles.map((r) => r.id), users: false, everyone: false },
         });
       t.reminded = true;
@@ -68,12 +68,12 @@ export async function maintenance(ctx: Context) {
     if (ctx.config.inactivityHours <= 0) continue;
     const due = Date.parse(last) + ctx.config.inactivityHours * 3600000;
     if (!t.warningAt && Date.now() >= due - 3600000) {
-      const marker = "Inactivity · " + last;
+      const marker = "⏳ " + last;
       const warning =
         (await sentNotice(ctx, channel, marker)) ??
         (await channel.send({
-          content: "This ticket will close after one more hour of inactivity.",
-          embeds: [{ footer: { text: marker }, description: "Inactivity warning" }],
+          content: ctx.i18n.t("warning"),
+          embeds: [{ footer: { text: marker }, description: ctx.i18n.t("warningTitle") }],
         }));
       t.warningAt = warning.createdAt.getTime();
       await saveTicket(ctx, t);
@@ -84,7 +84,7 @@ export async function maintenance(ctx: Context) {
           ctx,
           current,
           { id: ctx.bot.user.id, displayName: ctx.bot.user.displayName },
-          "Inactivity",
+          ctx.i18n.t("inactivity"),
         );
     }
   }

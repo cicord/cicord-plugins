@@ -25,8 +25,11 @@ spec:
     - scheduler
     - portal.links
   intents: [ServerMessages, MessageContent, ServerMembers, DirectMessages]
+  locales: ./locales
   delivery: at-least-once
   optional:
+    - feature: messageContextMenu
+      capabilities: [discord.channels.read]
     - feature: appealUpdates
       capabilities: [events.subscribe]
     - feature: onDuty

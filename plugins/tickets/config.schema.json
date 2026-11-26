@@ -127,21 +127,18 @@
         "title": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 256,
-          "default": "Need help?"
+          "maxLength": 256
         },
         "description": {
           "type": "string",
           "minLength": 1,
           "maxLength": 2000,
-          "default": "Click the button below to open a private ticket with the team.",
           "x-cicord-widget": "markdown"
         },
         "buttonLabel": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 80,
-          "default": "Open a ticket"
+          "maxLength": 80
         },
         "color": {
           "type": "string",
@@ -157,7 +154,6 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 2000,
-      "default": "Hi {member}, thanks for reaching out! {staff} will be with you shortly.",
       "x-cicord-widget": "markdown",
       "x-cicord-access": "moderator"
     },
@@ -182,7 +178,7 @@
       "maxItems": 25,
       "items": {
         "type": "object",
-        "required": ["key", "name"],
+        "required": ["key"],
         "properties": {
           "key": {
             "description": "Stable identifier: lowercase letters, digits and dashes.",
@@ -207,27 +203,22 @@
       "default": [
         {
           "key": "question",
-          "name": "Question",
           "emoji": "❓"
         },
         {
           "key": "bug",
-          "name": "Bug",
           "emoji": "🐛"
         },
         {
           "key": "self-hosting",
-          "name": "Self-hosting",
           "emoji": "🖥️"
         },
         {
           "key": "plugin",
-          "name": "Plugin",
           "emoji": "🧩"
         },
         {
-          "key": "other",
-          "name": "Other"
+          "key": "other"
         }
       ],
       "x-cicord-access": "moderator"
@@ -242,6 +233,11 @@
     "appealType": {
       "type": "string",
       "description": "Ticket type for moderation appeals. Required for appeals when multiple types are configured and the caller omits a type."
+    },
+    "locale": {
+      "type": "string",
+      "enum": ["en", "fr"],
+      "description": "Override the interaction and server language."
     }
   },
   "additionalProperties": false

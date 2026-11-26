@@ -46,17 +46,18 @@ export async function startSimulator(t, pluginDir, grants, config, options = {})
     if(!response.ok)throw new Error(`${path} returned ${response.status}: ${text}`);
     return text?JSON.parse(text):undefined;
   }
-  let ready=false;
+  let ready=false, diagnostics;
   for(let attempt=0;attempt<120;attempt++){
     if(child.exitCode!==null || child.signalCode!==null)throw new Error(`simulator exited: ${stderr}`);
     try{
       const status=await api("/api/v1/status",undefined,"local-simulator-only");
+      diagnostics=status.bots?.flatMap(bot=>bot.plugins);
       ready=status.bots?.some(bot=>bot.plugins?.some(p=>p.instance===name && health.includes(p.health)));
     }catch(error){if(!(error instanceof TypeError))throw error;}
     if(ready)break;
     await delay(100);
   }
-  assert.ok(ready,`plugin did not start: ${stderr}`);
+  assert.ok(ready,`plugin did not start: ${JSON.stringify(diagnostics)}\n${stderr}`);
   const state=await api("/api/v1/sim/state");
   const guild=state.servers[0], owner=state.users.find(u=>u.username==="owner");
   const channel=guild.channels.find(c=>c.name==="general");

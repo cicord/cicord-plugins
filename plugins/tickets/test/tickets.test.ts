@@ -1,4 +1,6 @@
-import type { Json, Message, TextChannel } from "@cicord/sdk";
+import en from "../locales/en.json" with { type: "json" };
+import fr from "../locales/fr.json" with { type: "json" };
+import type { Context, Json, Message, TextChannel } from "@cicord/sdk";
 import {
   callRoute,
   createTestContext,
@@ -30,8 +32,17 @@ const grants = [
 
 // 1 alice, 3 eve: members. 2 sam, 4 max: staff role. 5 mona: Cicord moderator without the
 // staff role. 6 ada: Cicord admin. 9 olga: server owner.
-function setup(config: Record<string, unknown> = {}) {
+function setup(
+  config: Record<string, unknown> = {},
+  options: {
+    features?: string[];
+    plugins?: Context["plugins"];
+    grants?: string[];
+    locale?: string;
+  } = {},
+) {
   return createTestContext({
+    locales: { en, fr },
     schema,
     config: {
       panelChannel: "help-desk",
@@ -41,6 +52,7 @@ function setup(config: Record<string, unknown> = {}) {
       ...config,
     },
     grants,
+    ...options,
     // As in plugin.yaml: GET /staff (role.members()) needs ServerMembers.
     intents: ["ServerMessages", "MessageContent", "ServerMembers"],
     plugin: { name: "tickets" },
@@ -600,6 +612,7 @@ describe("staff routes", () => {
 
   test("GET /staff needs the ServerMembers intent", async () => {
     const t = createTestContext({
+      locales: { en, fr },
       schema,
       config: { panelChannel: "help-desk", staffRoles: ["support"] },
       grants,
@@ -1265,4 +1278,80 @@ test("the first satisfaction vote is retained and statistics are staff-only", as
   });
   expect((await route(t, "GET /tickets/stats", { viewer: "3" })).status).toBe(403);
   expect(t.published.filter((e) => e.topic === "rated")).toHaveLength(1);
+});
+
+test("SDK15 localizes the form and defaults and preserves operator-provided text", async () => {
+  expect(Object.keys(fr).sort()).toEqual(Object.keys(en).sort());
+  expect(fr["commands.ticket-panel.options.channel.name"]).toBe("salon");
+  expect(fr["contextMenus.Open ticket on message.name"]).toBe("Ouvrir un ticket sur ce message");
+  const t = setup({}, { locale: "fr" });
+  const panel = await runCommand(plugin, t, "ticket-panel", { user: "2" });
+  expect(panel.replies[0]).toContain("Panneau de tickets publié");
+  expect(t.sent[0]?.message).toMatchObject({ embeds: [{ title: "Besoin d’aide ?" }] });
+  const click = await runComponent(plugin, t, "open", { user: "1", locale: "fr" });
+  expect(click.modal?.fields.map((f) => f.label)).toEqual(["Objet", "Détails"]);
+  const custom = setup({
+    locale: "fr",
+    panel: { title: "Service Desk", buttonLabel: "Open IT", description: "Request IT help" },
+    welcomeMessage: "Custom hello {member}!",
+  });
+  await runCommand(plugin, custom, "ticket-panel", { user: "2" });
+  expect(custom.sent[0]!.message).toMatchObject({
+    embeds: [{ title: "Service Desk", description: "Request IT help" }],
+    components: [{ components: [{ label: "Open IT" }] }],
+  });
+  await portalOpen(custom);
+  expect(custom.sent.at(-1)?.message).toMatchObject({ content: "Custom hello <@1>!" });
+  const limited = setup({ locale: "fr" }, { locale: "en" });
+  const form = await runComponent(plugin, limited, "open", { user: "1", locale: "en" });
+  expect(form.modal?.title).toBe("Ouvrir un ticket");
+});
+
+test("optional interop uses only on-duty staff of the current type and filters moderation results", async () => {
+  const calls: string[] = [];
+  const providers = {
+    has: () => true,
+    hasFeature: () => true,
+    call: async () => {
+      throw new Error("Unexpected action");
+    },
+    query: async (plugin: string, method: string): Promise<Json> => {
+      calls.push(plugin + "." + method);
+      return method === "onDuty"
+        ? { userIds: ["2", "5"] }
+        : {
+            cases: [
+              {
+                number: 7,
+                action: "warn",
+                status: "active",
+                reason: "Reminder",
+                at: "2026-01-01",
+                privateField: "private",
+              },
+            ],
+          };
+    },
+  } as Context["plugins"];
+  const config = { types: [{ key: "help", name: "Help", staffRoles: ["support"] }] };
+  const disabled = setup(config, { plugins: providers });
+  await portalOpen(disabled);
+  expect(calls).toEqual([]);
+  expect((await route(disabled, "GET /tickets/1/cases", { viewer: "2" })).body).toEqual({
+    cases: [],
+  });
+  const t = setup(config, {
+    plugins: providers,
+    features: ["onDuty", "caseContext"],
+    grants: [...grants, "plugins.query:staff-shifts.onDuty", "plugins.query:moderation.cases"],
+  });
+  await portalOpen(t);
+  expect(t.sent[0]?.message).toMatchObject({ content: expect.stringContaining("<@2>") });
+  expect(JSON.stringify(t.sent[0]?.message)).not.toContain("<@5>");
+  expect((await route(t, "GET /tickets/1/cases", { viewer: "3" })).status).toBe(404);
+  const cases = await route(t, "GET /tickets/1/cases", { viewer: "2" });
+  expect(cases.body).toEqual({
+    cases: [{ number: 7, action: "warn", status: "active", reason: "Reminder", at: "2026-01-01" }],
+  });
+  expect(calls).toEqual(["staff-shifts.onDuty", "moderation.cases"]);
 });

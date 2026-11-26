@@ -36,6 +36,8 @@ spec:
             logChannel: appeals-log
 ```
 
+The English and French catalogs cover commands, forms, replies and transcripts. Set `locale: fr` for an instance-wide language. Custom panel text, welcome templates, type names and form labels are preserved.
+
 Use the role, category and channel keys from the server declaration. Configure the bot's Server Members and Message Content intents in the Discord Developer Portal. Members shared by multiple eligible servers choose a server before their first DM reaches a ticket. The bot remembers their choice for 24 hours and checks membership again before delivery.
 
 At close, the portal offers chronological HTML and Markdown downloads. The configured log receives both files only when its audience is equal to or narrower than the ticket channel. Staff need the role for that ticket type and read access. The portal checks authorization on every request, including downloads.

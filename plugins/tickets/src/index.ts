@@ -1,3 +1,4 @@
+import english from "../locales/en.json";
 import { ordered } from "./ordered.ts";
 import * as sdk from "@cicord/sdk";
 import { renderTranscript, withdrawCopies } from "./transcript.ts";
@@ -61,12 +62,12 @@ async function closable(
   const n = numberOf(interaction.componentId);
   const ticket = n === undefined ? undefined : await getTicket(ctx, n);
   if (!ticket || ticket.status !== "open") {
-    await interaction.reply({ content: "This ticket is already closed.", ephemeral: true });
+    await interaction.reply({ content: ctx.i18n.t("alreadyClosed"), ephemeral: true });
     return undefined;
   }
   if (!mayRead(ctx, ticket, interaction.member, true)) {
     await interaction.reply({
-      content: "Only the member who opened this ticket or the staff can close it.",
+      content: ctx.i18n.t("closeDenied"),
       ephemeral: true,
     });
     return undefined;
@@ -289,13 +290,13 @@ export default definePlugin({
                 !i.member ||
                 (await openTickets(ctx, i.user.id)).length >= ctx.config.maxOpenPerMember
               ) {
-                await i.reply({ content: "Open ticket limit reached.", ephemeral: true });
+                await i.reply({ content: ctx.i18n.t("openLimit"), ephemeral: true });
                 return;
               }
               const { ticket, channel } = await openTicket(ctx, {
                 user: i.user,
                 member: i.member,
-                subject: "Message report",
+                subject: ctx.i18n.t("messageReport"),
                 description: "",
                 source: "discord",
                 label: null,
@@ -309,15 +310,21 @@ export default definePlugin({
                   allowedMentions: { users: false, roles: false, everyone: false },
                 });
               }
-              await i.reply({ content: "Opened " + channel.mention, ephemeral: true });
+              await i.reply({
+                content: ctx.i18n.t("openedChannel", { channel: channel.mention }),
+                ephemeral: true,
+              });
             }),
           },
         },
       }
     : {}),
   onStart(ctx) {
-    if (!sdk.sdkFeatures?.contextMenus)
-      ctx.log.info("Message context menu disabled: this SDK does not provide context menus");
+    ctx.features.report?.(
+      "messageContextMenu",
+      Boolean(sdk.sdkFeatures?.contextMenus),
+      sdk.sdkFeatures?.contextMenus ? undefined : "SDK-13 message context menus unavailable",
+    );
     const keys = new Set<string>();
     for (const type of types(ctx)) {
       if (keys.has(type.key)) throw new Error("Duplicate ticket type: " + type.key);
@@ -330,13 +337,13 @@ export default definePlugin({
 
   commands: {
     "ticket-panel": command({
-      description: "Post the ticket panel (button to open a ticket)",
+      description: english["commands.ticket-panel.description"],
       ephemeral: true,
       permissions: ["ManageChannels"],
       options: {
         channel: {
           type: "channel",
-          description: "Where to post it (defaults to the configured channel)",
+          description: english["commands.ticket-panel.options.channel.description"],
         },
       },
       async run(ctx, interaction) {
@@ -344,7 +351,7 @@ export default definePlugin({
           ? ctx.server.channel({ id: interaction.options.channel.id })
           : ctx.server.channel(ctx.config.panelChannel);
         await target.send(panelMessage(ctx));
-        await interaction.reply(`Ticket panel posted in ${target.mention}.`);
+        await interaction.reply(ctx.i18n.t("panelPosted", { channel: target.mention }));
       },
     }),
   },
@@ -353,7 +360,7 @@ export default definePlugin({
     claim: ordered(async (ctx, i) => {
       const t = await getTicket(ctx, numberOf(i.componentId) ?? 0);
       if (!t || t.status !== "open" || !mayRead(ctx, t, i.member)) {
-        await i.reply({ content: "Ticket unavailable.", ephemeral: true });
+        await i.reply({ content: ctx.i18n.t("unavailable"), ephemeral: true });
         return;
       }
       if (!t.assignee) {
@@ -361,14 +368,17 @@ export default definePlugin({
         addEvent(t, "assigned", t.assignee, t.assignee.displayName);
         await saveTicket(ctx, t);
       }
-      await i.reply({ content: "Assigned to " + t.assignee.displayName, ephemeral: true });
+      await i.reply({
+        content: ctx.i18n.t("claimed", { staff: t.assignee.displayName }),
+        ephemeral: true,
+      });
     }),
     rate: ordered(async (ctx, i) => {
       const [, id, value] = i.componentId.split(":");
       const t = await getTicket(ctx, Number(id));
       const ok = t && (await rate(ctx, t, i.user.id, Number(value)));
       await i.reply({
-        content: ok ? "Thanks for rating your ticket." : "Rating unavailable.",
+        content: ok ? ctx.i18n.t("rated") : ctx.i18n.t("ratingUnavailable"),
         ephemeral: true,
       });
     }),
@@ -379,8 +389,8 @@ export default definePlugin({
         const ticket = await getTicket(ctx, open[0] ?? 0);
         await interaction.reply({
           content: ticket
-            ? `You already have an open ticket: <#${ticket.channelId}>.`
-            : "You already have an open ticket.",
+            ? ctx.i18n.t("existingChannel", { channel: "<#" + ticket.channelId + ">" })
+            : ctx.i18n.t("alreadyOpen"),
           ephemeral: true,
         });
         return;
@@ -388,20 +398,20 @@ export default definePlugin({
       const key = interaction.componentId.split(":")[1];
       const type = ticketType(ctx, key);
       if (!type) {
-        await interaction.reply({ content: "Ticket type unavailable", ephemeral: true });
+        await interaction.reply({ content: ctx.i18n.t("typeUnavailable"), ephemeral: true });
         return;
       }
       await interaction.showModal({
         id: key ? "open:" + key : "open",
-        title: key ? type.name : "Open a ticket",
+        title: key ? type.name : ctx.i18n.t("open"),
         fields: [
           {
             id: "subject",
-            label: "Subject",
+            label: ctx.i18n.t("subject"),
             style: "short",
             required: true,
             maxLength: 100,
-            placeholder: "What is it about?",
+            placeholder: ctx.i18n.t("subjectHint"),
           },
           ...(type.fields?.length
             ? type.fields.map((f, i) => ({
@@ -414,7 +424,7 @@ export default definePlugin({
             : [
                 {
                   id: "description",
-                  label: "Details",
+                  label: ctx.i18n.t("details"),
                   style: "paragraph" as const,
                   required: false,
                   maxLength: 1000,
@@ -430,7 +440,7 @@ export default definePlugin({
       if (!ticket) return;
       await interaction.reply({
         ephemeral: true,
-        content: `Close ticket #${ticket.number}? The channel will be deleted.`,
+        content: ctx.i18n.t("confirmClose", { number: ticket.number }),
         components: [
           {
             type: "row",
@@ -438,13 +448,13 @@ export default definePlugin({
               {
                 type: "button",
                 id: `close-confirm:${ticket.number}`,
-                label: "Close ticket",
+                label: ctx.i18n.t("closeTicket"),
                 style: "danger",
               },
               {
                 type: "button",
                 id: `close-cancel:${ticket.number}`,
-                label: "Cancel",
+                label: ctx.i18n.t("cancel"),
                 style: "secondary",
               },
             ],
@@ -453,15 +463,18 @@ export default definePlugin({
       });
     },
 
-    async "close-cancel"(_ctx, interaction) {
-      await interaction.update({ content: "The ticket stays open.", components: [] });
+    async "close-cancel"(ctx, interaction) {
+      await interaction.update({ content: ctx.i18n.t("staysOpen"), components: [] });
     },
 
     "close-confirm": ordered(async (ctx, interaction) => {
       const ticket = await closable(ctx, interaction);
       if (!ticket) return;
       // Answer first: the channel (and this message) is about to disappear.
-      await interaction.update({ content: `Closing ticket #${ticket.number}…`, components: [] });
+      await interaction.update({
+        content: ctx.i18n.t("closing", { number: ticket.number }),
+        components: [],
+      });
       const by = person(interaction.user, interaction.member);
       await closeTicket(ctx, ticket, by);
     }),
@@ -473,12 +486,12 @@ export default definePlugin({
       await interaction.defer({ ephemeral: true });
       const user = interaction.user;
       if ((await openTickets(ctx, user.id)).length >= ctx.config.maxOpenPerMember) {
-        await interaction.reply("You already have an open ticket.");
+        await interaction.reply(ctx.i18n.t("alreadyOpen"));
         return;
       }
       const type = ticketType(ctx, interaction.modalId.split(":")[1]);
       if (!type) {
-        await interaction.reply("Ticket type unavailable.");
+        await interaction.reply(ctx.i18n.t("typeUnavailablePeriod"));
         return;
       }
       const answers = type.fields
@@ -488,12 +501,12 @@ export default definePlugin({
         type: type.key,
         user,
         member: interaction.member,
-        subject: (interaction.fields["subject"] ?? "").trim() || "Ticket",
+        subject: (interaction.fields["subject"] ?? "").trim() || ctx.i18n.t("ticket"),
         description: answers ?? (interaction.fields["description"] ?? "").trim(),
         label: null,
         source: "discord",
       });
-      await interaction.reply(`Your ticket is open: ${channel.mention}`);
+      await interaction.reply(ctx.i18n.t("yourChannel", { channel: channel.mention }));
     }),
   },
 
@@ -520,7 +533,7 @@ export default definePlugin({
         const channel = ticketChannel(ctx, t);
         if (!channel) return;
         const copy = await channel.send({
-          content: (text || "(attachment)").slice(0, 2000),
+          content: (text || ctx.i18n.t("attachment")).slice(0, 2000),
           allowedMentions: { users: false, roles: false, everyone: false },
         });
         t.copies = [...(t.copies ?? []), { userId: member.id, messageId: copy.id }];
@@ -529,7 +542,7 @@ export default definePlugin({
         return;
       }
       if (open.length >= ctx.config.maxOpenPerMember) {
-        await member.send("Open ticket limit reached.");
+        await member.send(ctx.i18n.t("openLimit"));
         return;
       }
       await openTicket(ctx, {
@@ -537,7 +550,7 @@ export default definePlugin({
         member,
         type: type.key,
         source: "modmail",
-        subject: "Modmail",
+        subject: ctx.i18n.t("modmail"),
         description: text.slice(0, 4000),
         label: null,
       });
@@ -560,7 +573,7 @@ export default definePlugin({
                 [message.content, ...message.attachments.map((a) => a.url)]
                   .filter(Boolean)
                   .join("\n")
-                  .slice(0, 2000) || "(attachment)",
+                  .slice(0, 2000) || ctx.i18n.t("attachment"),
               allowedMentions: { users: false, roles: false, everyone: false },
             },
             { retractable: true },
@@ -829,8 +842,8 @@ export default definePlugin({
             ctx,
             ticket,
             assignee
-              ? `Assigned to **${escapeMarkdown(assignee.displayName)}**.`
-              : `Unassigned by **${escapeMarkdown(me.displayName)}**.`,
+              ? ctx.i18n.t("assigned", { staff: escapeMarkdown(assignee.displayName) })
+              : ctx.i18n.t("unassigned", { staff: escapeMarkdown(me.displayName) }),
             [me.id, ...(assignee ? [assignee.id] : [])],
           );
         }

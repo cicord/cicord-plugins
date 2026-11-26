@@ -66,7 +66,7 @@ export interface Ticket {
   notes: { by: Person; at: string; content: string }[];
   copies?: { messageId: string; userId: string }[];
   directCopies?: { messageId: string; authorId: string; sourceMessageId?: string }[];
-  redacted?: string[];
+  redactedMessageIds?: string[];
   notices?: { messageId: string; users: string[] }[];
   firstResponseAt?: string;
   reminded?: boolean;
@@ -106,7 +106,7 @@ const TICKET_PERMS: Permission[] = [
 
 const NO_MENTIONS = { users: false, roles: false, everyone: false } as const;
 
-export function person(user: User, member?: Member): Person {
+export function person(user: Pick<User, "id" | "displayName">, member?: Member): Person {
   return { id: user.id, displayName: member?.displayName ?? user.displayName };
 }
 
@@ -235,7 +235,7 @@ export function types(ctx: Context) {
     : [
         {
           key: "default",
-          name: "General",
+          name: ctx.i18n.t("general"),
           staffRoles: ctx.config.staffRoles,
           category: ctx.config.category,
           logChannel: ctx.config.logChannel,
@@ -309,11 +309,19 @@ export async function listStaff(
 
 // ───────────────────────────────────────────────────────────── labels
 
+function translatedLabel(ctx: Context, key: string) {
+  const k = "labels." + key;
+  const label = ctx.i18n.t(k);
+  return label === k ? key : label;
+}
+
 export function labelOf(ctx: Context, key: string | null): Label | null {
   if (key === null) return null;
   const l = ctx.config.labels.find((x) => x.key === key);
   // A label removed from the config stays readable on the tickets that have it.
-  return l ? { key: l.key, name: l.name, emoji: l.emoji ?? null } : { key, name: key, emoji: null };
+  return l
+    ? { key: l.key, name: l.name ?? translatedLabel(ctx, key), emoji: l.emoji ?? null }
+    : { key, name: key, emoji: null };
 }
 
 export function isLabel(ctx: Context, key: string): boolean {
@@ -325,7 +333,13 @@ export function isLabel(ctx: Context, key: string): boolean {
 export function panelMessage(ctx: Context): MessagePayload {
   const { title, description, buttonLabel, color } = ctx.config.panel;
   return {
-    embeds: [{ title, description, color }],
+    embeds: [
+      {
+        title: title ?? ctx.i18n.t("panelTitle"),
+        description: description ?? ctx.i18n.t("panelDescription"),
+        color,
+      },
+    ],
     components: [
       {
         type: "row",
@@ -336,23 +350,39 @@ export function panelMessage(ctx: Context): MessagePayload {
               label: t.name,
               style: "primary",
             }))
-          : [{ type: "button", id: "open", label: buttonLabel, emoji: "🎫", style: "primary" }],
+          : [
+              {
+                type: "button",
+                id: "open",
+                label: buttonLabel ?? ctx.i18n.t("panelButton"),
+                emoji: "🎫",
+                style: "primary",
+              },
+            ],
       },
     ],
   };
 }
 
-export function closeButton(n: number): MessagePayload["components"] {
+export function closeButton(ctx: Context, n: number): MessagePayload["components"] {
   return [
     {
       type: "row",
       components: [
-        { type: "button", id: `close:${n}`, label: "Close", emoji: "🔒", style: "danger" },
+        {
+          type: "button",
+          id: `close:${n}`,
+          label: ctx.i18n.t("close"),
+          emoji: "🔒",
+          style: "danger",
+        },
       ],
     },
     {
       type: "row",
-      components: [{ type: "button", id: `claim:${n}`, label: "Claim ticket", style: "secondary" }],
+      components: [
+        { type: "button", id: `claim:${n}`, label: ctx.i18n.t("claim"), style: "secondary" },
+      ],
     },
   ];
 }
@@ -361,12 +391,15 @@ function ticketEmbed(ctx: Context, t: Ticket): Embed {
   const label = labelOf(ctx, t.label);
   return {
     title: `#${t.number} — ${t.subject}`,
-    description: t.description || "_No details._",
+    description: t.description || ctx.i18n.t("noDetails"),
     color: ctx.config.panel.color,
     ...(label
       ? {
           fields: [
-            { name: "Label", value: `${label.emoji ? `${label.emoji} ` : ""}${label.name}` },
+            {
+              name: ctx.i18n.t("label"),
+              value: `${label.emoji ? `${label.emoji} ` : ""}${label.name}`,
+            },
           ],
         }
       : {}),
@@ -442,7 +475,11 @@ async function createTicketChannel(
   return ctx.server.createChannel({
     name: channelName(ctx.config.channelName, t.number, t.author.displayName),
     ...(type.category ? { category: type.category } : {}),
-    topic: `#${t.number} · ${t.subject} · opened by ${t.author.displayName}`,
+    topic: ctx.i18n.t("channelTopic", {
+      number: t.number,
+      subject: t.subject,
+      member: t.author.displayName,
+    }),
     overwrites,
   });
 }
@@ -451,7 +488,7 @@ async function createTicketChannel(
 export async function openTicket(
   ctx: Context,
   input: {
-    user: User;
+    user: Pick<User, "id" | "displayName" | "mention">;
     member: Member | undefined;
     subject: string;
     description: string;
@@ -500,7 +537,8 @@ export async function openTicket(
   await ctx.kv.set(authorKey(author.id, number), true);
   await ctx.kv.increment("stats:opened");
 
-  let staff = type.staffRoles.map((r) => ctx.server.role(r).mention).join(" ") || "The team";
+  let staff =
+    type.staffRoles.map((r) => ctx.server.role(r).mention).join(" ") || ctx.i18n.t("team");
   let mentions: string[] = [];
   if (ctx.features?.enabled("onDuty")) {
     try {
@@ -515,14 +553,14 @@ export async function openTicket(
     }
   }
   const welcome = await channel.send({
-    content: render(ctx.config.welcomeMessage, {
+    content: render(ctx.config.welcomeMessage ?? ctx.i18n.t("welcome"), {
       member: input.user.mention,
       staff,
       subject: input.subject,
       number: String(number),
     }),
     embeds: [ticketEmbed(ctx, ticket)],
-    components: closeButton(number),
+    components: closeButton(ctx, number),
     allowedMentions: {
       users: [input.user.id, ...mentions],
       roles: type.staffRoles.map((r) => ctx.server.role(r).id),
@@ -592,7 +630,10 @@ export async function finishClose(ctx: Context, closed: Ticket) {
   }
   if (!closed.channelRemoved) {
     try {
-      await ctx.server.deleteChannel({ id: closed.channelId }, `ticket #${closed.number} closed`);
+      await ctx.server.deleteChannel(
+        { id: closed.channelId },
+        ctx.i18n.t("closeReason", { number: closed.number }),
+      );
       closed.channelRemoved = true;
     } catch (error) {
       ctx.log.warn("tickets: could not delete the ticket channel", {
@@ -608,7 +649,7 @@ export async function finishClose(ctx: Context, closed: Ticket) {
     const member = await ctx.server.member(closed.author.id);
     if (member)
       await member.send({
-        content: `Rate ticket #${closed.number} (1–5).`,
+        content: ctx.i18n.t("rate", { number: closed.number }),
         components: [
           {
             type: "row",
@@ -652,9 +693,12 @@ export async function reopenTicket(ctx: Context, ticket: Ticket, by: Person): Pr
   delete reopened.summary;
   delete reopened.channelRemoved;
   const welcome = await channel.send({
-    content: `<@${ticket.author.id}> Reopened by **${escapeMarkdown(by.displayName)}**.`,
+    content: ctx.i18n.t("reopened", {
+      member: "<@" + ticket.author.id + ">",
+      staff: escapeMarkdown(by.displayName),
+    }),
     embeds: [ticketEmbed(ctx, reopened)],
-    components: closeButton(ticket.number),
+    components: closeButton(ctx, ticket.number),
     allowedMentions: { users: [ticket.author.id], roles: false, everyone: false },
   });
 
@@ -684,7 +728,7 @@ export async function postReply(
       {
         description: content,
         color: ctx.config.panel.color,
-        footer: { text: `— ${by.displayName} (via portal)` },
+        footer: { text: ctx.i18n.t("replyAuthor", { staff: by.displayName }) },
       },
     ],
     allowedMentions: NO_MENTIONS,
@@ -760,7 +804,7 @@ export async function staffDetail(ctx: Context, t: Ticket): Promise<StaffTicketD
         if (e.type === "replied" && e.detail) repliedBy.set(e.detail, e.by);
       }
       const raw = await channel.messages({ limit: 50 });
-      const safe = await redactLive(ctx, t, raw);
+      const safe = redactLive(t, raw);
       history = safe.toReversed().map((m) => ({
         id: m.id,
         author: { ...person(m.author, m.member), bot: m.author.bot },
@@ -900,15 +944,7 @@ export async function publish(ctx: Context, t: Ticket, topic: "opened" | "closed
 
 /** A source message written by a member can survive erasure on Discord. Do not import
  * it again into the portal or an archive when the channel eventually closes. */
-export async function redactLive<T extends { author: { id: string } }>(
-  ctx: Context,
-  t: Ticket,
-  rows: T[],
-): Promise<T[]> {
-  if (!t.redacted?.length) return rows;
-  const hidden = new Set<string>();
-  for (const id of new Set(rows.map((r) => r.author.id))) {
-    if (t.redacted.includes(await ctx.privacy.pseudonym(id))) hidden.add(id);
-  }
-  return rows.filter((row) => !hidden.has(row.author.id));
+export function redactLive<T extends { id: string }>(t: Ticket, rows: T[]): T[] {
+  const hidden = new Set(t.redactedMessageIds ?? []);
+  return rows.filter((row) => !hidden.has(row.id));
 }

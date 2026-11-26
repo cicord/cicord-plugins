@@ -54,7 +54,10 @@ export const privacy = {
     return records;
   },
   async erase(ctx: Context, userId: string) {
-    const anonymous = { id: await ctx.privacy.pseudonym(userId), displayName: "Deleted member" };
+    const anonymous = {
+      id: await ctx.privacy.pseudonym(userId),
+      displayName: ctx.i18n.t("deletedMember"),
+    };
     const mentions = new RegExp("<@!?" + userId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ">", "g");
     const names = new Set<string>();
     const member = await ctx.server.member(userId);
@@ -73,7 +76,7 @@ export const privacy = {
     for (const t of tickets) {
       let changed = false;
       const clean = (s: string) => {
-        const v = s.replace(mentions, "Deleted member");
+        const v = s.replace(mentions, ctx.i18n.t("deletedMember"));
         if (s !== v) changed = true;
         return v;
       };
@@ -102,7 +105,7 @@ export const privacy = {
         await ctx.kv.delete(authorKey(userId, t.number));
         await ctx.kv.delete(openKey(userId, t.number));
         t.author = anonymous;
-        t.subject = "Deleted ticket subject";
+        t.subject = ctx.i18n.t("deletedSubject");
         t.description = "";
         delete t.rating;
         changed = true;
@@ -179,10 +182,23 @@ export const privacy = {
           changed = true;
         }
       t.notices = t.notices?.filter((n) => !n.users.includes(userId));
-      if (t.status === "open" && !t.redacted?.includes(anonymous.id)) {
-        // Discord source messages are external and may never have been indexed.
-        t.redacted = [...(t.redacted ?? []), anonymous.id];
-        changed = true;
+      // Keep only source message IDs. The host pseudonym service is restricted to
+      // the current erasure subject and cannot be used when reading a later transcript.
+      if (live) {
+        const hidden = new Set(t.redactedMessageIds ?? []);
+        let before: string | undefined;
+        for (;;) {
+          const batch = await live.messages({ limit: 100, ...(before ? { before } : {}) });
+          for (const m of batch) if (m.author.id === userId) hidden.add(m.id);
+          if (batch.length < 100) break;
+          const next = batch[batch.length - 1]!.id;
+          if (before === next) throw new Error("Discord message cursor did not advance");
+          before = next;
+        }
+        if (hidden.size !== (t.redactedMessageIds?.length ?? 0)) {
+          t.redactedMessageIds = [...hidden];
+          changed = true;
+        }
       }
       if (changed) {
         await removeLogCopy(ctx, t);
