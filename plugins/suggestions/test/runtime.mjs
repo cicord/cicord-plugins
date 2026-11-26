@@ -71,11 +71,29 @@ test(
     );
     assert.equal(decision.authorId, alice.id);
     assert.equal(decision.status, "approved");
+    let updated = false;
     for (let n = 0; n < 50; n++) {
       const fresh = (await cards()).items.find((m) => m.id === card.id);
-      if (fresh?.embeds[0]?.fields?.some((f) => f.value === body.reason)) return;
+      if (fresh?.embeds[0]?.fields?.some((f) => f.value === body.reason)) {
+        updated = true;
+        break;
+      }
       await delay(100);
     }
-    assert.fail("Public suggestion card did not reflect the staff decision");
+    assert.ok(updated, "Public suggestion card did not reflect the staff decision");
+    const bobToken = await sim.login(bob),
+      ownerToken = await sim.login(sim.owner);
+    await sim.api("/api/v1/sim/channels/" + sim.channel.id + "/permissions", {
+      overwrites: [{ type: "role", id: sim.guild.id, deny: ["ReadMessageHistory"] }],
+    });
+    for (let n = 0; n < 40; n++) {
+      if (!(await board()).items.length) break;
+      await delay(100);
+    }
+    assert.deepEqual((await board()).items, []);
+    assert.deepEqual((await sim.api(route + "/suggestions", undefined, bobToken)).items, []);
+    const staff = await sim.api(route + "/suggestions/moderation", undefined, ownerToken);
+    assert.equal(staff.items[0].id, initial.id);
+    assert.equal(staff.items[0].status, "approved");
   },
 );
