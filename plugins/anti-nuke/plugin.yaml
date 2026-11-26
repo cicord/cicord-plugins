@@ -21,6 +21,7 @@ spec:
     allow: [discord.com]
   secrets:
     - name: WEBHOOK_URL
+      use: webhook.send
       required: false
       hosts: [discord.com]
       description: Staff notification webhook URL
