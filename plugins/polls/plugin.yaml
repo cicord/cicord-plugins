@@ -14,10 +14,10 @@ spec:
   capabilities:
     - discord.messages.send     # the poll message
     - discord.messages.read     # find the poll message again when it closes on its own
-    - discord.channels.read
+    - discord.channels.read # Resolve configured channels and their current permissions.
     - discord.threads.manage    # optional discussion thread
     - discord.members.read       # check delegated voters queries
-    - storage.kv
+    - storage.kv # Persist installation state and progress across restarts.
     - scheduler                 # automatic closing
     - events.publish            # polls.closed
     - portal.routes             # GET /polls/:id

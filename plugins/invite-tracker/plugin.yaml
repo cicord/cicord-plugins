@@ -13,12 +13,14 @@ spec:
   locales: ./locales
   delivery: at-least-once
   capabilities:
-    - discord.invites.read
+    - discord.invites.read # Compare invite counters to attribute joins when possible.
     - scheduler # resumable invite count and leaderboard index migration
-    - storage.kv
-    - events.publish
-    - portal.routes
-  intents: [ServerMembers, ServerInvites]
+    - storage.kv # Persist installation state and progress across restarts.
+    - events.publish # Deliver declared events to authorized subscribers.
+    - portal.routes # Serve the access-controlled routes declared below.
+  intents:
+    - ServerMembers # Observe member joins, departures and role changes.
+    - ServerInvites # Observe changes to guild invitations.
   interop:
     types: ./src/contracts.ts
     publishes: [{topic: joined, version: 1, scope: server}]

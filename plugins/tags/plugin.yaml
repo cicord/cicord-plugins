@@ -20,10 +20,14 @@ spec:
   config: { schema: ./config.schema.json }
   optional:
     - feature: files
-      capabilities: [files.read]
+      capabilities:
+        - files.read # Read the versioned files bound to this installation.
     - feature: autoReplies
-      capabilities: [discord.messages.read]
-      intents: [ServerMessages, MessageContent]
+      capabilities:
+        - discord.messages.read # Read the source messages used by this installation.
+      intents:
+        - ServerMessages # Receive message events in guild channels.
+        - MessageContent # Match approved automatic tag replies in configured channels.
   delivery: at-least-once
   interop:
     types: ./src/contracts.ts

@@ -19,14 +19,20 @@ spec:
     - portal.routes # serve access-controlled forms
   optional:
     - feature: crosspost
-      capabilities: [discord.messages.send] # report Discord publication failures in instance health
+      capabilities: # report Discord publication failures in instance health
+        - discord.messages.send # Post this installation’s Discord messages.
     - feature: recoverPosts
-      capabilities: [discord.messages.read]
+      capabilities:
+        - discord.messages.read # Read the source messages used by this installation.
     - feature: stickies
-      capabilities: [discord.messages.read, discord.messages.manage]
-      intents: [ServerMessages]
+      capabilities:
+        - discord.messages.read # Read the source messages used by this installation.
+        - discord.messages.manage # Moderate or maintain the messages controlled by this feature.
+      intents:
+        - ServerMessages # Receive message events in guild channels.
     - feature: countdowns
-      capabilities: [discord.messages.read]
+      capabilities:
+        - discord.messages.read # Read the source messages used by this installation.
   config:
     schema: ./config.schema.json
   interop: {}

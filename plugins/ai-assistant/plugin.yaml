@@ -31,12 +31,17 @@ spec:
       budget: { provider: anthropic-messages, dailyLimitConfig: dailyTokenBudget }
   optional:
     - feature: tags
-      capabilities: [plugins.query:tags.search]
+      capabilities:
+        - plugins.query:tags.search # Read tags.search from the explicitly bound provider.
     - feature: tickets
-      capabilities: [plugins.call:tickets.open]
+      capabilities:
+        - plugins.call:tickets.open # Invoke tickets.open on the explicitly bound provider.
     - feature: helpChannels
-      capabilities: [discord.messages.read]
-      intents: [ServerMessages, MessageContent]
+      capabilities:
+        - discord.messages.read # Read the source messages used by this installation.
+      intents:
+        - ServerMessages # Receive message events in guild channels.
+        - MessageContent # Read eligible questions and bounded thread context before answering.
   interop:
     consumes: { queries: [tags.search], actions: [tickets.open] }
   routes: { types: ./src/routes.ts }

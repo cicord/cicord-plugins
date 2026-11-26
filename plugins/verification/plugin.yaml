@@ -10,19 +10,35 @@ spec:
   engine: ">=0.2.0-0"
   entry: ./src/index.ts
   locales: ./locales
-  capabilities: [discord.channels.read, discord.messages.read, discord.messages.send, discord.members.read, discord.roles.assign, storage.kv, scheduler, portal.routes, portal.links, events.publish]
-  intents: [ServerMembers]
+  capabilities:
+    - discord.channels.read # Resolve configured channels and their current permissions.
+    - discord.messages.read # Read the source messages used by this installation.
+    - discord.messages.send # Post this installation’s Discord messages.
+    - discord.members.read # Resolve current members, roles and eligibility.
+    - discord.roles.assign # Add or remove the configured roles for eligible members.
+    - storage.kv # Persist installation state and progress across restarts.
+    - scheduler # Run delayed work and recover it after restart.
+    - portal.routes # Serve the access-controlled routes declared below.
+    - portal.links # Issue links to this installation’s portal flows.
+    - events.publish # Deliver declared events to authorized subscribers.
+  intents:
+    - ServerMembers # Observe member joins, departures and role changes.
   optional:
     - feature: captcha
-      capabilities: [http.fetch]
+      capabilities:
+        - http.fetch # Contact the reviewed service using the manifest’s network policy.
     - feature: visual
-      capabilities: [render]
+      capabilities:
+        - render # Generate the configured image card from bundled assets.
     - feature: dm
-      capabilities: [discord.dm.send]
+      capabilities:
+        - discord.dm.send # Send the private member notification.
     - feature: directKick
-      capabilities: [discord.members.moderate]
+      capabilities:
+        - discord.members.moderate # Apply the configured sanction after checking target eligibility.
     - feature: sanctions
-      capabilities: [plugins.call:moderation.sanction]
+      capabilities:
+        - plugins.call:moderation.sanction # Invoke moderation.sanction on the explicitly bound provider.
   config:
     schema: ./config.schema.json
   routes:

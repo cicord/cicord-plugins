@@ -24,17 +24,23 @@ spec:
     - events.publish # started and ended
   optional:
     - feature: level
-      capabilities: [plugins.query:levels.memberLevel]
+      capabilities:
+        - plugins.query:levels.memberLevel # Read levels.memberLevel from the explicitly bound provider.
     - feature: invites
-      capabilities: [plugins.query:invite-tracker.count]
+      capabilities:
+        - plugins.query:invite-tracker.count # Read invite-tracker.count from the explicitly bound provider.
     - feature: standing
-      capabilities: [plugins.query:moderation.standing]
+      capabilities:
+        - plugins.query:moderation.standing # Read moderation.standing from the explicitly bound provider.
     - feature: xpReward
-      capabilities: [plugins.call:levels.grantXp]
+      capabilities:
+        - plugins.call:levels.grantXp # Invoke levels.grantXp on the explicitly bound provider.
     - feature: coinReward
-      capabilities: [plugins.call:economy.credit]
+      capabilities:
+        - plugins.call:economy.credit # Invoke economy.credit on the explicitly bound provider.
     - feature: roleReward
-      capabilities: [plugins.call:member-roles.grantTemporary]
+      capabilities:
+        - plugins.call:member-roles.grantTemporary # Invoke member-roles.grantTemporary on the explicitly bound provider.
   interop:
     types: ./src/contracts.ts
     publishes:

@@ -13,16 +13,19 @@ spec:
   config: {schema: ./config.schema.json}
   locales: ./locales
   delivery: at-least-once
-  intents: [ServerMembers]
+  intents:
+    - ServerMembers # Observe member joins, departures and role changes.
   capabilities:
-    - discord.roles.assign
-    - discord.members.read
-    - storage.kv
-    - scheduler
-    - events.publish
+    - discord.roles.assign # Add or remove the configured roles for eligible members.
+    - discord.members.read # Resolve current members, roles and eligibility.
+    - storage.kv # Persist installation state and progress across restarts.
+    - scheduler # Run delayed work and recover it after restart.
+    - events.publish # Deliver declared events to authorized subscribers.
   optional:
     - feature: boostAnnouncements
-      capabilities: [discord.channels.read, discord.messages.send]
+      capabilities:
+        - discord.channels.read # Resolve configured channels and their current permissions.
+        - discord.messages.send # Post this installation’s Discord messages.
   interop:
     types: ./src/contracts.ts
     publishes: [{topic: tempRoleExpired, version: 1, scope: server}]

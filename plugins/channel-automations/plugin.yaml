@@ -14,19 +14,28 @@ spec:
     - scheduler # durable timers and periodic work
     - discord.channels.read # resolve destination channels
     - discord.messages.read # re-read original messages
-  intents: [ServerMessages]
+  intents:
+    - ServerMessages # Receive message events in guild channels.
   optional:
     - feature: threads
-      capabilities: [discord.threads.manage]
+      capabilities:
+        - discord.threads.manage # Open or maintain the relevant discussion thread.
     - feature: reactions
-      capabilities: [discord.reactions.manage]
+      capabilities:
+        - discord.reactions.manage # Read or update reaction state on the configured panel.
     - feature: crosspost
-      capabilities: [discord.messages.send]
+      capabilities:
+        - discord.messages.send # Post this installation’s Discord messages.
     - feature: cleanup
-      capabilities: [discord.messages.manage]
+      capabilities:
+        - discord.messages.manage # Moderate or maintain the messages controlled by this feature.
     - feature: mediaOnly
-      capabilities: [discord.messages.manage, discord.dm.send, discord.members.read]
-      intents: [MessageContent]
+      capabilities:
+        - discord.messages.manage # Moderate or maintain the messages controlled by this feature.
+        - discord.dm.send # Send the private member notification.
+        - discord.members.read # Resolve current members, roles and eligibility.
+      intents:
+        - MessageContent # Read the contents required by the configured message handler.
   config:
     schema: ./config.schema.json
   interop: {}

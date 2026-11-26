@@ -10,13 +10,26 @@ spec:
   engine: ">=0.2.0-0"
   entry: ./src/index.ts
   locales: ./locales
-  capabilities: [discord.auditlog.read, discord.channels.read, discord.messages.read, discord.messages.send, discord.members.read, storage.kv, scheduler, portal.routes, events.subscribe, events.publish]
-  intents: [ServerModeration]
+  capabilities:
+    - discord.auditlog.read # Associate structural changes with audit actors before alerting staff.
+    - discord.channels.read # Resolve configured channels and their current permissions.
+    - discord.messages.read # Read the source messages used by this installation.
+    - discord.messages.send # Post monitor-mode alerts in the private staff channel.
+    - discord.members.read # Resolve current members, roles and eligibility.
+    - storage.kv # Persist installation state and progress across restarts.
+    - scheduler # Run delayed work and recover it after restart.
+    - portal.routes # Serve the access-controlled routes declared below.
+    - events.subscribe # Receive the events declared in the interop section.
+    - events.publish # Deliver declared events to authorized subscribers.
+  intents:
+    - ServerModeration # Receive guild moderation events for audit correlation.
   optional:
     - feature: ownerDM
-      capabilities: [discord.dm.send]
+      capabilities:
+        - discord.dm.send # Send the private member notification.
     - feature: webhook
-      capabilities: [http.fetch]
+      capabilities:
+        - http.fetch # Post a staff notification using the send-only webhook binding.
   network:
     allow: [discord.com]
   secrets:

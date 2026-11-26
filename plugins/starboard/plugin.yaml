@@ -20,7 +20,10 @@ spec:
     - discord.messages.manage # remove invalidated copies
     - discord.channels.read # compare live audiences
     - events.publish # notify once per highlight
-  intents: [ServerMessageReactions, ServerMessages, MessageContent]
+  intents:
+    - ServerMessageReactions # Observe member reactions in guild channels.
+    - ServerMessages # Receive message events in guild channels.
+    - MessageContent # Read and recheck the original message before copying eligible content.
   interop:
     types: ./src/contracts.ts
     publishes:

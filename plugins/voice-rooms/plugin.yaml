@@ -19,14 +19,16 @@ spec:
     - storage.kv                # rooms and their owners
     - scheduler                 # empty-room grace delay, periodic check of the rooms
   # ServerVoiceStates: who joins, leaves or moves between voice channels, and who is in a room.
-  intents: [ServerVoiceStates]
+  intents:
+    - ServerVoiceStates # Observe members joining, moving and leaving voice rooms.
   config:
     schema: ./config.schema.json
   locales: ./locales
   delivery: at-least-once
   optional:
     - feature: roomEvents
-      capabilities: [events.publish] # server-wide room lifecycle events
+      capabilities: # server-wide room lifecycle events
+        - events.publish # Deliver declared events to authorized subscribers.
   interop:
     types: ./src/contracts.ts
     publishes:

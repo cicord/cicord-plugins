@@ -13,20 +13,24 @@ spec:
   locales: ./locales
   delivery: at-least-once
   capabilities:
-    - analytics.read
-    - discord.channels.read
-    - discord.messages.send
-    - scheduler
-    - storage.kv
+    - analytics.read # Read aggregate activity for staff reports.
+    - discord.channels.read # Resolve configured channels and their current permissions.
+    - discord.messages.send # Post this installation’s Discord messages.
+    - scheduler # Run delayed work and recover it after restart.
+    - storage.kv # Persist installation state and progress across restarts.
     - discord.messages.read # recover a posted report after interrupted delivery
   optional:
     - feature: charts
-      capabilities: [render]
+      capabilities:
+        - render # Generate the configured image card from bundled assets.
     - feature: cohorts
-      capabilities: [discord.members.read]
-      intents: [ServerMembers]
+      capabilities:
+        - discord.members.read # Enable the optional member cohort used to count departures within seven days.
+      intents:
+        - ServerMembers # Observe member joins, departures and role changes.
     - feature: counters
-      capabilities: [discord.channels.manage]
+      capabilities:
+        - discord.channels.manage # Create and maintain the channels owned by this installation.
   privacy:
     records:
       - {name: members, policy: erase, description: "Pseudonymous join date until departure or expiry after thirty days."}

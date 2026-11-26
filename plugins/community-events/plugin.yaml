@@ -13,17 +13,19 @@ spec:
   locales: ./locales
   delivery: at-least-once
   capabilities:
-    - discord.events.read
-    - discord.events.manage
-    - discord.members.read
-    - discord.channels.read
-    - discord.messages.send
-    - discord.dm.send
-    - scheduler
-    - storage.kv
-    - portal.routes
-    - events.publish
-  intents: [ServerScheduledEvents, ServerVoiceStates]
+    - discord.events.read # Read event details and attendance.
+    - discord.events.manage # Create and edit the scheduled events this installation manages.
+    - discord.members.read # Resolve current members, roles and eligibility.
+    - discord.channels.read # Resolve configured channels and their current permissions.
+    - discord.messages.send # Post this installation’s Discord messages.
+    - discord.dm.send # Send the private member notification.
+    - scheduler # Run delayed work and recover it after restart.
+    - storage.kv # Persist installation state and progress across restarts.
+    - portal.routes # Serve the access-controlled routes declared below.
+    - events.publish # Deliver declared events to authorized subscribers.
+  intents:
+    - ServerScheduledEvents # Receive scheduled event changes and attendance updates.
+    - ServerVoiceStates # Observe members joining, moving and leaving voice rooms.
   interop:
     types: ./src/contracts.ts
     publishes: [{topic: started, version: 1, scope: server}, {topic: ended, version: 1, scope: server}]

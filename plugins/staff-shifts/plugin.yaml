@@ -15,12 +15,15 @@ spec:
     - discord.roles.assign # manage the configured role
     - discord.members.read # resolve members at delivery
     - portal.routes # serve access-controlled forms
-  intents: [ServerMembers]
+  intents:
+    - ServerMembers # Observe member joins, departures and role changes.
   optional:
     - feature: reminders
-      capabilities: [discord.dm.send]
+      capabilities:
+        - discord.dm.send # Send the private member notification.
     - feature: statistics
-      capabilities: [events.subscribe]
+      capabilities:
+        - events.subscribe # Receive the events declared in the interop section.
   interop:
     types: ./src/contracts.ts
     provides: { queries: [onDuty] }

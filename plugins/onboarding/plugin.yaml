@@ -12,11 +12,11 @@ spec:
   engine: ">=0.2.0-0"
   entry: ./src/index.ts
   capabilities:
-    - discord.roles.assign
-    - storage.kv
+    - discord.roles.assign # Add or remove the configured roles for eligible members.
+    - storage.kv # Persist installation state and progress across restarts.
     - scheduler # migrate stored choices in bounded batches
-    - portal.routes
-    - portal.links
+    - portal.routes # Serve the access-controlled routes declared below.
+    - portal.links # Issue links to this installation’s portal flows.
   config:
     schema: ./config.schema.json
   interop: {}

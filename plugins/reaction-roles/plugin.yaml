@@ -14,13 +14,14 @@ spec:
   capabilities:
     - discord.messages.send      # the panel messages
     - discord.messages.read      # find a panel message again to edit it in place
-    - discord.channels.read
+    - discord.channels.read # Resolve configured channels and their current permissions.
     - discord.roles.assign       # give and take the panel roles
     - discord.members.read       # reaction panels: the member behind a reaction
     - discord.reactions.manage   # reaction panels: the bot adds the emojis to pick from
     - storage.kv                 # where each panel was posted
   # Reaction panels only. Buttons and select menus need no intent.
-  intents: [ServerMessageReactions]
+  intents:
+    - ServerMessageReactions # Observe member reactions in guild channels.
   config:
     schema: ./config.schema.json
   interop: {}

@@ -17,14 +17,18 @@ spec:
     - discord.members.read # resolve members at delivery
     - events.publish # publish the declared event
     - portal.routes # serve access-controlled forms
-  intents: [ServerMembers]
+  intents:
+    - ServerMembers # Observe member joins, departures and role changes.
   optional:
     - feature: personalTimeZone
-      capabilities: [plugins.query:reminders.timezone]
+      capabilities:
+        - plugins.query:reminders.timezone # Read reminders.timezone from the explicitly bound provider.
     - feature: temporaryRole
-      capabilities: [plugins.call:member-roles.grantTemporary]
+      capabilities:
+        - plugins.call:member-roles.grantTemporary # Invoke member-roles.grantTemporary on the explicitly bound provider.
     - feature: directRole
-      capabilities: [discord.roles.assign]
+      capabilities:
+        - discord.roles.assign # Add or remove the configured roles for eligible members.
   interop:
     types: ./src/contracts.ts
     publishes:

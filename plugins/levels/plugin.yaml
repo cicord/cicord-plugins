@@ -14,15 +14,18 @@ spec:
   capabilities:
     - discord.messages.send      # level-up announcements, recap, /top
     - discord.reactions.manage   # 🎉 on the message that levelled up
-    - discord.channels.read
+    - discord.channels.read # Resolve configured channels and their current permissions.
     - discord.members.read       # role rewards for poll voters, /top role filter
     - discord.roles.assign       # role rewards
-    - storage.kv
+    - storage.kv # Persist installation state and progress across restarts.
     - scheduler                  # daily recap
     - portal.routes              # GET /leaderboard, GET /me
     - portal.links               # leaderboard link in /rank
   # MessageContent: short messages ("ok", "lol") earn no XP.
-  intents: [ServerMessages, MessageContent, ServerMessageReactions]
+  intents:
+    - ServerMessages # Receive message events in guild channels.
+    - MessageContent # Read the contents required by the configured message handler.
+    - ServerMessageReactions # Observe member reactions in guild channels.
   config:
     schema: ./config.schema.json
   routes:

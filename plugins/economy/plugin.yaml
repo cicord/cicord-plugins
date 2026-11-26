@@ -20,20 +20,30 @@ spec:
     - scheduler # pending shop fulfillment and poll batches
   optional:
     - feature: eventRewards
-      capabilities: [events.subscribe]
+      capabilities:
+        - events.subscribe # Receive the events declared in the interop section.
     - feature: pollPages
-      capabilities: [plugins.query:polls.voters]
+      capabilities:
+        - plugins.query:polls.voters # Read polls.voters from the explicitly bound provider.
     - feature: permanentRole
-      capabilities: [discord.roles.assign, discord.members.read]
+      capabilities:
+        - discord.roles.assign # Add or remove the configured roles for eligible members.
+        - discord.members.read # Resolve current members, roles and eligibility.
     - feature: temporaryRole
-      capabilities: [plugins.call:member-roles.grantTemporary]
+      capabilities:
+        - plugins.call:member-roles.grantTemporary # Invoke member-roles.grantTemporary on the explicitly bound provider.
     - feature: perk
-      capabilities: [plugins.call:tickets.open]
+      capabilities:
+        - plugins.call:tickets.open # Invoke tickets.open on the explicitly bound provider.
     - feature: messageRewards
-      intents: [ServerMessages]
+      intents:
+        - ServerMessages # Receive message events in guild channels.
     - feature: voiceRewards
-      intents: [ServerVoiceStates]
-      capabilities: [discord.members.read, discord.channels.read]
+      intents:
+        - ServerVoiceStates # Observe members joining, moving and leaving voice rooms.
+      capabilities:
+        - discord.members.read # Resolve current members, roles and eligibility.
+        - discord.channels.read # Resolve configured channels and their current permissions.
   interop:
     types: ./src/contracts.ts
     publishes:

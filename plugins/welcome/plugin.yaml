@@ -16,20 +16,28 @@ spec:
     - discord.messages.send # post configured messages
     - discord.members.read # resolve members at delivery
     - discord.channels.read # resolve destination channels
-  intents: [ServerMembers]
+  intents:
+    - ServerMembers # Observe member joins, departures and role changes.
   optional:
     - feature: onboarding
-      capabilities: [discord.dm.send, portal.links]
+      capabilities:
+        - discord.dm.send # Send the private member notification.
+        - portal.links # Issue links to this installation’s portal flows.
     - feature: defaultRole
-      capabilities: [discord.roles.assign]
+      capabilities:
+        - discord.roles.assign # Add or remove the configured roles for eligible members.
     - feature: verified
-      capabilities: [events.subscribe]
+      capabilities:
+        - events.subscribe # Receive the events declared in the interop section.
     - feature: inviter
-      capabilities: [plugins.query:invite-tracker.inviterOf]
+      capabilities:
+        - plugins.query:invite-tracker.inviterOf # Read invite-tracker.inviterOf from the explicitly bound provider.
     - feature: cards
-      capabilities: [render]
+      capabilities:
+        - render # Generate the configured image card from bundled assets.
     - feature: templates
-      capabilities: [files.read]
+      capabilities:
+        - files.read # Read the versioned files bound to this installation.
   interop:
     types: ./src/contracts.ts
     subscribes: [{ topic: verification.passed, version: 1 }]

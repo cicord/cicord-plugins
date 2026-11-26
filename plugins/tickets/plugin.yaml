@@ -14,28 +14,36 @@ spec:
   capabilities:
     - discord.messages.send     # panel, welcome message, notices, portal replies, log summary
     - discord.messages.read     # summary (participants, count); last 50 messages for the staff portal
-    - discord.channels.read
+    - discord.channels.read # Resolve configured channels and their current permissions.
     - discord.channels.manage   # ticket channels (plugin-owned)
     - discord.members.read      # check that an assignee is staff; GET /staff lists the staff roles' members
-    - storage.kv
+    - storage.kv # Persist installation state and progress across restarts.
     - portal.routes             # member and staff routes (src/routes.ts)
-    - discord.messages.manage
-    - discord.dm.send
-    - events.publish
-    - scheduler
-    - portal.links
-  intents: [ServerMessages, MessageContent, ServerMembers, DirectMessages]
+    - discord.messages.manage # Moderate or maintain the messages controlled by this feature.
+    - discord.dm.send # Relay staff replies to the authorized ticket opener and retract managed copies.
+    - events.publish # Deliver declared events to authorized subscribers.
+    - scheduler # Run delayed work and recover it after restart.
+    - portal.links # Issue links to this installation’s portal flows.
+  intents:
+    - ServerMessages # Receive message events in guild channels.
+    - MessageContent # Read the conversation for transcripts and consented modmail relay.
+    - ServerMembers # Observe member joins, departures and role changes.
+    - DirectMessages # Receive messages sent directly to the bot.
   locales: ./locales
   delivery: at-least-once
   optional:
     - feature: messageContextMenu
-      capabilities: [discord.channels.read]
+      capabilities:
+        - discord.channels.read # Resolve configured channels and their current permissions.
     - feature: appealUpdates
-      capabilities: [events.subscribe]
+      capabilities:
+        - events.subscribe # Receive the events declared in the interop section.
     - feature: onDuty
-      capabilities: [plugins.query:staff-shifts.onDuty]
+      capabilities:
+        - plugins.query:staff-shifts.onDuty # Read staff-shifts.onDuty from the explicitly bound provider.
     - feature: caseContext
-      capabilities: [plugins.query:moderation.cases]
+      capabilities:
+        - plugins.query:moderation.cases # Read moderation.cases from the explicitly bound provider.
   interop:
     publishes:
       - {topic: opened, version: 1, scope: server}

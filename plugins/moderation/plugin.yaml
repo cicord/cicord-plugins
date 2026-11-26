@@ -43,8 +43,8 @@ spec:
     - discord.messages.manage    # delete flood messages
     - scheduler                  # persistent temporary-ban expiry
     - discord.messages.read      # preview and filter the messages to purge
-    - discord.channels.read
-    - discord.members.read
+    - discord.channels.read # Resolve configured channels and their current permissions.
+    - discord.members.read # Resolve current members, roles and eligibility.
     - discord.members.moderate   # timeout, kick, ban
     - discord.dm.send            # tell the member why
     - storage.kv                 # warnings (expiring), case numbers
@@ -53,7 +53,10 @@ spec:
     - events.publish             # moderation.case, for the audit log
   # ServerMembers: join/leave/update log. ServerMessages: flood protection, which only needs
   # who posts and when, never the content (no MessageContent).
-  intents: [ServerMembers, ServerMessages, ServerModeration]
+  intents:
+    - ServerMembers # Observe member joins, departures and role changes.
+    - ServerMessages # Receive message events in guild channels.
+    - ServerModeration # Receive guild moderation events for audit correlation.
   secrets:
     - name: WEBHOOK_URL
       use: webhook.send

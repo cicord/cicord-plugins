@@ -23,13 +23,18 @@ spec:
     - scheduler # render score changes in batches
   optional:
     - feature: discussion
-      capabilities: [discord.threads.manage]
+      capabilities:
+        - discord.threads.manage # Open or maintain the relevant discussion thread.
     - feature: authorNotice
-      capabilities: [discord.dm.send]
+      capabilities:
+        - discord.dm.send # Send the private member notification.
     - feature: duplicateSearch
-      capabilities: [storage.index]
+      capabilities:
+        - storage.index # Index and search scoped source material.
     - feature: forumInput
-      intents: [ServerMessages, MessageContent]
+      intents:
+        - ServerMessages # Receive message events in guild channels.
+        - MessageContent # Read the contents required by the configured message handler.
   interop:
     types: ./src/contracts.ts
     publishes:

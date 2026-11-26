@@ -19,15 +19,25 @@ spec:
     - storage.kv # durable outbox, correlation, retention and privacy records
     - scheduler # attribution deadlines, migrations, retry and retention
     - portal.routes # moderator search and export
-  intents: [ServerMembers, ServerMessages, ServerModeration, ServerInvites, ServerVoiceStates, ServerExpressions, AutoModerationExecution]
+  intents:
+    - ServerMembers # Observe member joins, departures and role changes.
+    - ServerMessages # Receive message events in guild channels.
+    - ServerModeration # Receive guild moderation events for audit correlation.
+    - ServerInvites # Observe changes to guild invitations.
+    - ServerVoiceStates # Observe members joining, moving and leaving voice rooms.
+    - ServerExpressions # Observe emoji and other guild expression changes.
+    - AutoModerationExecution # Observe the action actually taken by Discord AutoMod.
   optional:
     - feature: cacheContent
       when: /cacheContent
-      intents: [MessageContent]
+      intents:
+        - MessageContent # Read the contents required by the configured message handler.
     - feature: search
-      capabilities: [storage.index]
+      capabilities:
+        - storage.index # Index and search scoped source material.
     - feature: partners
-      capabilities: [events.subscribe]
+      capabilities:
+        - events.subscribe # Receive the events declared in the interop section.
   config: {schema: ./config.schema.json}
   locales: ./locales
   routes: {types: ./src/routes.ts}

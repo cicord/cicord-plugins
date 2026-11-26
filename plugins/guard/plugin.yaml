@@ -10,34 +10,59 @@ spec:
   engine: ">=0.2.0-0"
   entry: ./src/index.ts
   locales: ./locales
-  capabilities: [discord.channels.read, discord.members.read, discord.messages.send, discord.messages.read, storage.kv, scheduler, portal.routes, events.publish, events.subscribe]
-  intents: [ServerMessages, MessageContent, ServerMembers, AutoModerationExecution]
+  capabilities:
+    - discord.channels.read # Resolve configured channels and their current permissions.
+    - discord.members.read # Resolve current members, roles and eligibility.
+    - discord.messages.send # Post this installation’s Discord messages.
+    - discord.messages.read # Read the source messages used by this installation.
+    - storage.kv # Persist installation state and progress across restarts.
+    - scheduler # Run delayed work and recover it after restart.
+    - portal.routes # Serve the access-controlled routes declared below.
+    - events.publish # Deliver declared events to authorized subscribers.
+    - events.subscribe # Receive the events declared in the interop section.
+  intents:
+    - ServerMessages # Receive message events in guild channels.
+    - MessageContent # Inspect links, mentions and duplicate text for enabled moderation rules.
+    - ServerMembers # Observe member joins, departures and role changes.
+    - AutoModerationExecution # Observe the action actually taken by Discord AutoMod.
   optional:
     - feature: duplicates
       when: /duplicates/enabled
-      capabilities: [discord.messages.read]
+      capabilities:
+        - discord.messages.read # Read the source messages used by this installation.
     - feature: removeMessages
-      capabilities: [discord.messages.manage]
+      capabilities:
+        - discord.messages.manage # Remove a message that triggered a configured rule.
     - feature: directSanctions
-      capabilities: [discord.members.moderate]
+      capabilities:
+        - discord.members.moderate # Apply the configured sanction after checking target eligibility.
     - feature: directQuarantine
-      capabilities: [discord.roles.assign]
+      capabilities:
+        - discord.roles.assign # Add or remove the configured roles for eligible members.
     - feature: raidOverlay
-      capabilities: [server.overlays]
+      capabilities:
+        - server.overlays # Apply time-limited restrictions through the reconciler.
     - feature: pauseInvites
-      capabilities: [server.incident]
+      capabilities:
+        - server.incident # Pause invites during a confirmed or staff-initiated lockdown.
     - feature: invites
-      capabilities: [discord.invites.read]
+      capabilities:
+        - discord.invites.read # Compare invite counters to attribute joins when possible.
     - feature: images
-      capabilities: [media.analyze]
+      capabilities:
+        - media.analyze # Compare perceptual hashes of attachments against the configured image rules.
     - feature: feeds
-      capabilities: [http.fetch]
+      capabilities:
+        - http.fetch # Contact the reviewed service using the manifest’s network policy.
     - feature: sanctions
-      capabilities: [plugins.call:moderation.sanction]
+      capabilities:
+        - plugins.call:moderation.sanction # Invoke moderation.sanction on the explicitly bound provider.
     - feature: standing
-      capabilities: [plugins.query:moderation.standing]
+      capabilities:
+        - plugins.query:moderation.standing # Read moderation.standing from the explicitly bound provider.
     - feature: verification
-      capabilities: [plugins.query:verification.status]
+      capabilities:
+        - plugins.query:verification.status # Read verification.status from the explicitly bound provider.
   config:
     schema: ./config.schema.json
   routes:
