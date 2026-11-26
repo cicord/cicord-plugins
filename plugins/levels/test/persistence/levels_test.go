@@ -7,7 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
+	"github.com/cicord/cicord/internal/build"
 	"github.com/cicord/cicord/internal/state"
 	"github.com/cicord/cicord/internal/state/postgres"
 	"github.com/cicord/cicord/internal/state/sqlite"
@@ -20,11 +20,11 @@ import (
 )
 
 func TestLevelsPublishedMigration(t *testing.T) {
-	module := filepath.Join(os.Getenv("CICORD_LEVELS_PLUGIN"), "src", "storage.ts")
-	code := bundleSource(t, fmt.Sprintf(`
-    import {definePlugin} from "@cicord/sdk";
-    import {migrate,credit} from %q;
-    export default definePlugin({tasks:{"migrate-ranking":migrate,async earn(ctx){await credit(ctx,"1",10,"live");await credit(ctx,"999",20,"live");}}});`, module))
+	bundled, err := build.Bundle(os.Getenv("CICORD_LEVELS_PLUGIN"), "test/persistence/driver.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := bundled.Code
 	t.Run("SQLite", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "levels.db")
 		levelsBackend(t, code, func() (state.Store, error) { return sqlite.Open(path) })

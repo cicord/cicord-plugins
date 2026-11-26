@@ -47,8 +47,10 @@ export async function startSimulator(t, pluginDir, grants, config, options = {})
     return text?JSON.parse(text):undefined;
   }
   let ready=false, diagnostics;
-  for(let attempt=0;attempt<120;attempt++){
+  const startupDeadline=Date.now()+45_000;
+  while(Date.now()<startupDeadline){
     if(child.exitCode!==null || child.signalCode!==null)throw new Error(`simulator exited: ${stderr}`);
+    if(stderr.includes(`msg="revision rejected"`))throw new Error(`simulator rejected its test project: ${stderr}`);
     try{
       const status=await api("/api/v1/status",undefined,"local-simulator-only");
       diagnostics=status.bots?.flatMap(bot=>bot.plugins);

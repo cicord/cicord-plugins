@@ -7,7 +7,7 @@ import { startSimulator } from "./simulator.mjs";
 
 const plugins = fileURLToPath(new URL("../plugins/", import.meta.url));
 test(
-  "all registry plugins accept enabled:false alone with no grants, resources or executable handlers",
+  "all registry plugins accept enabled:false alone with no grants or registered commands",
   { timeout: 120000 },
   async (t) => {
     const dirs = (await readdir(plugins, { withFileTypes: true }))
@@ -68,7 +68,7 @@ test(
     );
     t.diagnostic(
       dirs.length +
-        " disabled installations validated together without optional grants or channels.",
+        " disabled installations validated together without grants or plugin-specific channel fixtures.",
     );
   },
 );

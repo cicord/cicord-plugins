@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/cicord/cicord/internal/build"
 	"github.com/cicord/cicord/internal/state"
 	"github.com/cicord/cicord/internal/state/postgres"
 	"github.com/cicord/cicord/internal/state/sqlite"
@@ -19,8 +20,11 @@ import (
 )
 
 func TestAuditLogPublishedMigration(t *testing.T) {
-	module := filepath.Join(os.Getenv("CICORD_AUDIT_PLUGIN"), "src/log.ts")
-	code := bundleSource(t, fmt.Sprintf(`import {definePlugin} from "@cicord/sdk";import {migrate} from %q;export default definePlugin({tasks:{migrate}});`, module))
+	bundled, err := build.Bundle(os.Getenv("CICORD_AUDIT_PLUGIN"), "test/persistence/driver.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := bundled.Code
 	run := func(t *testing.T, open func() (state.Store, error)) {
 		ctx := t.Context()
 		store, err := open()
