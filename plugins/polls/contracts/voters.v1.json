@@ -31,6 +31,7 @@
     "required": [
       "userIds"
     ],
-    "additionalProperties": false
+    "additionalProperties": false,
+    "description": "Distinct participants in a closed non-anonymous poll. A background installation with the explicit polls.voters grant may page these IDs for participation rewards. Delegated member requests additionally require current access to the source channel."
   }
 }

@@ -126,7 +126,7 @@ async function closePoll(ctx: Context, poll: Poll, by: string | null) {
     await savePoll(ctx, { ...poll, published: true });
   }
   if (by !== null && poll.taskId) await ctx.schedule.cancel(poll.taskId);
-  return renderPoll(poll, t, ctx.config.color);
+  return renderPoll(poll, t, ctx);
 }
 
 async function voterPage(
@@ -154,7 +154,7 @@ async function voterPage(
   };
 }
 
-function pollPayload(poll: Poll, color: string): MessagePayload {
+function pollPayload(poll: Poll, ctx: Context): MessagePayload {
   return poll.style === "native"
     ? {
         poll: {
@@ -164,7 +164,7 @@ function pollPayload(poll: Poll, color: string): MessagePayload {
           multiselect: poll.multiple,
         },
       }
-    : renderPoll(poll, { counts: poll.choices.map(() => 0), voters: [] }, color);
+    : renderPoll(poll, { counts: poll.choices.map(() => 0), voters: [] }, ctx);
 }
 
 /** Records the voter's choice indexes and refreshes the poll message. */
@@ -202,7 +202,7 @@ async function vote(ctx: Context, interaction: ComponentInteraction, poll: Poll,
     await interaction.reply({ content: ctx.i18n.t("votingClosed"), ephemeral: true });
     return;
   }
-  await interaction.update(renderPoll(poll, await tally(ctx, poll), ctx.config.color));
+  await interaction.update(renderPoll(poll, await tally(ctx, poll), ctx));
   if (ctx.config.confirmVotes) {
     const labels = picked.map((i) => poll.choices[i]).join(", ");
     await interaction.followUp({
@@ -219,7 +219,7 @@ async function openPoll(
   const id = interaction.componentId.split(":")[1] ?? "";
   const poll = await getPoll(ctx, id);
   if (!poll || poll.status !== "open") {
-    if (poll) await interaction.update(renderPoll(poll, await tally(ctx, poll), ctx.config.color));
+    if (poll) await interaction.update(renderPoll(poll, await tally(ctx, poll), ctx));
     else await interaction.reply({ content: ctx.i18n.t("gone"), ephemeral: true });
     return undefined;
   }
@@ -254,7 +254,9 @@ function pingMentions(
   const everyone = ping.id === ctx.server.id;
   if (!isManager(ctx, member) && (everyone || ping.mentionable !== true))
     return {
-      refused: `You cannot ping ${everyone ? "@everyone" : `the role @${ping.name}`}: only poll managers may ping a role that is not mentionable.`,
+      refused: ctx.i18n.t("pingRefused", {
+        target: everyone ? "@everyone" : ctx.i18n.t("role", { name: ping.name }),
+      }),
     };
   return { allowed: everyone ? none : { ...none, roles: [ping.id] } };
 }
@@ -452,7 +454,7 @@ export default definePlugin({
           return;
         }
         const message = await channel.send({
-          ...pollPayload(poll, ctx.config.color),
+          ...pollPayload(poll, ctx),
           ...(o.ping
             ? { content: `${o.ping.mention} — new poll by ${interaction.user.mention}` }
             : {}),
@@ -506,7 +508,7 @@ export default definePlugin({
               await interaction.reply(ctx.i18n.t("unknown"));
               return;
             }
-            const { embeds } = renderPoll(poll, await tally(ctx, poll), ctx.config.color);
+            const { embeds } = renderPoll(poll, await tally(ctx, poll), ctx);
             await interaction.reply(embeds ? { embeds } : {});
           },
         }),
@@ -569,7 +571,7 @@ export default definePlugin({
       const msg =
         history.find((m) => m.author.id === ctx.bot.user.id && m.content === marker) ??
         (await channel.send({
-          ...pollPayload(poll, ctx.config.color),
+          ...pollPayload(poll, ctx),
           content: marker,
           allowedMentions: { users: [], roles: [], everyone: false },
         }));

@@ -1,3 +1,4 @@
+import type { PollClosedV1 } from "./contracts.ts";
 /** Poll records, tallies and rendering, independent of the handlers. */
 import type { ActionRow, Context, Json, Message, MessagePayload } from "@cicord/sdk";
 
@@ -34,18 +35,6 @@ export interface Tally {
   counts: number[];
   voters: string[];
   voterCount?: number;
-}
-
-/** Payload of the `polls.closed` event. */
-export interface PollClosed {
-  pollId: string;
-  question: string;
-  choices: { label: string; votes: number }[];
-  winners: string[];
-  voters: string[];
-  closedBy: string | null;
-  channelId: string;
-  messageId: string;
 }
 
 export const MAX_CHOICES = 10;
@@ -112,7 +101,7 @@ function bar(share: number): string {
   return "█".repeat(full) + "░".repeat(BAR - full);
 }
 
-export function renderPoll(poll: Poll, t: Tally, color: string): MessagePayload {
+export function renderPoll(poll: Poll, t: Tally, ctx: Context): MessagePayload {
   const total = t.counts.reduce((a, b) => a + b, 0);
   const max = Math.max(0, ...t.counts);
   const open = poll.status === "open";
@@ -121,26 +110,26 @@ export function renderPoll(poll: Poll, t: Tally, color: string): MessagePayload 
     const n = t.counts[i] ?? 0;
     const share = total > 0 ? n / total : 0;
     const win = !open && n > 0 && n === max ? " 🏆" : "";
-    return `**${i + 1}. ${label}**${win}\n\`${bar(share)}\` ${n} vote${n === 1 ? "" : "s"} (${Math.round(share * 100)}%)`;
+    return `**${i + 1}. ${label}**${win}\n\`${bar(share)}\` ${ctx.i18n.t(n === 1 ? "oneVote" : "votes", { n })} (${Math.round(share * 100)}%)`;
   });
   const closes = Math.floor(Date.parse(poll.closesAt) / 1000);
   const footer = open
-    ? `${poll.multiple ? "Several choices allowed" : "One choice"} · closes <t:${closes}:R>`
-    : `Closed · ${voters} voter${voters === 1 ? "" : "s"}`;
+    ? ctx.i18n.t(poll.multiple ? "manyChoices" : "oneChoice", { time: `<t:${closes}:R>` })
+    : ctx.i18n.t(voters === 1 ? "oneVoter" : "voters", { n: voters });
   return {
     embeds: [
       {
         title: `📊 ${poll.question}`,
         description: `${lines.join("\n\n")}\n\n${footer}`,
-        color,
-        footer: { text: `Poll #${poll.id}` },
+        color: ctx.config.color,
+        footer: { text: ctx.i18n.t("number", { id: poll.id }) },
       },
     ],
-    components: open ? components(poll) : [],
+    components: open ? components(poll, ctx) : [],
   };
 }
 
-function components(poll: Poll): ActionRow[] {
+function components(poll: Poll, ctx: Context): ActionRow[] {
   const rows: ActionRow[] = [];
   if (poll.style === "select") {
     rows.push({
@@ -149,7 +138,7 @@ function components(poll: Poll): ActionRow[] {
         {
           type: "select",
           id: `pick:${poll.id}`,
-          placeholder: poll.multiple ? "Pick one or more" : "Pick one",
+          placeholder: ctx.i18n.t(poll.multiple ? "pickMany" : "pickOne"),
           minValues: 1,
           maxValues: poll.multiple ? (poll.maxChoices ?? poll.choices.length) : 1,
           options: poll.choices.map((label, i) => ({ value: String(i), label })),
@@ -172,13 +161,19 @@ function components(poll: Poll): ActionRow[] {
   rows.push({
     type: "row",
     components: [
-      { type: "button", id: `end:${poll.id}`, label: "Close poll", emoji: "🔒", style: "danger" },
+      {
+        type: "button",
+        id: `end:${poll.id}`,
+        label: ctx.i18n.t("end"),
+        emoji: "🔒",
+        style: "danger",
+      },
     ],
   });
   return rows;
 }
 
-export function closedEvent(poll: Poll, t: Tally): PollClosed {
+export function closedEvent(poll: Poll, t: Tally): PollClosedV1 {
   const max = Math.max(0, ...t.counts);
   return {
     pollId: poll.id,
@@ -186,7 +181,7 @@ export function closedEvent(poll: Poll, t: Tally): PollClosed {
     choices: poll.choices.map((label, i) => ({ label, votes: t.counts[i] ?? 0 })),
     winners: max > 0 ? poll.choices.filter((_, i) => t.counts[i] === max) : [],
     voters: poll.anonymous ? [] : t.voters,
-    closedBy: poll.closedBy ?? null,
+    closedBy: poll.anonymous ? null : (poll.closedBy ?? null),
     channelId: poll.channelId,
     messageId: poll.messageId,
   };

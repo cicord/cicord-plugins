@@ -463,3 +463,12 @@ test("a scheduled poll opens once on task replay", async () => {
   await plugin.tasks!.open!(h.ctx, { id: "1" });
   expect(h.sent).toHaveLength(1);
 });
+
+test("anonymous manual closure hides the operator and voter identities in both versions", async () => {
+  const h = setup();
+  const { message } = await start(h, { anonymous: true });
+  await runComponent(plugin, h, "vote:1:0", { user: "1", message });
+  await runComponent(plugin, h, "end:1", { user: "1", message });
+  for (const event of h.published)
+    expect(event.payload).toMatchObject({ closedBy: null, voters: [] });
+});

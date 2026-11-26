@@ -1,6 +1,16 @@
-import type { PollClosed } from "./polls.ts";
-export type PollClosedV1 = PollClosed;
-export type PollClosedV2 = Omit<PollClosed, "voters"> & {
+/** Payload of the `polls.closed` event. */
+export interface PollClosedV1 {
+  pollId: string;
+  question: string;
+  choices: { label: string; votes: number }[];
+  winners: string[];
+  voters: string[];
+  closedBy: string | null;
+  channelId: string;
+  messageId: string;
+}
+
+export type PollClosedV2 = Omit<PollClosedV1, "voters"> & {
   voters?: string[];
   voterCount: number;
   votersTruncated?: boolean;
