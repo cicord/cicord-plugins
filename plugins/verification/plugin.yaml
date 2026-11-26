@@ -1,0 +1,60 @@
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: verification
+  version: 0.2.0
+  displayName: Verification
+  description: Member-bound challenges, age checks and a staff approval queue. Role assignment uses the existing server permission policy.
+  license: Apache-2.0
+spec:
+  engine: ">=0.2.0-0"
+  entry: ./src/index.ts
+  locales: ./locales
+  capabilities: [discord.channels.read, discord.messages.read, discord.messages.send, discord.members.read, discord.roles.assign, storage.kv, scheduler, portal.routes, portal.links, events.publish]
+  intents: [ServerMembers]
+  optional:
+    - feature: captcha
+      capabilities: [http.fetch]
+    - feature: visual
+      capabilities: [render]
+    - feature: dm
+      capabilities: [discord.dm.send]
+    - feature: directKick
+      capabilities: [discord.members.moderate]
+    - feature: sanctions
+      capabilities: [plugins.call:moderation.sanction]
+  config:
+    schema: ./config.schema.json
+  routes:
+    types: ./src/routes.ts
+  delivery: at-least-once
+  interop:
+    types: ./src/contracts.ts
+    publishes:
+      - { topic: passed, scope: server, version: 1 }
+      - { topic: failed, scope: server, version: 1 }
+    provides:
+      queries: [status]
+    consumes:
+      actions: [moderation.sanction]
+  network:
+    allow: [challenges.cloudflare.com, api.hcaptcha.com]
+  secrets:
+    - name: TURNSTILE_SECRET
+      description: Turnstile verification secret
+      required: false
+      hosts: [challenges.cloudflare.com]
+    - name: HCAPTCHA_SECRET
+      description: hCaptcha verification secret
+      required: false
+      hosts: [api.hcaptcha.com]
+  privacy:
+    records:
+      - name: verification
+        policy: erase
+        description: Result, method and decision time.
+        retention: 30 days
+      - name: pending
+        policy: erase
+        description: Join and review state, rate limit and transient challenge.
+        retention: 30 days

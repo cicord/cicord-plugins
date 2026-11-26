@@ -1,0 +1,47 @@
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: anti-nuke
+  version: 0.2.0
+  displayName: Anti-nuke
+  description: Monitor administrative changes using audit evidence. Staff can inspect uncertain, delayed and confirmed observations.
+  license: Apache-2.0
+spec:
+  engine: ">=0.2.0-0"
+  entry: ./src/index.ts
+  locales: ./locales
+  capabilities: [discord.auditlog.read, discord.channels.read, discord.messages.read, discord.messages.send, discord.members.read, storage.kv, scheduler, portal.routes, events.subscribe, events.publish]
+  intents: [ServerModeration]
+  optional:
+    - feature: ownerDM
+      capabilities: [discord.dm.send]
+    - feature: webhook
+      capabilities: [http.fetch]
+  network:
+    allow: [discord.com]
+  secrets:
+    - name: WEBHOOK_URL
+      required: false
+      hosts: [discord.com]
+      description: Staff notification webhook URL
+  config:
+    schema: ./config.schema.json
+  routes:
+    types: ./src/routes.ts
+  delivery: at-least-once
+  interop:
+    types: ./src/contracts.ts
+    publishes:
+      - { topic: triggered, scope: server, version: 1 }
+    subscribes:
+      - { topic: guard.raid, version: 1 }
+  privacy:
+    records:
+      - name: evidence
+        policy: erase
+        description: Time-limited audit observations and actor counters.
+        retention: 30 days
+      - name: command trust
+        policy: erase
+        description: Owner-managed temporary trusted identity.
+        retention: 30 days

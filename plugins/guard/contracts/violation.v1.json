@@ -1,0 +1,30 @@
+{
+  "type": "object",
+  "properties": {
+    "userId": {
+      "type": "string"
+    },
+    "rule": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string"
+    },
+    "channelId": {
+      "type": "string"
+    },
+    "messageId": {
+      "type": "string"
+    },
+    "requestedAction": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "userId",
+    "rule",
+    "action",
+    "channelId"
+  ]
+}

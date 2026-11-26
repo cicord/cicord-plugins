@@ -1,0 +1,619 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "guard configuration",
+  "type": "object",
+  "properties": {
+    "locale": {
+      "type": "string",
+      "enum": [
+        "en",
+        "fr"
+      ],
+      "description": "Optional instance language override. Otherwise use the interaction or server locale."
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "monitor",
+        "enforce"
+      ],
+      "default": "monitor",
+      "description": "Monitoring or enforcement policy."
+    },
+    "staffChannel": {
+      "type": "string",
+      "x-cicord-ref": "channel",
+      "description": "Managed channel key for staff alerts."
+    },
+    "quarantineRole": {
+      "type": "string",
+      "x-cicord-ref": "role",
+      "description": "Managed role added by a direct quarantine when moderation is absent."
+    },
+    "links": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "denylist",
+            "allowlist"
+          ],
+          "default": "denylist",
+          "description": "Block matching domains in denylist mode or permit only matching domains in allowlist mode."
+        },
+        "domains": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 253
+          },
+          "maxItems": 500,
+          "default": [],
+          "description": "Domain suffixes matched at DNS label boundaries."
+        },
+        "blockInvites": {
+          "type": "boolean",
+          "default": true,
+          "description": "Inspect and block disallowed Discord invites."
+        },
+        "allowOwnInvites": {
+          "type": "boolean",
+          "default": true,
+          "description": "Allow invitations belonging to this server when the invite grant is available."
+        },
+        "blockShorteners": {
+          "type": "boolean",
+          "default": false,
+          "description": "Reject common link-shortener domains."
+        },
+        "feeds": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string",
+                "maxLength": 2048,
+                "description": "HTTPS feed URL on an allowed host."
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "lines",
+                  "json"
+                ],
+                "description": "Newline-separated domains or a JSON array of domains."
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "url",
+              "format"
+            ]
+          },
+          "maxItems": 8,
+          "default": [],
+          "description": "Periodically fetch these domain lists from explicitly allowed hosts."
+        },
+        "action": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "delete",
+                "warn",
+                "timeout",
+                "quarantine",
+                "kick",
+                "ban"
+              ],
+              "default": "delete",
+              "description": "Kind of moderation action."
+            },
+            "minutes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 40320,
+              "default": 10,
+              "description": "Timeout duration in minutes."
+            }
+          },
+          "additionalProperties": false,
+          "default": {},
+          "description": "Action requested when this rule triggers in enforce mode."
+        }
+      },
+      "additionalProperties": false,
+      "default": {},
+      "description": "Domain, invitation and feed policy."
+    },
+    "duplicates": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable this rule."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 20,
+          "default": 3,
+          "description": "Number of observations that triggers this rule."
+        },
+        "seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600,
+          "default": 30,
+          "description": "Window or slowmode duration in seconds."
+        },
+        "action": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "delete",
+                "warn",
+                "timeout",
+                "quarantine",
+                "kick",
+                "ban"
+              ],
+              "default": "quarantine",
+              "description": "Kind of moderation action."
+            },
+            "minutes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 40320,
+              "default": 10,
+              "description": "Timeout duration in minutes."
+            }
+          },
+          "additionalProperties": false,
+          "default": {},
+          "description": "Action requested when this rule triggers in enforce mode."
+        }
+      },
+      "additionalProperties": false,
+      "default": {},
+      "description": "Match identical normalized messages across channels."
+    },
+    "mentions": {
+      "type": "object",
+      "properties": {
+        "perMessage": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 8,
+          "description": "Mentions in a single message."
+        },
+        "perWindow": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "default": 15,
+          "description": "Mentions in the entire sliding window."
+        },
+        "seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600,
+          "default": 30,
+          "description": "Window or slowmode duration in seconds."
+        },
+        "action": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "delete",
+                "warn",
+                "timeout",
+                "quarantine",
+                "kick",
+                "ban"
+              ],
+              "default": "warn",
+              "description": "Kind of moderation action."
+            },
+            "minutes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 40320,
+              "default": 10,
+              "description": "Timeout duration in minutes."
+            }
+          },
+          "additionalProperties": false,
+          "default": {},
+          "description": "Action requested when this rule triggers in enforce mode."
+        }
+      },
+      "additionalProperties": false,
+      "default": {},
+      "description": "Thresholds for Discord user, role and mass mentions."
+    },
+    "newAccounts": {
+      "type": "object",
+      "properties": {
+        "minAccountAgeDays": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 365,
+          "default": 7,
+          "description": "Minimum age of the Discord account in days."
+        },
+        "minMemberMinutes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1440,
+          "default": 10,
+          "description": "Time after joining during which newcomer restrictions apply."
+        },
+        "restrict": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "links",
+              "attachments",
+              "mentions",
+              "invites"
+            ]
+          },
+          "maxItems": 4,
+          "default": [
+            "links",
+            "attachments"
+          ],
+          "description": "Types of content restricted during the configured newcomer window."
+        },
+        "action": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "delete",
+                "warn",
+                "timeout",
+                "quarantine",
+                "kick",
+                "ban"
+              ],
+              "default": "warn",
+              "description": "Kind of moderation action."
+            },
+            "minutes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 40320,
+              "default": 10,
+              "description": "Timeout duration in minutes."
+            }
+          },
+          "additionalProperties": false,
+          "default": {},
+          "description": "Action requested when this rule triggers in enforce mode."
+        }
+      },
+      "additionalProperties": false,
+      "default": {},
+      "description": "Restrictions for recently created accounts or new members."
+    },
+    "images": {
+      "type": "object",
+      "properties": {
+        "hashes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{16}$"
+          },
+          "maxItems": 500,
+          "default": [],
+          "description": "Sixteen-digit hexadecimal perceptual hashes."
+        },
+        "threshold": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 12,
+          "default": 6,
+          "description": "Maximum Hamming distance to a blocked image."
+        },
+        "action": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "delete",
+                "warn",
+                "timeout",
+                "quarantine",
+                "kick",
+                "ban"
+              ],
+              "default": "delete",
+              "description": "Kind of moderation action."
+            },
+            "minutes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 40320,
+              "default": 10,
+              "description": "Timeout duration in minutes."
+            }
+          },
+          "additionalProperties": false,
+          "default": {},
+          "description": "Action requested when this rule triggers in enforce mode."
+        }
+      },
+      "additionalProperties": false,
+      "default": {},
+      "description": "Perceptual image hash blocklist."
+    },
+    "automod": {
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 3,
+          "description": "Number of observations that triggers this rule."
+        },
+        "seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600,
+          "default": 600,
+          "description": "Window or slowmode duration in seconds."
+        },
+        "action": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "delete",
+                "warn",
+                "timeout",
+                "quarantine",
+                "kick",
+                "ban"
+              ],
+              "default": "timeout",
+              "description": "Kind of moderation action."
+            },
+            "minutes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 40320,
+              "default": 10,
+              "description": "Timeout duration in minutes."
+            }
+          },
+          "additionalProperties": false,
+          "default": {},
+          "description": "Action requested when this rule triggers in enforce mode."
+        }
+      },
+      "additionalProperties": false,
+      "default": {},
+      "description": "Escalation after Discord blocks messages."
+    },
+    "repeat": {
+      "type": "object",
+      "properties": {
+        "withinMinutes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1440,
+          "default": 60,
+          "description": "Count violations within this many minutes."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 50,
+          "default": 3,
+          "description": "Number of observations that triggers this rule."
+        },
+        "action": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "delete",
+                "warn",
+                "timeout",
+                "quarantine",
+                "kick",
+                "ban"
+              ],
+              "default": "timeout",
+              "description": "Kind of moderation action."
+            },
+            "minutes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 40320,
+              "default": 10,
+              "description": "Timeout duration in minutes."
+            }
+          },
+          "additionalProperties": false,
+          "default": {},
+          "description": "Action requested when this rule triggers in enforce mode."
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable this rule."
+        }
+      },
+      "additionalProperties": false,
+      "default": {},
+      "description": "Escalation after repeated violations by one member."
+    },
+    "raid": {
+      "type": "object",
+      "properties": {
+        "joins": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 1000,
+          "default": 15,
+          "description": "Join count that triggers a raid."
+        },
+        "seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600,
+          "default": 30,
+          "description": "Window or slowmode duration in seconds."
+        },
+        "youngPercent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "default": 80,
+          "description": "Percentage of recent accounts that triggers a raid; zero disables this test."
+        },
+        "minimumSample": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 100,
+          "default": 10,
+          "description": "Number of arrivals required before evaluating the young-account percentage."
+        },
+        "failedVerifications": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 1000,
+          "default": 15,
+          "description": "Distinct failed members in the join window that trigger a raid."
+        },
+        "calmMinutes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1440,
+          "default": 15,
+          "description": "Minutes until measures expire following the most recent surge."
+        },
+        "measures": {
+          "type": "object",
+          "properties": {
+            "verificationLevel": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "highest"
+              ],
+              "default": "high",
+              "description": "Temporary minimum Discord verification level."
+            },
+            "pauseInvites": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,2}[mh]$",
+              "default": "2h",
+              "description": "Maximum invitation pause, in minutes (m) or hours (h)."
+            },
+            "slowmode": {
+              "type": "object",
+              "properties": {
+                "channels": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "x-cicord-ref": "channel"
+                  },
+                  "maxItems": 64,
+                  "default": [],
+                  "description": "Managed channel keys."
+                },
+                "seconds": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 21600,
+                  "default": 30,
+                  "description": "Window or slowmode duration in seconds."
+                }
+              },
+              "additionalProperties": false,
+              "default": {},
+              "description": "Temporary slowmode in selected channels."
+            },
+            "lockChannels": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "x-cicord-ref": "channel"
+              },
+              "maxItems": 64,
+              "default": [],
+              "description": "Channels where everyone temporarily loses SendMessages."
+            }
+          },
+          "additionalProperties": false,
+          "default": {},
+          "description": "Temporary server and channel restrictions during an enforced raid."
+        }
+      },
+      "additionalProperties": false,
+      "default": {},
+      "description": "Join surge detection, timeouts and optional server measures."
+    },
+    "exempt": {
+      "type": "object",
+      "properties": {
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "x-cicord-ref": "role"
+          },
+          "maxItems": 64,
+          "default": [],
+          "description": "Managed role keys."
+        },
+        "channels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "x-cicord-ref": "channel"
+          },
+          "maxItems": 64,
+          "default": [],
+          "description": "Managed channel keys."
+        },
+        "bots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "default": [],
+          "description": "Discord IDs for specifically trusted bots."
+        }
+      },
+      "additionalProperties": false,
+      "default": {},
+      "description": "Skip actions for matching subjects or locations."
+    }
+  },
+  "additionalProperties": false
+}

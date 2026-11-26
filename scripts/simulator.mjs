@@ -8,7 +8,7 @@ import { basename, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 /** A real Cicord process on simulated Discord, using the plugin under test from this checkout. */
-export async function startSimulator(t, pluginDir, grants, config) {
+export async function startSimulator(t, pluginDir, grants, config, { health = ["Healthy"] } = {}) {
   const root = await mkdtemp(join(tmpdir(),"cicord-plugin-test-"));
   const repo=join(root,"acceptance"), name=basename(pluginDir);
   t.after(()=>rm(root,{recursive:true,force:true}));
@@ -43,7 +43,7 @@ export async function startSimulator(t, pluginDir, grants, config) {
     if(child.exitCode!==null || child.signalCode!==null)throw new Error(`simulator exited: ${stderr}`);
     try{
       const status=await api("/api/v1/status",undefined,"local-simulator-only");
-      ready=status.bots?.some(bot=>bot.plugins?.some(p=>p.instance===name && p.health==="Healthy"));
+      ready=status.bots?.some(bot=>bot.plugins?.some(p=>p.instance===name && health.includes(p.health)));
     }catch(error){if(!(error instanceof TypeError))throw error;}
     if(ready)break;
     await delay(100);

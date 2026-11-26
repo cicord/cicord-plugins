@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "anti-nuke configuration",
+  "type": "object",
+  "properties": {
+    "locale": {
+      "type": "string",
+      "enum": [
+        "en",
+        "fr"
+      ],
+      "description": "Optional instance language override. Otherwise use the interaction or server locale."
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "monitor"
+      ],
+      "default": "monitor",
+      "description": "This release supports monitor mode."
+    },
+    "staffChannel": {
+      "type": "string",
+      "x-cicord-ref": "channel",
+      "description": "Managed channel key for staff alerts."
+    },
+    "notifyOwner": {
+      "type": "boolean",
+      "default": false,
+      "description": "Send the owner a summary when the DM feature is granted."
+    },
+    "trustedFromCommand": {
+      "type": "boolean",
+      "default": false,
+      "description": "Allow the owner to manage temporary thirty-day trust entries."
+    },
+    "trusted": {
+      "type": "object",
+      "properties": {
+        "users": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "default": [],
+          "description": "Discord IDs of trusted users."
+        },
+        "bots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "default": [],
+          "description": "Discord IDs for specifically trusted bots."
+        }
+      },
+      "additionalProperties": false,
+      "default": {},
+      "description": "Permanent trusted accounts from YAML."
+    },
+    "thresholds": {
+      "type": "object",
+      "properties": {
+        "channelDelete": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 3,
+          "description": "Count of channelDelete observations that triggers an alert."
+        },
+        "roleDelete": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 2,
+          "description": "Count of roleDelete observations that triggers an alert."
+        },
+        "ban": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 5,
+          "description": "Count of ban observations that triggers an alert."
+        },
+        "kick": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 5,
+          "description": "Count of kick observations that triggers an alert."
+        },
+        "webhookCreate": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 3,
+          "description": "Count of webhookCreate observations that triggers an alert."
+        },
+        "dangerousPermissionGrant": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 1,
+          "description": "Count of dangerousPermissionGrant observations that triggers an alert."
+        },
+        "botAdd": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 1,
+          "description": "Count of botAdd observations that triggers an alert."
+        },
+        "vanityChange": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 1,
+          "description": "Count of vanityChange observations that triggers an alert."
+        },
+        "serverRename": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 1,
+          "description": "Count of serverRename observations that triggers an alert."
+        },
+        "serverIcon": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 1,
+          "description": "Count of serverIcon observations that triggers an alert."
+        }
+      },
+      "additionalProperties": false,
+      "default": {},
+      "description": "Alert thresholds for one actor in the sliding window."
+    },
+    "windowSeconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 300,
+      "default": 60,
+      "description": "Actor counting window in seconds."
+    },
+    "raidThresholdPercent": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100,
+      "default": 50,
+      "description": "Percentage of the usual threshold used during a guard raid."
+    },
+    "protectedRoles": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "x-cicord-ref": "role"
+      },
+      "maxItems": 64,
+      "default": [],
+      "description": "Managed role keys to compare with the bot hierarchy at startup."
+    },
+    "trustAdmins": {
+      "type": "boolean",
+      "default": false,
+      "description": "Trust the declared Cicord admin access principals."
+    },
+    "notifyWebhook": {
+      "type": "boolean",
+      "default": false,
+      "description": "Send a summary to the optional host-bound staff webhook."
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "verification configuration",
+  "type": "object",
+  "properties": {
+    "locale": {
+      "type": "string",
+      "enum": [
+        "en",
+        "fr"
+      ],
+      "description": "Optional instance language override. Otherwise use the interaction or server locale."
+    },
+    "panelChannel": {
+      "type": "string",
+      "x-cicord-ref": "channel",
+      "default": "verify",
+      "description": "Managed channel key where /verify-panel posts the button."
+    },
+    "verifiedRole": {
+      "type": "string",
+      "x-cicord-ref": "role",
+      "default": "verified",
+      "description": "Managed role granting access after verification."
+    },
+    "method": {
+      "type": "string",
+      "enum": [
+        "button",
+        "visual",
+        "turnstile",
+        "hcaptcha"
+      ],
+      "default": "visual",
+      "description": "Preferred challenge method."
+    },
+    "minAccountAgeDays": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 365,
+      "default": 3,
+      "description": "Minimum age of the Discord account in days."
+    },
+    "youngAccount": {
+      "type": "string",
+      "enum": [
+        "hold",
+        "kick",
+        "delay"
+      ],
+      "default": "hold",
+      "description": "Policy for a successful challenge from a young account."
+    },
+    "delayHours": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 720,
+      "default": 24,
+      "description": "Hours before a delayed member may try again."
+    },
+    "kickAfterHours": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 672,
+      "default": 0,
+      "description": "Hours before pending accounts expire; zero disables expiration kicks."
+    },
+    "dmOnJoin": {
+      "type": "boolean",
+      "default": false,
+      "description": "Send the member a personal link when direct messages are granted."
+    },
+    "turnstileSiteKey": {
+      "type": "string",
+      "maxLength": 256,
+      "description": "Public Turnstile site key loaded by the portal widget."
+    },
+    "hcaptchaSiteKey": {
+      "type": "string",
+      "maxLength": 256,
+      "description": "Public hCaptcha site key loaded by the portal widget."
+    }
+  },
+  "additionalProperties": false
+}

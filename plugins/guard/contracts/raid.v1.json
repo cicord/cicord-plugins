@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "properties": {
+    "state": {
+      "type": "string",
+      "enum": [
+        "started",
+        "ended"
+      ]
+    },
+    "joinsPerMinute": {
+      "type": "number"
+    },
+    "measures": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "state",
+    "joinsPerMinute",
+    "measures"
+  ]
+}

@@ -1,0 +1,67 @@
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: guard
+  version: 0.2.0
+  displayName: Guard
+  description: Detect unsafe links, repeated messages and join surges. Message content is inspected transiently. Monitoring is the default.
+  license: Apache-2.0
+spec:
+  engine: ">=0.2.0-0"
+  entry: ./src/index.ts
+  locales: ./locales
+  capabilities: [discord.channels.read, discord.members.read, discord.messages.send, discord.messages.read, storage.kv, scheduler, portal.routes, events.publish, events.subscribe]
+  intents: [ServerMessages, MessageContent, ServerMembers, AutoModerationExecution]
+  optional:
+    - feature: duplicates
+      capabilities: [discord.messages.read]
+    - feature: removeMessages
+      capabilities: [discord.messages.manage]
+    - feature: directSanctions
+      capabilities: [discord.members.moderate]
+    - feature: directQuarantine
+      capabilities: [discord.roles.assign]
+    - feature: raidOverlay
+      capabilities: [server.overlays]
+    - feature: pauseInvites
+      capabilities: [server.incident]
+    - feature: invites
+      capabilities: [discord.invites.read]
+    - feature: images
+      capabilities: [media.analyze]
+    - feature: feeds
+      capabilities: [http.fetch]
+    - feature: sanctions
+      capabilities: [plugins.call:moderation.sanction]
+    - feature: standing
+      capabilities: [plugins.query:moderation.standing]
+    - feature: verification
+      capabilities: [plugins.query:verification.status]
+  config:
+    schema: ./config.schema.json
+  routes:
+    types: ./src/routes.ts
+  delivery: at-least-once
+  interop:
+    types: ./src/contracts.ts
+    publishes:
+      - { topic: violation, scope: server, version: 1 }
+      - { topic: raid, scope: server, version: 1 }
+    subscribes:
+      - { topic: verification.failed, version: 1 }
+    consumes:
+      queries: [verification.status, moderation.standing]
+      actions: [moderation.sanction]
+  network:
+    allow: []
+    configurable: true
+  privacy:
+    records:
+      - name: member history
+        policy: erase
+        description: Message references, counters, violations and verification failures.
+        retention: 30 days
+      - name: join window
+        policy: erase
+        description: Join timestamps and staff review selection.
+        retention: 24 hours

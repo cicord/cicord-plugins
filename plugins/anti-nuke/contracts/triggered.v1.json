@@ -1,0 +1,45 @@
+{
+  "type": "object",
+  "properties": {
+    "actorId": {
+      "type": "string"
+    },
+    "actorType": {
+      "type": "string",
+      "enum": [
+        "human",
+        "bot",
+        "unknown",
+        "cicord"
+      ]
+    },
+    "trigger": {
+      "type": "string"
+    },
+    "count": {
+      "type": "integer"
+    },
+    "responses": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "certainty": {
+      "type": "string",
+      "enum": [
+        "confirmed",
+        "unknown",
+        "probable"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "actorType",
+    "trigger",
+    "count",
+    "responses",
+    "certainty"
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "input": {
+    "type": "object",
+    "properties": {
+      "userId": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "userId"
+    ]
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "verified": {
+        "type": "boolean"
+      },
+      "method": {
+        "type": "string"
+      },
+      "at": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "verified"
+    ]
+  }
+}
