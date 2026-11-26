@@ -8,7 +8,10 @@ export type PortalTag = {
 };
 export interface Routes {
   "GET /stats": { query: { q?: string }; response: { items: { name: string; uses: number }[] } };
-  "GET /tags": { query: { q?: string }; response: { entries: PortalTag[] } };
+  "GET /tags": {
+    query: { q?: string };
+    response: { entries: (PortalTag & { editable?: boolean })[]; canEdit?: boolean };
+  };
   "PUT /tags/:name": { body: PortalTag; response: { saved: boolean } };
   "DELETE /tags/:name": { response: { deleted: boolean } };
 }

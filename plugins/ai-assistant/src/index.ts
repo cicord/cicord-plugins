@@ -5,19 +5,13 @@ import {
   subcommand,
   type Channel,
   type Context,
-  type Interaction,
   type Json,
   type Member,
   type MessagePayload,
 } from "@cicord/sdk";
-import { searchKnowledge, sections, tagSources, visible, type Passage } from "./knowledge.ts";
+import { searchKnowledge, sections, visible, type Passage } from "./knowledge.ts";
 import { askProvider } from "./provider.ts";
 import type { Routes } from "./routes.ts";
-
-// Interaction wrappers are instance-local and expire. Durable tasks contain only
-// the request ID; a restart leaves the acknowledged contact link available.
-type Pending = { interaction: Interaction; question: string; tags: Passage[]; expires: number };
-const pending = new Map<string, Pending>();
 
 const quiet = { users: false, roles: false, everyone: false };
 const ttl = (ttlSeconds: number) => ({ ttlSeconds });
@@ -42,7 +36,6 @@ async function answer(
   id: string,
   ephemeral: boolean,
   history: string[] = [],
-  tags?: Passage[],
 ): Promise<MessagePayload> {
   const say = (key: string) => ({ content: ctx.i18n.t(key), allowedMentions: quiet });
   if (!ctx.config.enabled) return say("disabled");
@@ -69,7 +62,7 @@ async function answer(
     return say("limited");
   const live = await ctx.server.member(user.id);
   if (!live || !allowed(ctx, live) || !live.canView(ch)) return say("restricted");
-  const docs = await searchKnowledge(ctx, question, live, ephemeral ? undefined : ch, tags);
+  const docs = await searchKnowledge(ctx, question, live, ephemeral ? undefined : ch);
   const result =
     docs.length && ctx.secrets.has("API_KEY")
       ? await askProvider(ctx, question, docs, history)
@@ -126,20 +119,27 @@ async function answer(
       { type: "button", id: "vote:down:" + id, emoji: "👎" },
     );
   }
-  return { content: content.slice(0, 2000), components: [row], allowedMentions: quiet };
+  const retention = !source && ctx.config.keepUnanswered ? " " + ctx.i18n.t("retention") : "";
+  return {
+    content: (content + retention).slice(0, 2000),
+    components: [row],
+    allowedMentions: quiet,
+  };
 }
 
 async function memberRecords(ctx: Context, id: string, erase: boolean) {
   const out: Record<string, Json> = {};
-  let n = 0;
-  for (const [key, job] of pending) {
-    if (job.interaction.user.id === id) {
-      if (erase) {
-        pending.delete(key);
-        n++;
-      } else out["pending:" + key] = job.question;
+  // The privacy hook has no authenticated channel viewer. Return metadata
+  // for private conversations; current eligible staff use the scoped portal.
+  function shareable(channel: string | undefined) {
+    if (!channel) return false;
+    try {
+      return ctx.server.audience({ id: channel }).public === true;
+    } catch {
+      return false;
     }
   }
+  let n = 0;
   let cursor: string | undefined;
   for (const prefix of [userKey(id, ""), "forum:" + id + ":"]) {
     do {
@@ -155,7 +155,18 @@ async function memberRecords(ctx: Context, id: string, erase: boolean) {
             await ctx.schedule.cancel(item.value);
           await ctx.kv.delete(item.key);
           n++;
-        } else out[item.key] = item.value;
+        } else {
+          const privateRecord =
+            typeof item.value === "object" &&
+            item.value !== null &&
+            !Array.isArray(item.value) &&
+            ("question" in item.value || "answer" in item.value);
+          if (privateRecord) {
+            const record = item.value as { channel?: string; source?: string };
+            out[item.key] =
+              !record.source && shareable(record.channel) ? item.value : { restricted: true };
+          } else out[item.key] = item.value;
+        }
       }
       cursor = page.cursor;
     } while (cursor);
@@ -216,22 +227,6 @@ export default definePlugin({
         await ctx.kv.delete(d.key);
       }
     },
-    async privateAnswer(ctx, p) {
-      if (typeof p !== "string") return;
-      const job = pending.get(p);
-      pending.delete(p);
-      if (!job || job.expires <= Date.now()) return;
-      const it = job.interaction;
-      try {
-        if (!it.channel) return;
-        const user = await ctx.server.member(it.user.id);
-        if (!user) return;
-        const content = await answer(ctx, user, it.channel, job.question, p, true, [], job.tags);
-        await it.followUp({ ...content, ephemeral: true });
-      } finally {
-        await ctx.kv.delete(userKey(it.user.id, "task:" + p));
-      }
-    },
     async help(ctx, p) {
       if (!ctx.config.enabled) return;
       const ref = p as { channel: string; message: string };
@@ -247,7 +242,7 @@ export default definePlugin({
         )
       )
         return;
-      const key = "reply:" + msg.id;
+      const key = userKey(msg.author.id, "reply:" + msg.id);
       if (
         !(
           await ctx.kv
@@ -306,35 +301,16 @@ export default definePlugin({
               });
               return;
             }
-            for (const [id, job] of pending) if (job.expires <= Date.now()) pending.delete(id);
-            if (pending.size >= 100) {
-              await it.reply({ content: ctx.i18n.t("limited"), ephemeral: true });
-              return;
-            }
             await it.defer({ ephemeral: true });
-            const tags = await tagSources(ctx, it.options.question, it.member);
-            await it.reply({
-              content: ctx.i18n.t("queued"),
-              ephemeral: true,
-              components: [{ type: "row", components: [link(ctx)] }],
-            });
-            pending.set(it.id, {
-              interaction: it,
-              question: it.options.question,
-              tags,
-              expires: Date.now() + 14 * 60000,
-            });
-            try {
-              const task = await ctx.schedule.after(1, "privateAnswer", it.id);
-              await ctx.kv.set(userKey(it.user.id, "task:" + it.id), task.id, ttl(900));
-            } catch {
-              pending.delete(it.id);
-              await it.followUp({
-                content: ctx.i18n.t("unavailable"),
-                ephemeral: true,
-                components: [{ type: "row", components: [link(ctx)] }],
-              });
-            }
+            const result = await answer(
+              ctx,
+              it.member,
+              it.channel,
+              it.options.question,
+              it.id,
+              true,
+            );
+            await it.reply({ ...result, ephemeral: true });
           },
         }),
         optout: subcommand({

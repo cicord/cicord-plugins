@@ -16,5 +16,5 @@
   "commands.ask.optout.name": "participation",
   "commands.ask.optout.description": "Modifier votre préférence de participation",
   "commands.ask.optout.options.enabled.description": "Désactiver le traitement par l’assistant pour votre compte",
-  "queued": "Recherche en cours. Vous pouvez aussi contacter le support."
+  "retention": "Le staff qui a accès au salon peut consulter les questions sans réponse pendant sept jours."
 }

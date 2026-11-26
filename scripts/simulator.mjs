@@ -62,7 +62,7 @@ export async function startSimulator(t, pluginDir, grants, config, options = {})
   const guild=state.servers[0], owner=state.users.find(u=>u.username==="owner");
   const channel=guild.channels.find(c=>c.name==="general");
   assert.ok(owner && channel);
-  return {api,repo,root,dataDir,port,guild,users:state.users,owner,channel,
+  return {api,repo,root,dataDir,port,logs:()=>stderr,guild,users:state.users,owner,channel,
     join:user=>api(`/api/v1/sim/servers/${guild.id}/members`,{userId:user.id}),
     command:(as,command,options={})=>api("/api/v1/sim/commands",{serverId:guild.id,channelId:channel.id,userId:as.id,bot:"bot",name:command,options}),
     login:async user=>(await api("/auth/dev-login",{mode:"token",userId:user.id})).token,

@@ -16,5 +16,5 @@
   "commands.ask.optout.name": "optout",
   "commands.ask.optout.description": "Change your participation preference",
   "commands.ask.optout.options.enabled.description": "Disable assistant processing for your account",
-  "queued": "Looking up your question. You can also contact the help desk."
+  "retention": "Staff with channel access can review unanswered questions for seven days."
 }

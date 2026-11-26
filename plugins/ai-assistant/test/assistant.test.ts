@@ -1,4 +1,4 @@
-import { it, expect } from "vitest";
+import { it, expect } from "vite-plus/test";
 import type { Context, Member } from "@cicord/sdk";
 import { askProvider } from "../src/provider.ts";
 import { sections, selectEvidence, visible } from "../src/knowledge.ts";

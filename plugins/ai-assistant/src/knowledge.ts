@@ -84,7 +84,6 @@ export async function searchKnowledge(
   question: string,
   user: Member,
   dest?: Channel,
-  tags?: Passage[],
 ): Promise<Passage[]> {
   const hits = (
       await Promise.all([
@@ -129,14 +128,12 @@ export async function searchKnowledge(
     if (out.length >= 5) break;
   }
   out.push(
-    ...(tags ?? (await tagSources(ctx, question, user, dest))).filter((p) =>
-      visible(ctx, p, user, dest),
-    ),
+    ...(await tagSources(ctx, question, user, dest)).filter((p) => visible(ctx, p, user, dest)),
   );
   return out.slice(0, 6);
 }
 
-export async function tagSources(
+async function tagSources(
   ctx: Context,
   question: string,
   user: Member,

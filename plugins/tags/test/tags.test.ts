@@ -1,4 +1,4 @@
-import { it, expect } from "vitest";
+import { it, expect } from "vite-plus/test";
 import { parseTag, search, visible } from "../src/catalog.ts";
 import type { Channel, Context, Member } from "@cicord/sdk";
 it("parses list frontmatter without widening malformed restricted tags", () => {

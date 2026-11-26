@@ -24,6 +24,7 @@ spec:
     - feature: autoReplies
       capabilities: [discord.messages.read]
       intents: [ServerMessages, MessageContent]
+  delivery: at-least-once
   interop:
     types: ./src/contracts.ts
     provides: { queries: [search] }

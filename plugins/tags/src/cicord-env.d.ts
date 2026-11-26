@@ -8,3 +8,21 @@ declare module "@cicord/sdk" {
   }
 }
 export {};
+
+declare module "@cicord/sdk" {
+  interface QueryContracts {
+    "tags.search": {input: {
+      limit: number;
+      query: string;
+    }; output: {
+      entries: {
+        aliases: string[];
+        channel?: string;
+        keywords: string[];
+        name: string;
+        text: string;
+        url?: string;
+      }[];
+    }};
+  }
+}

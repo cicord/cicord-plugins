@@ -18,4 +18,6 @@ spec:
     - discord.channels.read # Resolve publication channels.
     - discord.messages.send # Publish new entries.
   config: { schema: ./config.schema.json }
+  delivery: at-least-once
+  interop: {}
   network: { configurable: true, allow: [] }

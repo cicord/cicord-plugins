@@ -181,7 +181,17 @@ export default definePlugin({
     "GET /tags": {
       access: "member",
       handler(ctx, req) {
-        return { entries: matches(ctx, req.query.q ?? "", 50, req.viewer?.member) };
+        const member = req.viewer?.member,
+          entries = matches(ctx, req.query.q ?? "", 50, member);
+        if (member?.access !== "admin" && member?.access !== "moderator") return { entries };
+        const canEdit = ctx.config.enabled && ctx.config.editableOnPortal;
+        return {
+          canEdit,
+          entries: entries.map((tag) => ({
+            ...tag,
+            editable: canEdit && !git.has(lower(tag.name)),
+          })),
+        };
       },
     },
     "PUT /tags/:name": {
