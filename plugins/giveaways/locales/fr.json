@@ -38,5 +38,8 @@
   "commands.giveaway.reroll.description": "Tirer des gagnants de remplacement",
   "commands.giveaway.list.description": "Lister les concours",
   "image": "Lien de l’image (facultatif)",
-  "expired": "La période de vérification du concours est terminée."
+  "expired": "La période de vérification du concours est terminée.",
+  "state.open": "ouvert",
+  "state.ended": "terminé",
+  "state.cancelled": "annulé"
 }

@@ -25,11 +25,13 @@ type Suggestion = {
   anonymous: boolean;
   revision: number;
   nextRefresh: number;
+  withdrawing?: boolean;
 };
 const key = (id: string) => "suggestion:" + id;
 const choices: Status[] = ["open", "considered", "approved", "denied", "implemented"];
 const mayRead = (ctx: Context, row: Suggestion, m?: Member) =>
-  m ? m.canView({ id: row.source }) : ctx.server.audience({ id: row.source }).public;
+  !row.withdrawing &&
+  (m ? m.canView({ id: row.source }) : ctx.server.audience({ id: row.source }).public);
 const view = (s: Suggestion, staff = false): Proposal => ({
   id: s.id,
   status: s.status,
@@ -52,7 +54,7 @@ function card(ctx: Context, s: Suggestion, body: string): MessagePayload {
         footer: { text: "suggestion/" + s.id },
         fields: [
           { name: ctx.i18n.t("score"), value: String(s.score), inline: true },
-          { name: s.status, value: s.reason || "—", inline: true },
+          { name: ctx.i18n.t("state." + s.status), value: s.reason || "—", inline: true },
         ],
         author: { name: s.anonymous ? ctx.i18n.t("anonymous") : s.authorId },
       },
@@ -131,6 +133,7 @@ async function create(ctx: Context, id: string, uid: string, channel: TextChanne
   return s;
 }
 async function refresh(ctx: Context, s: Suggestion) {
+  if (s.withdrawing) return;
   const source = ctx.server.channel({ id: s.source }),
     post = await source.message(s.messageId);
   if (!post) return;
@@ -142,7 +145,7 @@ async function refresh(ctx: Context, s: Suggestion) {
       rel = ctx.server.compareAudience(source, ch);
     if (copy) {
       if (rel === "same" || rel === "narrower") await copy.edit(card(ctx, s, body));
-      else await copy.delete("Suggestion audience changed");
+      else await copy.edit({ content: ctx.i18n.t("erased"), embeds: [], components: [] });
     }
   }
 }
@@ -196,18 +199,20 @@ async function decide(ctx: Context, id: string, status: Status, reason: string, 
   }
 }
 async function notify(ctx: Context, s: Suggestion) {
+  if (s.withdrawing) return;
   await refresh(ctx, s);
-  const note = ctx.i18n.t("decision", { status: s.status, reason: s.reason }),
+  const note = ctx.i18n.t("decision", {
+      status: ctx.i18n.t("state." + s.status),
+      reason: s.reason,
+    }),
     nonce = s.id.slice(0, 17) + s.revision;
   if (s.thread)
-    await ctx.server
-      .channel({ id: s.thread })
-      .send({
-        content: note,
-        nonce,
-        enforceNonce: true,
-        allowedMentions: { users: [], roles: [], everyone: false },
-      });
+    await ctx.server.channel({ id: s.thread }).send({
+      content: note,
+      nonce,
+      enforceNonce: true,
+      allowedMentions: { users: [], roles: [], everyone: false },
+    });
   if (
     ctx.config.archive &&
     !s.archiveId &&
@@ -228,7 +233,7 @@ async function notify(ctx: Context, s: Suggestion) {
         for (;;) {
           const row = await ctx.kv.getEntry<Suggestion>(key(s.id));
           if (!row) {
-            await copy.delete();
+            await copy.edit({ content: ctx.i18n.t("erased"), embeds: [], components: [] });
             break;
           }
           if (
@@ -275,7 +280,10 @@ async function list(ctx: Context, offset: number, status?: string, member?: Memb
     const s = await ctx.kv.get<Suggestion>(key(e.member));
     if (s && mayRead(ctx, s, member)) items.push(view(s, staff));
   }
-  return { items };
+  return {
+    items,
+    ...(top.length === 100 ? { nextOffset: Math.max(0, Math.floor(offset) || 0) + 100 } : {}),
+  };
 }
 async function audit(ctx: Context, cursor?: string) {
   const page = await ctx.kv.list<Suggestion>({ prefix: "suggestion:", limit: 50, cursor });
@@ -423,16 +431,31 @@ async function personal(ctx: Context, uid: string, erase: boolean) {
       if (s.authorId === uid) {
         out.push({ proposal: view(s, true) });
         if (erase) {
+          for (;;) {
+            const old = await ctx.kv.getEntry<Suggestion>(key(s.id));
+            if (!old || old.value.withdrawing) break;
+            if (
+              (
+                await ctx.kv
+                  .atomic()
+                  .check(key(s.id), old.version)
+                  .set(key(s.id), { ...old.value, withdrawing: true })
+                  .commit()
+              ).ok
+            )
+              break;
+          }
           for (const [cid, mid] of [
             [s.source, s.messageId],
             [s.archiveChannel, s.archiveId],
           ])
             if (cid && mid)
-              await (await ctx.server.channel({ id: cid }).message(mid))?.delete("Privacy erasure");
+              await (
+                await ctx.server.channel({ id: cid }).message(mid)
+              )?.edit({ content: ctx.i18n.t("erased"), embeds: [], components: [] });
           if (ctx.features.enabled("duplicateSearch")) await ctx.index("suggestions").remove(s.id);
           await ctx.kv
             .atomic()
-            .delete(key(s.id))
             .rankRemove("votes", s.id)
             .rankRemove("votes:" + s.status, s.id)
             .commit();
@@ -443,9 +466,25 @@ async function personal(ctx: Context, uid: string, erase: boolean) {
               limit: 1000,
               cursor: vc,
             });
-            for (const v of votes.items) await ctx.kv.delete(v.key);
+            for (const v of votes.items) {
+              const voter = v.key.slice(("vote:" + s.id + ":").length);
+              if (voter === uid) await ctx.kv.delete(v.key);
+              else {
+                const current = await ctx.kv.getEntry(v.key);
+                if (current)
+                  await ctx.kv
+                    .atomic()
+                    .check(v.key, current.version)
+                    .delete(v.key)
+                    .set("past-vote:" + voter + ":" + s.id, current.value, {
+                      ttlSeconds: 365 * 86400,
+                    })
+                    .commit();
+              }
+            }
             vc = votes.cursor;
           } while (vc);
+          await ctx.kv.delete(key(s.id));
         }
       } else {
         const vk = `vote:${s.id}:${uid}`;
@@ -477,6 +516,18 @@ async function personal(ctx: Context, uid: string, erase: boolean) {
           break;
         }
       }
+    }
+    cursor = page.cursor;
+  } while (cursor);
+  do {
+    const page = await ctx.kv.list<number>({
+      prefix: "past-vote:" + uid + ":",
+      cursor,
+      limit: 1000,
+    });
+    for (const row of page.items) {
+      out.push({ id: row.key.slice(("past-vote:" + uid + ":").length), vote: row.value });
+      if (erase) await ctx.kv.delete(row.key);
     }
     cursor = page.cursor;
   } while (cursor);

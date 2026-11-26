@@ -45,8 +45,8 @@ declare module "@cicord/sdk" {
     }[];
     rewardMode: "configured" | "stack" | "replace";
     season?: {
-      id?: string;
-      end?: string;
+      id: string;
+      end: string;
     };
     rankCard: {
       enabled: boolean;
@@ -79,7 +79,14 @@ declare module "@cicord/sdk" {
       limit?: number;
       offset?: number;
     }; output: {
-      entries: Record<string, unknown>[];
+      entries: {
+        avatarUrl: string | null;
+        displayName: string;
+        level: number;
+        rank: number;
+        userId: string;
+        xp: number;
+      }[];
     }};
     "levels.memberLevel": {input: {
       userId: string;

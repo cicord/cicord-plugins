@@ -30,6 +30,7 @@ spec:
   delivery: at-least-once
   locales: ./locales
   optional:
+    - {feature: privacyCopies, capabilities: [discord.messages.read]}
     - {feature: pollBonus, capabilities: [events.subscribe]}
     - {feature: pollPages, capabilities: [plugins.query:polls.voters]}
     - {feature: levelEvents, capabilities: [events.publish]}

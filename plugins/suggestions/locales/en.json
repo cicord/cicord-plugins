@@ -12,5 +12,11 @@
   "restricted": "You cannot view this suggestion.",
   "thread": "Suggestion {id}",
   "empty": "No proposals.",
-  "commands.suggest.description": "Submit a community suggestion"
+  "commands.suggest.description": "Submit a community suggestion",
+  "erased": "Content removed.",
+  "state.open": "open",
+  "state.considered": "considered",
+  "state.approved": "approved",
+  "state.denied": "denied",
+  "state.implemented": "implemented"
 }

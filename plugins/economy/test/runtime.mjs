@@ -13,6 +13,7 @@ test(
       dir,
       ["storage.kv", "discord.messages.send", "portal.routes", "events.publish", "scheduler"],
       { enabled: true, daily: 25 },
+      { health: ["Healthy", "Degraded"] },
     );
     const user = sim.users.find((u) => u.username === "alice");
     await sim.join(user);

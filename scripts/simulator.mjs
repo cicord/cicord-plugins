@@ -23,10 +23,13 @@ export async function startSimulator(t, pluginDir, grants, config, options = {})
   const yaml=await readFile(botFile,"utf8");
   assert.ok(yaml.includes("plugins: []"));
   await writeFile(botFile,yaml.replace("plugins: []",`plugins:\n    - name: ${name}\n      source: ../../plugins/${name}\n      grants: ${JSON.stringify(grants)}${fields}\n      config: ${JSON.stringify(config)}`));
+  const dataDir=join(root,"state");
+  await options.prepare?.({root,repo,dataDir,pluginDir:join(repo,"plugins",name)});
   const probe=createServer();probe.listen(0,"127.0.0.1");await once(probe,"listening");
-  const address=`127.0.0.1:${probe.address().port}`;
+  const port=probe.address().port;
+  const address=`127.0.0.1:${port}`;
   await new Promise(resolve=>probe.close(resolve));
-  const child=spawn("cicord",["dev","--sim","--listen",address,"--data-dir",join(root,"state"),repo],{
+  const child=spawn("cicord",["dev","--sim","--listen",address,"--data-dir",dataDir,repo],{
     env:{PATH:process.env.PATH,HOME:root,TMPDIR:root,CICORD_RUNTIME_TOKEN:"local-simulator-only"},
     stdio:["ignore","ignore","pipe"],
   });
@@ -58,7 +61,7 @@ export async function startSimulator(t, pluginDir, grants, config, options = {})
   const guild=state.servers[0], owner=state.users.find(u=>u.username==="owner");
   const channel=guild.channels.find(c=>c.name==="general");
   assert.ok(owner && channel);
-  return {api,repo,guild,users:state.users,owner,channel,
+  return {api,repo,root,dataDir,port,guild,users:state.users,owner,channel,
     join:user=>api(`/api/v1/sim/servers/${guild.id}/members`,{userId:user.id}),
     command:(as,command,options={})=>api("/api/v1/sim/commands",{serverId:guild.id,channelId:channel.id,userId:as.id,bot:"bot",name:command,options}),
     login:async user=>(await api("/auth/dev-login",{mode:"token",userId:user.id})).token,

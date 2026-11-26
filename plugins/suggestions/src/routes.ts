@@ -9,8 +9,11 @@ export type Proposal = {
 export interface Routes {
   "GET /suggestions": {
     query: { status?: string; offset?: number };
-    response: { items: Proposal[] };
+    response: { items: Proposal[]; nextOffset?: number };
   };
   "POST /suggestions/:id/status": { body: { status: string; reason: string }; response: Proposal };
-  "GET /suggestions/moderation": { query: { offset?: number }; response: { items: Proposal[] } };
+  "GET /suggestions/moderation": {
+    query: { offset?: number };
+    response: { items: Proposal[]; nextOffset?: number };
+  };
 }

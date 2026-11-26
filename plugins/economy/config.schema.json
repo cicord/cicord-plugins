@@ -196,7 +196,21 @@
           }
         },
         "additionalProperties": false,
-        "required": ["id", "label", "price", "type"]
+        "required": ["id", "label", "price", "type"],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "enum": ["role", "temporary"]
+                }
+              }
+            },
+            "then": {
+              "required": ["role"]
+            }
+          }
+        ]
       },
       "maxItems": 100,
       "default": []

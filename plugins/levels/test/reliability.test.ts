@@ -72,3 +72,43 @@ test("a lone voice member earns nothing", async () => {
   await plugin.tasks![job.task]!(h.ctx, job.payload);
   expect(h.kv.get("xp:1")).toBeUndefined();
 });
+test("simultaneous distinct reactions from one member earn one award and remove it only once", async () => {
+  const h = createTestContext({
+    schema,
+    locales: { en },
+    members: [{ id: "1" }, { id: "2" }],
+    channels: { chat: { name: "Chat" } },
+  });
+  const message = h.receive("chat", h.member("1")!.user, "hello"),
+    user = h.member("2")!.user;
+  await plugin.events!.messageCreate!(h.ctx, { ...message, member: h.member("1")! });
+  const initial = Number(h.kv.get("xp:1"));
+  await Promise.all(
+    ["😀", "⭐"].map((emoji) => plugin.events!.reactionAdd!(h.ctx, { message, user, emoji })),
+  );
+  expect(h.kv.get("xp:1")).toBe(initial + 2);
+  await Promise.all(
+    ["😀", "⭐"].map((emoji) => plugin.events!.reactionRemove!(h.ctx, { message, user, emoji })),
+  );
+  expect(h.kv.get("xp:1")).toBe(initial);
+});
+test("erasure redacts a posted announcement and preserves another member's scores", async () => {
+  const h = createTestContext({
+    schema,
+    locales: { en },
+    features: ["privacyCopies"],
+    config: { xpPerMessage: 100, announce: { channel: "chat" } },
+    members: [{ id: "1" }, { id: "2" }],
+    channels: { chat: { name: "Chat" } },
+  });
+  for (const uid of ["1", "2"])
+    await plugin.events!.messageCreate!(h.ctx, {
+      ...h.receive("chat", h.member(uid)!.user, "hello"),
+      member: h.member(uid)!,
+    });
+  expect(h.sent).toHaveLength(2);
+  await plugin.privacy!.erase(h.ctx, "1");
+  expect(h.message(h.sent[0]!.id)!.content).toBe(en.erased);
+  expect(h.message(h.sent[1]!.id)!.content).toContain("<@2>");
+  expect(await plugin.privacy!.export(h.ctx, "1")).toEqual([]);
+});

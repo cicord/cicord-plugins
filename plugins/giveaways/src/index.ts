@@ -89,7 +89,7 @@ function panel(ctx: Context, g: Giveaway): MessagePayload {
           { name: t(ctx, "commit"), value: g.commitment },
           { name: t(ctx, "entrants"), value: String(g.entrants) },
           { name: t(ctx, "end"), value: `<t:${Math.floor(g.closesAt / 1000)}:R>` },
-          { name: t(ctx, "status"), value: g.state },
+          { name: t(ctx, "status"), value: t(ctx, "state." + g.state) },
           ...(g.state === "ended"
             ? [
                 {

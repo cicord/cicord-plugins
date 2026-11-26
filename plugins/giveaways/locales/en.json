@@ -38,5 +38,8 @@
   "commands.giveaway.reroll.description": "Draw replacement winners",
   "commands.giveaway.list.description": "List giveaways",
   "image": "Image URL (optional)",
-  "expired": "The giveaway verification period has ended."
+  "expired": "The giveaway verification period has ended.",
+  "state.open": "open",
+  "state.ended": "ended",
+  "state.cancelled": "cancelled"
 }

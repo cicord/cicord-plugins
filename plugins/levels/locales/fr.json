@@ -19,5 +19,7 @@
   "commands.xp.give.description": "Ajouter de l’XP",
   "commands.xp.remove.description": "Retirer de l’XP",
   "commands.xp.set.description": "Définir l’XP d’un membre",
-  "commands.xp.reset.description": "Réinitialiser un compte"
+  "commands.xp.reset.description": "Réinitialiser un compte",
+  "erased": "Contenu retiré.",
+  "announcement": "Bravo {member}, vous avez atteint le **niveau {level}** ! 🎉"
 }

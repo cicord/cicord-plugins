@@ -22,5 +22,7 @@
   "commands.eco.description": "Manage server currency",
   "commands.eco.give.description": "Add points",
   "commands.eco.take.description": "Remove points",
-  "commands.eco.set.description": "Set the balance"
+  "commands.eco.set.description": "Set the balance",
+  "state.pending": "pending",
+  "state.delivered": "delivered"
 }

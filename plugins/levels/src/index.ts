@@ -20,12 +20,19 @@ import {
   leaders,
   position,
   progress,
-  reactionKey,
   render,
   saveProfile,
   standings,
 } from "./levels.ts";
-import { credit, migrate, personal, seasonBatch, importCsv } from "./storage.ts";
+import {
+  credit,
+  migrate,
+  personal,
+  seasonBatch,
+  importCsv,
+  ConcurrentReaction,
+  type ReactionChange,
+} from "./storage.ts";
 import type { GrantXp } from "./contracts.ts";
 import type { Routes } from "./routes.ts";
 
@@ -45,8 +52,9 @@ async function award(
   from: AwardContext = {},
   id: string = crypto.randomUUID(),
   absolute = false,
+  reaction?: ReactionChange,
 ): Promise<number> {
-  const { xp, previous, level } = await credit(ctx, userId, amount, id, absolute);
+  const { xp, previous, level } = await credit(ctx, userId, amount, id, absolute, reaction);
   if (level > previous) {
     if (ctx.features.enabled("levelEvents"))
       await ctx.events.publish(
@@ -75,19 +83,30 @@ async function levelUp(ctx: Context, userId: string, level: number, from: AwardC
   const member = from.member ?? (await ctx.server.member(userId));
   if (member) await applyRewards(ctx, member, level);
 
-  const text = render(ctx.config.announce.message, {
+  const template =
+    ctx.config.announce.message === "GG {member}, you reached **level {level}**! 🎉"
+      ? tr(ctx, "announcement")
+      : ctx.config.announce.message;
+  const text = render(template, {
     member: `<@${userId}>`,
     level: String(level),
   });
   // The message may be gone (deleted by a moderator or another plugin): never fail the XP.
   try {
+    let posted: Message | undefined;
     if (ctx.config.announce.channel) {
-      await ctx.server
+      posted = await ctx.server
         .channel(ctx.config.announce.channel)
         .send({ content: text, allowedMentions: { users: true } });
     } else if (from.message) {
-      await from.message.reply({ content: text, allowedMentions: { users: true } });
+      posted = await from.message.reply({ content: text, allowedMentions: { users: true } });
     }
+    if (posted?.author.id === ctx.bot.user.id)
+      await ctx.kv.set("copy:" + userId + ":" + posted.id, {
+        channelId: posted.channel.id,
+        messageId: posted.id,
+        kind: "level",
+      });
     if (ctx.config.announce.react && from.message) await from.message.react("🎉");
   } catch (error) {
     ctx.log.warn("levels: level-up announcement failed", { member: userId, error: String(error) });
@@ -199,11 +218,60 @@ async function voters(ctx: Context, ids: string[], xp: number, origin: string) {
   for (const uid of new Set(ids)) {
     if (typeof uid !== "string") continue;
     // Populate public profiles lazily for bulk deliveries. Single legacy votes retain their profile.
-    if (ids.length <= 2) {
+    if (ids.length <= 2 || ctx.config.noXpRoles.length) {
       const m = await ctx.server.member(uid);
+      if (ctx.config.noXpRoles.length && (!m || ctx.config.noXpRoles.some((r) => m.hasRole(r))))
+        continue;
       if (m) await saveProfile(ctx, m.user, m.displayName);
     }
     await award(ctx, uid, xp, {}, origin);
+  }
+}
+async function reaction(
+  ctx: Context,
+  message: Message,
+  reactor: string,
+  emoji: string,
+  adding: boolean,
+) {
+  if (!ctx.config.enabled || !ctx.config.reactionXp) return;
+  const author = await ctx.kv.get<string>(authorKey(message.id));
+  if (!author || author === reactor) return;
+  const key = "reaction:" + message.id + ":" + reactor;
+  const member = await ctx.server.member(author);
+  const amount = member
+    ? Math.round(ctx.config.reactionXp * multiplier(ctx, member, message.channel.id))
+    : ctx.config.noXpRoles.length
+      ? 0
+      : ctx.config.reactionXp;
+  for (;;) {
+    const old = await ctx.kv.getEntry<{ emojis: string[]; amount: number }>(key);
+    let emojis = old?.value.emojis;
+    if (!emojis) {
+      const prefix = "react:" + message.id + ":" + reactor + ":";
+      emojis = (await ctx.kv.list({ prefix, limit: 100 })).items.map((item) =>
+        item.key.slice(prefix.length),
+      );
+    }
+    if (emojis.includes(emoji) === adding) return;
+    const next = adding ? [...emojis, emoji] : emojis.filter((e) => e !== emoji);
+    const before = emojis.length ? (old?.value.amount ?? ctx.config.reactionXp) : 0;
+    const after = next.length ? (emojis.length ? before : amount) : 0;
+    const change = { key, version: old?.version ?? null, value: { emojis: next, amount: after } };
+    try {
+      await award(
+        ctx,
+        author,
+        after - before,
+        member ? { member } : {},
+        crypto.randomUUID(),
+        false,
+        change,
+      );
+      return;
+    } catch (error) {
+      if (!(error instanceof ConcurrentReaction)) throw error;
+    }
   }
 }
 const bonus =
@@ -269,7 +337,12 @@ export default definePlugin({
       const members = (await ctx.server.voiceMembers({ id: channel })).filter((m) => !m.user.bot);
       const m = members.find((m) => m.id === uid);
       if (!m) return;
-      if (members.length > 1)
+      const active = "voice-room:" + channel;
+      if (members.length < 2) await ctx.kv.delete(active);
+      const since = await ctx.kv.get<number>(active);
+      if (members.length > 1 && since === undefined)
+        await ctx.kv.atomic().check(active, null).set(active, Date.now()).commit();
+      if (members.length > 1 && since !== undefined && Date.now() - since >= 60000)
         await award(
           ctx,
           uid,
@@ -277,12 +350,18 @@ export default definePlugin({
           { member: m },
           token + ":" + tick,
         );
-      await ctx.schedule.after(60000, "voice-minute", {
-        uid,
-        channel,
-        token,
-        tick: Math.max(tick + 1, Math.floor(Date.now() / 60000)),
-      });
+      const delay =
+        since === undefined ? 60000 : Math.max(1, Math.min(60000, since + 60000 - Date.now()));
+      await ctx.schedule.after(
+        since !== undefined && Date.now() - since < 60000 ? delay : 60000,
+        "voice-minute",
+        {
+          uid,
+          channel,
+          token,
+          tick: Math.max(tick + 1, Math.floor(Date.now() / 60000)),
+        },
+      );
     },
   },
   queries: {
@@ -340,9 +419,19 @@ export default definePlugin({
         v.user.bot
       )
         return;
+      for (const id of new Set([v.previous?.id, v.channel?.id]))
+        if (id) {
+          const people = (await ctx.server.voiceMembers({ id })).filter(
+            (person) => !person.user.bot,
+          );
+          const k = "voice-room:" + id;
+          if (people.length < 2) await ctx.kv.delete(k);
+          else await ctx.kv.atomic().check(k, null).set(k, Date.now()).commit();
+        }
       if (
         !v.channel ||
         (v.selfDeaf && ctx.config.voice.requireUndeafened) ||
+        ctx.server.afkChannelId === v.channel.id ||
         (ctx.config.voice.afkChannel &&
           ctx.server.channel(ctx.config.voice.afkChannel).id === v.channel.id)
       ) {
@@ -397,22 +486,10 @@ export default definePlugin({
 
     /** `reaction.message` is partial (id + channel): the author comes from our own records. */
     async reactionAdd(ctx, { message, user, emoji }) {
-      if (!ctx.config.enabled || user.bot || ctx.config.reactionXp === 0) return;
-      const author = await ctx.kv.get<string>(authorKey(message.id));
-      if (!author || author === user.id) return;
-      const { items } = await ctx.kv.list({ prefix: `react:${message.id}:${user.id}:`, limit: 1 });
-      await ctx.kv.set(reactionKey(message.id, user.id, emoji), true, { ttlSeconds: WEEK });
-      if (items.length === 0) await award(ctx, author, ctx.config.reactionXp);
+      if (!user.bot) await reaction(ctx, message, user.id, emoji, true);
     },
-
     async reactionRemove(ctx, { message, user, emoji }) {
-      if (!ctx.config.enabled) return;
-      const key = reactionKey(message.id, user.id, emoji);
-      if (!(await ctx.kv.get(key))) return;
-      await ctx.kv.delete(key);
-      const { items } = await ctx.kv.list({ prefix: `react:${message.id}:${user.id}:`, limit: 1 });
-      const author = await ctx.kv.get<string>(authorKey(message.id));
-      if (author && items.length === 0) await award(ctx, author, -ctx.config.reactionXp);
+      if (!user.bot) await reaction(ctx, message, user.id, emoji, false);
     },
   },
 
@@ -556,7 +633,7 @@ export default definePlugin({
         const lines = top
           .slice(0, ctx.config.recap.top)
           .map((s, i) => `${["🥇", "🥈", "🥉"][i] ?? `#${i + 1}`} <@${s.userId}> — +${s.xp} XP`);
-        await ctx.server.channel(channel).send({
+        const posted = await ctx.server.channel(channel).send({
           embeds: [
             {
               title: tr(ctx, "recap", { date: yesterday }),
@@ -566,6 +643,12 @@ export default definePlugin({
           ],
           allowedMentions: { users: false },
         });
+        for (const person of top.slice(0, ctx.config.recap.top))
+          await ctx.kv.set("copy:" + person.userId + ":" + posted.id, {
+            channelId: posted.channel.id,
+            messageId: posted.id,
+            kind: "recap",
+          });
       },
     },
   },

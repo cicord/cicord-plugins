@@ -88,7 +88,6 @@ export async function sync(ctx: Context, id: string) {
     board = destination(ctx, source);
   const m = board && (await source.message(id));
   if (
-    !ctx.config.enabled ||
     !board ||
     board.id !== g.destination ||
     !m ||
@@ -98,6 +97,7 @@ export async function sync(ctx: Context, id: string) {
     await remove(ctx, g);
     return;
   }
+  if (!ctx.config.enabled) return;
   const count = m.reactions.find((r) => r.emoji === ctx.config.emoji)?.count ?? 0;
   const self = count
     ? await m.reactionUsers(ctx.config.emoji, {

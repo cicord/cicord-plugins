@@ -3,6 +3,12 @@ import { dayKey, dayOf, levelOf, xpKey } from "./levels.ts";
 
 type Receipt = { xp: number; previous: number; level: number };
 const ttl = 30 * 86400;
+export class ConcurrentReaction extends Error {}
+export type ReactionChange = {
+  key: string;
+  version: string | null;
+  value: { emojis: string[]; amount: number };
+};
 export function activeArchive(ctx: Context) {
   const s = ctx.config.season;
   return s?.id && s.end && Date.parse(s.end) <= Date.now() ? s.id : undefined;
@@ -13,6 +19,7 @@ export async function credit(
   amount: number,
   id: string,
   absolute = false,
+  reaction?: ReactionChange,
 ): Promise<Receipt> {
   if (!Number.isSafeInteger(amount)) throw new Error("Invalid XP amount");
   const receipt = "award:" + uid + ":" + id,
@@ -20,6 +27,8 @@ export async function credit(
   for (;;) {
     const hit = await ctx.kv.get<Receipt>(receipt);
     if (hit) return hit;
+    if (reaction && ((await ctx.kv.getEntry(reaction.key))?.version ?? null) !== reaction.version)
+      throw new ConcurrentReaction();
     const old = await ctx.kv.getEntry<number>(k),
       archive = activeArchive(ctx),
       mark = archive ? `archived:${uid}:${archive}` : "";
@@ -35,6 +44,10 @@ export async function credit(
       .check(receipt, null)
       .set(k, xp)
       .set(receipt, res, { ttlSeconds: ttl });
+    if (reaction)
+      tx.check(reaction.key, reaction.version).set(reaction.key, reaction.value, {
+        ttlSeconds: 7 * 86400,
+      });
     if (rolling) {
       tx.check(mark, null).set(mark, old?.value ?? 0);
       if (old?.value) tx.rankSet("season:" + archive, uid, old.value);
@@ -114,14 +127,48 @@ export async function personal(ctx: Context, uid: string, erase: boolean) {
     for (const row of page.items) {
       const [kind, a, b] = row.key.split(":");
       const owned =
-        (["xp", "user", "cooldown", "voice", "archived", "award", "notice"].includes(kind!) &&
+        (["xp", "user", "cooldown", "voice", "archived", "award", "notice", "copy"].includes(
+          kind!,
+        ) &&
           a === uid) ||
         (kind === "day" && b === uid) ||
         (kind === "msg" && row.value === uid) ||
-        (kind === "react" && (b === uid || ownedMessages.has(a!)));
+        ((kind === "react" || kind === "reaction") && (b === uid || ownedMessages.has(a!)));
       if (owned) {
         result.push(row);
         if (erase) {
+          if (kind === "copy") {
+            const copy = row.value as { channelId: string; messageId: string; kind: string };
+            if (!ctx.features.enabled("privacyCopies"))
+              throw new Error("Grant discord.messages.read to erase published level announcements");
+            const m = await ctx.server.channel({ id: copy.channelId }).message(copy.messageId);
+            if (m && m.author.id === ctx.bot.user.id) {
+              if (copy.kind === "level")
+                await m.edit({
+                  content: ctx.i18n.t("erased"),
+                  embeds: [],
+                  components: [],
+                  allowedMentions: { users: [] },
+                });
+              else {
+                const embed = m.embeds[0];
+                if (embed)
+                  await m.edit({
+                    embeds: [
+                      {
+                        ...embed,
+                        description:
+                          (embed.description ?? "")
+                            .split("\n")
+                            .filter((line) => !line.includes("<@" + uid + ">"))
+                            .join("\n") || "—",
+                      },
+                    ],
+                    allowedMentions: { users: [] },
+                  });
+              }
+            }
+          }
           await ctx.kv.delete(row.key);
           if (kind === "archived") await ctx.kv.ranking("season:" + b).remove(uid);
         }

@@ -256,8 +256,9 @@ export default definePlugin({
         if (!ctx.config.enabled) return i.reply(t(ctx, "off"));
         const p = await ctx.kv.list<Order>({ prefix: inventoryPrefix(i.user.id), limit: 25 });
         await i.reply(
-          p.items.map((o) => o.value.item.label + " · " + o.value.state).join("\n") ||
-            t(ctx, "empty"),
+          p.items
+            .map((o) => o.value.item.label + " · " + t(ctx, "state." + o.value.state))
+            .join("\n") || t(ctx, "empty"),
         );
       },
     }),

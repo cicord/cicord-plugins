@@ -22,5 +22,7 @@
   "commands.eco.description": "Gérer la monnaie du serveur",
   "commands.eco.give.description": "Ajouter des points",
   "commands.eco.take.description": "Retirer des points",
-  "commands.eco.set.description": "Définir le solde"
+  "commands.eco.set.description": "Définir le solde",
+  "state.pending": "en attente",
+  "state.delivered": "livré"
 }

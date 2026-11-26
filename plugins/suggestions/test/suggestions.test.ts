@@ -44,7 +44,10 @@ test("votes can change, owners stay anonymous and only staff can decide", async 
   await plugin.privacy!.erase(h.ctx, "3");
   expect((await board()).body).toMatchObject({ items: [{ score: 0 }] });
   expect(await plugin.privacy!.export(h.ctx, "3")).toEqual([]);
+  // A different voter's own receipt survives the author erasing their proposal.
+  await h.ctx.kv.set("vote:" + row.id + ":1", 1);
   await plugin.privacy!.erase(h.ctx, "2");
+  expect(await plugin.privacy!.export(h.ctx, "1")).toEqual([{ id: row.id, vote: 1 }]);
   expect((await board()).body).toEqual({ items: [] });
 });
 test("private suggestions stay out of anonymous and unauthorized portal views", async () => {

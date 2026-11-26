@@ -12,5 +12,11 @@
   "restricted": "Vous ne pouvez pas voir cette suggestion.",
   "thread": "Suggestion {id}",
   "empty": "Aucune proposition.",
-  "commands.suggest.description": "Proposer une idée pour le serveur"
+  "commands.suggest.description": "Proposer une idée pour le serveur",
+  "erased": "Contenu retiré.",
+  "state.open": "ouverte",
+  "state.considered": "à l’étude",
+  "state.approved": "approuvée",
+  "state.denied": "refusée",
+  "state.implemented": "réalisée"
 }

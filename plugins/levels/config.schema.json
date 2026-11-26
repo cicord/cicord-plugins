@@ -277,7 +277,8 @@
           "format": "date-time"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "required": ["id", "end"]
     },
     "rankCard": {
       "type": "object",

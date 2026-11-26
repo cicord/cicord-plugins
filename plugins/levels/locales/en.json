@@ -19,5 +19,7 @@
   "commands.xp.give.description": "Give XP",
   "commands.xp.remove.description": "Take XP",
   "commands.xp.set.description": "Set a member’s XP",
-  "commands.xp.reset.description": "Reset one account"
+  "commands.xp.reset.description": "Reset one account",
+  "erased": "Content removed.",
+  "announcement": "GG {member}, you reached **level {level}**! 🎉"
 }
