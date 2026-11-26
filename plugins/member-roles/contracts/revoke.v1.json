@@ -1,0 +1,37 @@
+{
+  "input": {
+    "type": "object",
+    "properties": {
+      "userId": {
+        "type": "string",
+        "pattern": "^[0-9]{1,20}$"
+      },
+      "role": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "reason": {
+        "type": "string",
+        "maxLength": 256
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "userId",
+      "role"
+    ]
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "revoked": {
+        "type": "boolean"
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "revoked"
+    ]
+  }
+}

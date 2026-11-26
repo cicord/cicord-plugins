@@ -1,0 +1,33 @@
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: member-roles
+  version: 0.1.0
+  displayName: Member roles
+  description: Timed grants, sticky roles, membership milestones and booster benefits.
+  license: Apache-2.0
+  keywords: [roles, membership, boosts]
+spec:
+  engine: ">=0.2.0"
+  entry: ./src/index.ts
+  config: {schema: ./config.schema.json}
+  locales: ./locales
+  delivery: at-least-once
+  intents: [ServerMembers]
+  capabilities:
+    - discord.roles.assign
+    - discord.members.read
+    - storage.kv
+    - scheduler
+    - events.publish
+  optional:
+    - feature: boostAnnouncements
+      capabilities: [discord.channels.read, discord.messages.send]
+  interop:
+    types: ./src/contracts.ts
+    publishes: [{topic: tempRoleExpired, version: 1, scope: server}]
+    provides: {actions: [grantTemporary, revoke]}
+  privacy:
+    records:
+      - {name: memberRoles, policy: erase, description: "Active temporary grants, sticky-role snapshots and boost state keyed by member."}
+      - {name: roleJobs, policy: erase, description: "Member-specific expiry tasks and the current tenure pagination cursor."}

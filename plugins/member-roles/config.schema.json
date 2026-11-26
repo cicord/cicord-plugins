@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Member roles",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable automatic changes and temporary grants."
+    },
+    "locale": {
+      "type": "string",
+      "enum": [
+        "en",
+        "fr"
+      ],
+      "description": "Override the server language."
+    },
+    "sticky": {
+      "type": "object",
+      "properties": {
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "x-cicord-ref": "role"
+          },
+          "uniqueItems": true,
+          "default": []
+        },
+        "retentionDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 365,
+          "default": 90
+        }
+      },
+      "additionalProperties": false,
+      "default": {}
+    },
+    "tenure": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "properties": {
+          "days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 36500
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "x-cicord-ref": "role"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "days",
+          "role"
+        ]
+      }
+    },
+    "boost": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-cicord-ref": "role"
+        },
+        "announce": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-cicord-ref": "channel"
+        }
+      },
+      "additionalProperties": false,
+      "default": {}
+    },
+    "temp": {
+      "type": "object",
+      "properties": {
+        "maxDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 365,
+          "default": 90
+        },
+        "managerRoles": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "x-cicord-ref": "role"
+          },
+          "uniqueItems": true,
+          "default": []
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "x-cicord-ref": "role"
+          },
+          "uniqueItems": true,
+          "default": [],
+          "description": "Optional allowlist for temporary grants. Empty permits all assignable roles."
+        }
+      },
+      "additionalProperties": false,
+      "default": {}
+    }
+  },
+  "additionalProperties": false
+}

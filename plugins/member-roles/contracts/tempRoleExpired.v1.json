@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "properties": {
+    "userId": {
+      "type": "string",
+      "pattern": "^[0-9]{1,20}$"
+    },
+    "roleId": {
+      "type": "string",
+      "pattern": "^[0-9]{1,20}$"
+    },
+    "expiresAt": {
+      "type": "integer"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "userId",
+    "roleId",
+    "expiresAt"
+  ]
+}

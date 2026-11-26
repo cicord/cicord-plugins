@@ -1,0 +1,53 @@
+{
+  "input": {
+    "type": "object",
+    "properties": {
+      "userId": {
+        "type": "string",
+        "pattern": "^[0-9]{1,20}$"
+      },
+      "role": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "reason": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "durationSeconds": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 31536000
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "userId",
+      "role",
+      "durationSeconds"
+    ]
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "userId": {
+        "type": "string",
+        "pattern": "^[0-9]{1,20}$"
+      },
+      "roleId": {
+        "type": "string",
+        "pattern": "^[0-9]{1,20}$"
+      },
+      "expiresAt": {
+        "type": "integer"
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "userId",
+      "roleId",
+      "expiresAt"
+    ]
+  }
+}
