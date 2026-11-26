@@ -4,19 +4,41 @@ The official plugin registry of [Cicord](https://github.com/cicord/cicord), the 
 runtime for Discord: the plugins maintained by the Cicord project and community plugins
 accepted by review, in one repository, with a **signed** index.
 
-| Plugin | What it does |
-|---|---|
-| [`welcome`](plugins/welcome) | Greets new members, gives them a default role and sends an onboarding link. |
-| [`onboarding`](plugins/onboarding) | Step-by-step role picking on the community portal (games, platforms, notifications…), with a /onboarding command that links to it. |
-| [`tickets`](plugins/tickets) | Support tickets in private channels. Members open a ticket from a panel button and a short form, or from the community portal, where they follow their tickets; staff and the member talk in a channel only they can see; staff manage the queue on the portal (assignee, priority, labels, replies, close and reopen); closing it posts a summary to the staff log. |
-| [`polls`](plugins/polls) | Quick polls with buttons or a select menu, live results, automatic closing and an optional discussion thread. Publishes polls.closed for other plugins. |
-| [`levels`](plugins/levels) | XP and levels for chatting, receiving reactions and voting in polls. Level-up announcements, role rewards, /rank, /top, a daily recap and a public leaderboard on the community portal. |
-| [`moderation`](plugins/moderation) | Warnings, timeouts, kicks and temporary or permanent bans. Staff review the exact scope of message purges and can inspect, annotate or void cases. Member case history excludes private staff notes. |
-| [`reaction-roles`](plugins/reaction-roles) | Self-assignable roles from panels defined in the config, with buttons, a select menu or emoji reactions. Single or multiple choice, an optional required role, and panel messages kept up to date in place. |
-| [`audit-log`](plugins/audit-log) | Posts server events to a staff log channel in compact batched embeds. Joins and leaves, role and nickname changes, message edits and deletions, moderation cases and closed polls from the other plugins. Each category can be turned off or sent to its own channel. |
-| [`announcements`](plugins/announcements) | Recurring or one-off announcements from the config (cron, interval or date, in your time zone), and /announce for moderators to schedule, list and cancel their own. Mentions ping only who you say. |
-| [`github-releases`](plugins/github-releases) | Announces the releases of public GitHub repositories in your channels, with the release notes, an optional role ping and pre-releases on request. /changelog shows the latest release of a repository or checks now. |
-| [`voice-rooms`](plugins/voice-rooms) | Voice channels on demand ("join to create"): joining a hub channel such as "➕ Create a channel" gives the member a voice channel of their own, deleted once empty. Several hubs, each with its name template, category, user limit and allowed roles. Owners manage their room with `/voice` (rename, limit, lock, permit, kick, transfer, claim). |
+## Plugin catalogue
+
+Descriptions cover the source on this branch. Published versions come from the signed registry. Bundled versions ship in the core catalogue for offline installs. A dash means that distribution has no entry for the plugin.
+
+| Plugin | What it does | Published | Bundled |
+|---|---|---|---|
+| [`ai-assistant`](plugins/ai-assistant) | Answers questions from approved Markdown, checks the reader’s access to citations and caps provider spending. Opt-in pilot. | — | — |
+| [`announcements`](plugins/announcements) | Schedules one-off and recurring announcements in a configured time zone with controlled mentions, pinned messages and crossposting. | 0.1.0 | 0.1.0 |
+| [`anti-nuke`](plugins/anti-nuke) | Monitor administrative changes using audit evidence. Staff can inspect uncertain, delayed and confirmed observations. | — | — |
+| [`audit-log`](plugins/audit-log) | Sends staff evidence-backed observations of server changes and message deletions, with attribution, privacy controls and optional search. | 0.1.0 | 0.1.0 |
+| [`birthdays`](plugins/birthdays) | Opt-in birthday greetings and 24-hour roles using each member’s local date. | — | — |
+| [`channel-automations`](plugins/channel-automations) | Per-channel thread, reaction, publication, media and cleanup rules. | — | — |
+| [`community-events`](plugins/community-events) | Recurring Discord events, attendance and opt-in reminders with a public calendar feed. | — | — |
+| [`economy`](plugins/economy) | Maintains server wallets and an atomic ledger for daily claims, transfers, engagement rewards and shop purchases. Opt-in pilot. | — | — |
+| [`feeds`](plugins/feeds) | Announces new RSS, Atom and JSON Feed entries in configured channels. | — | — |
+| [`github-releases`](plugins/github-releases) | Announces releases from selected GitHub repositories. Members can look up release notes with the changelog command. | 0.1.0 | — |
+| [`giveaways`](plugins/giveaways) | Runs weighted prize draws with a published seed commitment, eligibility checks, claims and independently verifiable results. Opt-in pilot. | — | — |
+| [`guard`](plugins/guard) | Detect unsafe links, repeated messages and join surges. Message content is inspected transiently. Monitoring is the default. | — | — |
+| [`invite-tracker`](plugins/invite-tracker) | Compares invitation counters on join, records attribution confidence and ranks valid invitations. | — | — |
+| [`levels`](plugins/levels) | Awards XP for chat, reactions, voice minutes and community events. Includes role rewards, season archives and an indexed leaderboard. | 0.1.0 | 0.1.0 |
+| [`member-roles`](plugins/member-roles) | Timed grants, sticky roles, membership milestones and booster benefits. | — | — |
+| [`moderation`](plugins/moderation) | Handles warnings, timeouts, bans, quarantines and reviewed purges. Tracks cases, staff notes and scoped appeals. | 0.1.1 | 0.1.1 |
+| [`onboarding`](plugins/onboarding) | Guides members through portal onboarding and their role choices with a personalized Discord link. | 0.1.0 | 0.1.0 |
+| [`polls`](plugins/polls) | Runs native Discord polls and button or select ballots, closes them on schedule and publishes versioned results for reward plugins. | 0.1.1 | 0.1.1 |
+| [`reaction-roles`](plugins/reaction-roles) | Keeps role panels up to date and lets eligible members select roles with buttons, menus or emoji reactions. | 0.1.1 | 0.1.1 |
+| [`reminders`](plugins/reminders) | Private and channel reminders with local dates, repeat intervals and snooze. | — | — |
+| [`staff-shifts`](plugins/staff-shifts) | Staff duty roles, weekly shifts, timezone-aware coverage and moderation statistics. | — | — |
+| [`starboard`](plugins/starboard) | Highlights starred messages, compares source and destination audiences and removes invalidated copies. | — | — |
+| [`stats-reports`](plugins/stats-reports) | Weekly and monthly aggregate activity reports, short-stay counts and voice channel counters. | — | — |
+| [`suggestions`](plugins/suggestions) | Collects proposals and editable votes, publishes decisions and rechecks access to the public and staff boards. | — | — |
+| [`tags`](plugins/tags) | Find and share reviewed Markdown replies and staff-managed answers. | — | — |
+| [`tickets`](plugins/tickets) | Runs private support queues with type-specific staff, forms, portal replies, transcripts, satisfaction ratings and optional modmail. | 0.2.1 | 0.2.1 |
+| [`verification`](plugins/verification) | Member-bound challenges, age checks and a staff approval queue. Role assignment uses the existing server permission policy. | — | — |
+| [`voice-rooms`](plugins/voice-rooms) | Creates temporary voice rooms when members enter a hub. Owners can set a limit, lock, transfer or claim a room. Empty rooms are removed. | 0.1.0 | 0.1.1 |
+| [`welcome`](plugins/welcome) | Greets new members with optional graphics and role assignment, and links members to onboarding. | 0.1.1 | 0.1.1 |
 
 ## Install a plugin
 
@@ -34,10 +56,7 @@ Every Cicord runtime knows this registry: it is source `cicord`, with no `cicord
   This pins the version in `cicord.lock` (commit and content hash) and adds the instance to
   `bots/moderator/bot.yaml`; commit both. `cicord plugin update` lists and applies updates.
 
-The official plugins are also **bundled in the `cicord` binary** (for offline and first
-installs): a bundled plugin is installed by copying it to `plugins/<name>/` of your
-repository, and this registry is used for a plugin only when its version here is newer than
-the bundled one.
+A bundled install copies the core catalogue version into `plugins/<name>/` in your repository. The signed registry can supply a newer published version. To test branch source before publication, copy the plugin directory into your repository, set the bot instance’s `source` to its local path and grant the required capabilities.
 
 ## Trust model
 
@@ -80,6 +99,7 @@ Requirements: Node 26, pnpm 12, and the `cicord` CLI on `PATH`.
 ```sh
 pnpm install
 bash scripts/check-plugin.sh plugins/polls   # SDK types, typegen, build, simulator, tsc, tests
+bash scripts/check-all.sh --allow-unlisted   # full checks for a development branch
 pnpm test                                    # every plugin's unit tests
 cicord dev --sim                             # in a Cicord repository using the plugin
 ```

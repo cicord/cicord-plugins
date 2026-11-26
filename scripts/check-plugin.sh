@@ -13,11 +13,11 @@ dir="${dir%/}"
 cicord plugin sdk-types "$dir"
 cicord plugin typegen "$dir" --check
 cicord plugin build "$dir"
-config=()
+smoke=(cicord plugin test "$dir")
 if [[ -f "$dir/test/config.yaml" ]]; then
-  config=(--config "$dir/test/config.yaml")
+  smoke+=(--config "$dir/test/config.yaml")
 fi
-cicord plugin test "$dir" "${config[@]}"
+"${smoke[@]}"
 pnpm exec tsc -p "$dir"
 if [[ -f "$dir/test/tsconfig.json" ]]; then
   pnpm exec tsc -p "$dir/test"
@@ -25,7 +25,14 @@ fi
 if compgen -G "$dir/test/*.test.ts" >/dev/null; then
   pnpm exec vp test run "$dir/"
 fi
-if [[ -f "$dir/test/runtime.mjs" ]]; then
-  node --test "$dir/test/runtime.mjs"
+acceptance=()
+for file in "$dir/test/runtime.mjs" "$dir"/test/*.sim.mjs "$dir"/test/*.test.mjs; do
+  [[ ! -f "$file" ]] || acceptance+=("$file")
+done
+if (( ${#acceptance[@]} )); then
+  node --test "${acceptance[@]}"
+fi
+if [[ -n "${CICORD_SOURCE:-}" && -f "$dir/test/persistence/run.mjs" ]]; then
+  node "$dir/test/persistence/run.mjs"
 fi
 echo "✓ $dir"
