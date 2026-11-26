@@ -1,4 +1,5 @@
 import {
+  InteropError,
   command,
   query,
   type MessagePayload,
@@ -329,11 +330,14 @@ export default definePlugin({
   queries: {
     voters: query({
       async run(ctx, input: { pollId: string; cursor?: string }, call) {
+        if (call.onBehalfOf?.access === "scoped")
+          throw new InteropError("denied", "A case-scoped session cannot read ballots.");
         const p = await getPoll(ctx, input.pollId);
         if (!p || p.anonymous) return { userIds: [] };
         if (call.onBehalfOf) {
           const member = await ctx.server.member(call.onBehalfOf.userId);
-          if (!member?.canView({ id: p.channelId })) throw new Error("denied");
+          if (!member?.canView({ id: p.channelId }))
+            throw new InteropError("denied", "The member cannot read the poll channel.");
         }
         return voterPage(ctx, p, input.cursor);
       },

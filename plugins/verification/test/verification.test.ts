@@ -138,3 +138,34 @@ test("a post-kick recovery link is bound to its subject, case and expiry", async
     (await callRoute(plugin, t, route, { viewer: youngId, scopedLink: scoped.url })).status,
   ).toBe(403);
 });
+
+test("case links are limited to their resource and cannot read verification status", async () => {
+  const h = createTestContext(base);
+  const caller = {
+    bot: "bot",
+    instance: "guard",
+    plugin: "guard",
+    source: "cicord",
+    verified: true,
+  };
+  const scoped = {
+    caller,
+    onBehalfOf: {
+      userId: youngId,
+      access: "scoped" as const,
+      resourceScope: { kind: "case", id: "7" },
+    },
+  };
+  for (const userId of [youngId, otherId])
+    await expect(plugin.queries!.status!.run(h.ctx, { userId }, scoped)).rejects.toMatchObject({
+      name: "InteropError",
+      code: "denied",
+    });
+  const member = { caller, onBehalfOf: { userId: youngId, access: "member" as const } };
+  await expect(
+    plugin.queries!.status!.run(h.ctx, { userId: otherId }, member),
+  ).rejects.toMatchObject({ code: "denied" });
+  await expect(plugin.queries!.status!.run(h.ctx, { userId: youngId }, member)).resolves.toEqual({
+    verified: false,
+  });
+});

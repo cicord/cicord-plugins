@@ -16,7 +16,7 @@ The button method checks account age. When visual rendering is granted, accounts
 
 Verification assigns only `verifiedRole`. The `hold` policy puts young members in the moderator queue. With `delay`, they retry after `delayHours`. The explicit `kick` policy and optional `kickAfterHours` expiry need the DM and sanction grants. Held accounts await staff review. A kick sends the earliest return time and a recovery link valid through the earliest return date plus one day, up to seven days, bound to that person’s OAuth identity. Unknown account-age information never triggers an age sanction.
 
-When moderation is installed, grant `plugins.call:moderation.sanction`. An absent installation permits direct kick with `discord.members.moderate`. The plugin preserves a stable origin key for delegated kicks. The member query and successful role assignment use current Discord membership. `passed` and `failed` events support welcome and guard integrations.
+When moderation is installed, grant `plugins.call:moderation.sanction`. An absent installation permits direct kick with `discord.members.moderate`. The plugin preserves a stable origin key for delegated kicks. The member query and successful role assignment use current Discord membership. `passed` and `failed` events support welcome and guard integrations. The `status` query returns a verification flag to background callers. A delegated member can inspect their own status, and staff can inspect another member. Case-scoped sessions cannot read verification records.
 
 ## Portal and commands
 

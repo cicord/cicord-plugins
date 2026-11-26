@@ -1,4 +1,5 @@
 import {
+  InteropError,
   command,
   definePlugin,
   query,
@@ -184,12 +185,12 @@ export default definePlugin({
   queries: {
     inviterOf: query({
       async run(ctx, input: { userId: string }, call) {
+        const viewer = call.onBehalfOf;
         if (
-          call.onBehalfOf &&
-          call.onBehalfOf.userId !== input.userId &&
-          call.onBehalfOf.access === "member"
+          viewer?.access === "scoped" ||
+          (viewer?.access === "member" && viewer.userId !== input.userId)
         )
-          throw new Error("denied");
+          throw new InteropError("denied", "Invite attribution requires access to this member.");
         const e = await ctx.kv.get<Entry>("member:" + input.userId);
         return {
           ...(e?.code ? { code: e.code } : {}),
@@ -198,7 +199,9 @@ export default definePlugin({
       },
     }),
     count: query({
-      async run(ctx, input: { userId: string }) {
+      async run(ctx, input: { userId: string }, call) {
+        if (call.onBehalfOf?.access === "scoped")
+          throw new InteropError("denied", "A case-scoped session cannot read invite counts.");
         return count(ctx, input.userId);
       },
     }),

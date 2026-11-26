@@ -15,7 +15,7 @@ A young account or a departure inside `minStayDays` marks the join as fake. The 
 
 Grant `scheduler`, `discord.invites.read`, `storage.kv`, `events.publish` and `portal.routes`. The bot needs Manage Server to read use counters and access to invite gateway events. Declare ServerMembers and ServerInvites. An unavailable initial invite listing prevents attribution until the instance can initialize.
 
-`invite-tracker.joined` publishes a join with optional inviter/code and the fake flag to authorized server subscribers. `inviterOf` serves background integrations and allows a member to inspect their own attribution. Staff may inspect another member. `count` exposes totals.
+`invite-tracker.joined` publishes a join with optional inviter/code and the fake flag to authorized server subscribers. `inviterOf` serves background integrations and allows a member to inspect their own attribution. Staff may inspect another member. `count` exposes totals. Case-scoped sessions cannot read invite data. An unauthorized delegated lookup returns the interop error `denied`.
 
 The current join record per member contains the timestamp, status, optional code and inviter. It stays available after departure for counts until the member requests erasure or the installation data is removed. Erasing an invitee removes their record. Erasing an inviter removes their identifier and invite code from other members’ records. The live invite snapshot is rebuilt on startup.
 

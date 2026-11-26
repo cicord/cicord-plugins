@@ -19,6 +19,7 @@ const grants = [
   "discord.members.read",
   "discord.channels.read",
   "discord.threads.manage",
+  "discord.members.read",
   "storage.kv",
   "scheduler",
   "events.publish",
@@ -451,7 +452,21 @@ test("delegated voter queries and the public results route recheck source visibi
   await start(h);
   await plugin.tasks!.close!(h.ctx, { id: "1" });
   const denied = { ...caller, onBehalfOf: { userId: "unavailable", access: "admin" as const } };
-  await expect(plugin.queries!.voters!.run(h.ctx, { pollId: "1" }, denied)).rejects.toThrow();
+  await expect(plugin.queries!.voters!.run(h.ctx, { pollId: "1" }, denied)).rejects.toMatchObject({
+    name: "InteropError",
+    code: "denied",
+  });
+  const scoped = {
+    ...caller,
+    onBehalfOf: {
+      userId: "1",
+      access: "scoped" as const,
+      resourceScope: { kind: "case", id: "1" },
+    },
+  };
+  await expect(plugin.queries!.voters!.run(h.ctx, { pollId: "1" }, scoped)).rejects.toMatchObject({
+    code: "denied",
+  });
   h.ctx.server.audience = () => ({
     known: true,
     public: false,

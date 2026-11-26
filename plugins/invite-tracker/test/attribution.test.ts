@@ -114,3 +114,32 @@ test("a legacy backfill survives a crash, overlapping restarts and live mutation
     left: 1,
   });
 });
+
+test("a case-scoped principal cannot read invite records or counts, including its own", async () => {
+  const h = createTestContext({ schema, locales: { en, fr } });
+  await h.ctx.kv.set("member:2", { inviterId: "15", code: "private" });
+  const scope = {
+    ...caller,
+    onBehalfOf: {
+      userId: "2",
+      access: "scoped" as const,
+      resourceScope: { kind: "case", id: "7" },
+    },
+  };
+  for (const userId of ["2", "15"]) {
+    await expect(plugin.queries!.inviterOf!.run(h.ctx, { userId }, scope)).rejects.toMatchObject({
+      name: "InteropError",
+      code: "denied",
+    });
+    await expect(plugin.queries!.count!.run(h.ctx, { userId }, scope)).rejects.toMatchObject({
+      code: "denied",
+    });
+  }
+  const member = { ...caller, onBehalfOf: { userId: "15", access: "member" as const } };
+  await expect(
+    plugin.queries!.inviterOf!.run(h.ctx, { userId: "2" }, member),
+  ).rejects.toMatchObject({ code: "denied" });
+  await expect(plugin.queries!.inviterOf!.run(h.ctx, { userId: "15" }, member)).resolves.toEqual(
+    {},
+  );
+});

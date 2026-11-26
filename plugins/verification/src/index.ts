@@ -1,4 +1,5 @@
 import {
+  InteropError,
   command,
   definePlugin,
   subcommand,
@@ -306,8 +307,12 @@ export default definePlugin({
   queries: {
     status: {
       async run(ctx, input: { userId: string }, call) {
-        if (call.onBehalfOf?.access === "member" && call.onBehalfOf.userId !== input.userId)
-          throw new Error("forbidden");
+        const viewer = call.onBehalfOf;
+        if (
+          viewer?.access === "scoped" ||
+          (viewer?.access === "member" && viewer.userId !== input.userId)
+        )
+          throw new InteropError("denied", "Verification status requires access to this member.");
         const result = await status(ctx, input.userId);
         return call.onBehalfOf ? result : { verified: result.verified };
       },
