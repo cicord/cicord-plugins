@@ -19,6 +19,7 @@ spec:
     - portal.links
   config:
     schema: ./config.schema.json
+  interop: {}
   delivery: at-least-once
   locales: ./locales
   privacy:

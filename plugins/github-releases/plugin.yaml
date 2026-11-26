@@ -23,5 +23,6 @@ spec:
     allow: [api.github.com]
   config:
     schema: ./config.schema.json
+  interop: {}
   delivery: at-least-once
   locales: ./locales

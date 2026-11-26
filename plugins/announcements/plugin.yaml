@@ -29,6 +29,7 @@ spec:
       capabilities: [discord.messages.read]
   config:
     schema: ./config.schema.json
+  interop: {}
   delivery: at-least-once
   locales: ./locales
   privacy:

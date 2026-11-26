@@ -489,3 +489,24 @@ test("erasing a former owner removes the member-derived name after a transfer", 
   expect(t.channel(room.id)!.name).toBe("Voice room 1");
   expect(t.kv.get("room:" + room.id)).toMatchObject({ owner: "2" });
 });
+
+test("privacy revocation fails closed when Discord refuses the live overwrite read", async () => {
+  const t = setup(),
+    room = await joinHub(t, "1");
+  await runCommand(plugin, t, "voice permit", {
+    user: "1",
+    options: { member: t.member("2")!.user },
+  });
+  const grantsBefore = t.overwrites(room.id),
+    stored = await t.ctx.kv.get("room:" + room.id);
+  const reader = vi
+    .spyOn(t.channel(room.id)!, "memberOverwrite")
+    .mockRejectedValueOnce(Error("Discord 403"));
+  await expect(plugin.privacy!.erase(t.ctx, "2")).rejects.toThrow("Discord 403");
+  expect(t.overwrites(room.id)).toEqual(grantsBefore);
+  expect(await t.ctx.kv.get("room:" + room.id)).toEqual(stored);
+  reader.mockRestore();
+  expect(await plugin.privacy!.erase(t.ctx, "2")).toEqual({ erased: 1 });
+  expect(t.overwrites(room.id)["member:2"]).toBeUndefined();
+  expect(t.overwrites(room.id)["member:1"]?.allow).toContain("Connect");
+});

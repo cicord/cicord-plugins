@@ -23,5 +23,6 @@ spec:
   intents: [ServerMessageReactions]
   config:
     schema: ./config.schema.json
+  interop: {}
   delivery: at-least-once
   locales: ./locales

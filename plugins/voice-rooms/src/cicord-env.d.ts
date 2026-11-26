@@ -21,6 +21,18 @@ declare module "@cicord/sdk" {
 export {};
 
 declare module "@cicord/sdk" {
+  interface PublishedEvents {
+    "roomClosed.v1": {
+      channelId: string;
+      durationMinutes?: number;
+      ownerId: string;
+      peak?: number;
+    };
+    "roomCreated.v1": {
+      channelId: string;
+      ownerId: string;
+    };
+  }
   interface EventContracts {
     "voice-rooms.roomClosed.v1": {
       channelId: string;

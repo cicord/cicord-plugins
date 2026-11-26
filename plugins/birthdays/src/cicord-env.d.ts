@@ -13,6 +13,11 @@ declare module "@cicord/sdk" {
 export {};
 
 declare module "@cicord/sdk" {
+  interface PublishedEvents {
+    "today.v1": {
+      userId: string;
+    };
+  }
   interface EventContracts {
     "birthdays.today.v1": {
       userId: string;

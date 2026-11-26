@@ -11,12 +11,23 @@ type Receipt = {
 };
 const key = (id: string) => "greet:" + id;
 
+function reportFailure(ctx: Context, feature: string, reason: string, error: unknown) {
+  ctx.features.report?.(feature, false, reason);
+  ctx.log.warn(reason, { error: String(error) });
+}
+
 async function content(ctx: Context, member: string, index: number, variant = 0) {
   let template = ctx.config.variants?.length
     ? ctx.config.variants[variant % ctx.config.variants.length]
     : ctx.config.message;
-  if (ctx.config.templateFile && ctx.features.enabled("templates"))
-    template = await ctx.files.read(ctx.config.templateFile);
+  if (ctx.config.templateFile && ctx.features.enabled("templates")) {
+    try {
+      template = await ctx.files.read(ctx.config.templateFile);
+      ctx.features.report?.("templates", true);
+    } catch (error) {
+      reportFailure(ctx, "templates", "Welcome template unavailable", error);
+    }
+  }
   if (!template || template === "Welcome {member} to {server}!")
     template = ctx.i18n.t("greeting", { member, server: ctx.server.name });
   return template
@@ -61,11 +72,16 @@ async function greet(ctx: Context, m: Member) {
       ctx.features.enabled("inviter") &&
       ctx.plugins.has("invite-tracker")
     ) {
-      const inviter = (await ctx.plugins.query("invite-tracker", "inviterOf", {
-        userId: m.id,
-      })) as Inviter;
-      if (inviter.inviterId)
-        text += "\n" + ctx.i18n.t("inviter", { member: `<@${inviter.inviterId}>` });
+      try {
+        const inviter = (await ctx.plugins.query("invite-tracker", "inviterOf", {
+          userId: m.id,
+        })) as Inviter;
+        if (inviter.inviterId)
+          text += "\n" + ctx.i18n.t("inviter", { member: `<@${inviter.inviterId}>` });
+        ctx.features.report?.("inviter", true);
+      } catch (error) {
+        reportFailure(ctx, "inviter", "Inviter query unavailable", error);
+      }
     }
     const payload: MessagePayload = {
       content: text,
@@ -74,46 +90,51 @@ async function greet(ctx: Context, m: Member) {
       enforceNonce: true,
     };
     if (ctx.config.card && ctx.features.enabled("cards")) {
-      const image = await ctx.render.image({
-        width: 700,
-        height: 220,
-        background: { asset: "background.png" },
-        layers: [
-          ...(m.user.avatarUrl
-            ? [
-                {
-                  type: "image" as const,
-                  x: 26,
-                  y: 32,
-                  width: 156,
-                  height: 156,
-                  source: { url: m.user.avatarUrl },
-                  mask: "circle" as const,
-                },
-              ]
-            : []),
-          {
-            type: "text",
-            x: 205,
-            y: 60,
-            text: m.displayName,
-            size: 38,
-            color: "#ffffff",
-            maxWidth: 475,
-          },
-          {
-            type: "text",
-            x: 205,
-            y: 132,
-            text: ctx.i18n.t("number", { number: receipt.number }),
-            size: 23,
-            color: "#bac8ed",
-            maxWidth: 460,
-          },
-        ],
-      });
-      payload.files = [{ name: "welcome.png", ...image }];
-      payload.embeds = [{ image: { url: "attachment://welcome.png" } }];
+      try {
+        const image = await ctx.render.image({
+          width: 700,
+          height: 220,
+          background: { asset: "background.png" },
+          layers: [
+            ...(m.user.avatarUrl
+              ? [
+                  {
+                    type: "image" as const,
+                    x: 26,
+                    y: 32,
+                    width: 156,
+                    height: 156,
+                    source: { url: m.user.avatarUrl },
+                    mask: "circle" as const,
+                  },
+                ]
+              : []),
+            {
+              type: "text",
+              x: 205,
+              y: 60,
+              text: m.displayName,
+              size: 38,
+              color: "#ffffff",
+              maxWidth: 475,
+            },
+            {
+              type: "text",
+              x: 205,
+              y: 132,
+              text: ctx.i18n.t("number", { number: receipt.number }),
+              size: 23,
+              color: "#bac8ed",
+              maxWidth: 460,
+            },
+          ],
+        });
+        payload.files = [{ name: "welcome.png", ...image }];
+        payload.embeds = [{ image: { url: "attachment://welcome.png" } }];
+        ctx.features.report?.("cards", true);
+      } catch (error) {
+        reportFailure(ctx, "cards", "Welcome card rendering failed", error);
+      }
     }
     receipt.message = (await ctx.server.channel(ctx.config.channel).send(payload)).id;
     await ctx.kv.set(k, receipt);
@@ -157,14 +178,12 @@ export default definePlugin({
     async memberLeave(ctx, m) {
       await ctx.kv.delete(key(m.id));
       if (ctx.config.enabled && ctx.config.channel && ctx.config.leaveMessage)
-        await ctx.server
-          .channel(ctx.config.channel)
-          .send({
-            content: ctx.config.leaveMessage
-              .replaceAll("{member}", m.mention)
-              .replaceAll("{server}", ctx.server.name),
-            allowedMentions: { users: false, roles: false, everyone: false },
-          });
+        await ctx.server.channel(ctx.config.channel).send({
+          content: ctx.config.leaveMessage
+            .replaceAll("{member}", m.mention)
+            .replaceAll("{server}", ctx.server.name),
+          allowedMentions: { users: false, roles: false, everyone: false },
+        });
     },
   },
   subscriptions: {

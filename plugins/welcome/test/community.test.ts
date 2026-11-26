@@ -69,3 +69,33 @@ test("missing verification grant never substitutes a join; onboarding checks the
   await plugin.events!.memberUpdate!(v.ctx, completed, undefined);
   expect(v.sent).toHaveLength(1);
 });
+
+test("optional render or provider failures still deliver the configured greeting", async () => {
+  const t = setup({
+    channel: "general",
+    trigger: "join",
+    card: true,
+    showInviter: true,
+    dmOnboarding: false,
+  });
+  const report = vi.fn();
+  Object.assign(t.ctx, {
+    features: { enabled: () => true, report },
+    render: {
+      image: async () => {
+        throw Error("deadline");
+      },
+    },
+    plugins: {
+      has: () => true,
+      query: async () => {
+        throw Error("timeout");
+      },
+    },
+  });
+  await plugin.events!.memberJoin!(t.ctx, t.member("1")!);
+  expect(t.sent).toHaveLength(1);
+  expect(t.sent[0]!.message).toMatchObject({ content: expect.stringContaining("Welcome") });
+  expect(report).toHaveBeenCalledWith("cards", false, "Welcome card rendering failed");
+  expect(report).toHaveBeenCalledWith("inviter", false, "Inviter query unavailable");
+});
