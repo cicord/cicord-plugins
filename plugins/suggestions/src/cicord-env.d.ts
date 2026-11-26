@@ -14,6 +14,20 @@ declare module "@cicord/sdk" {
 export {};
 
 declare module "@cicord/sdk" {
+  interface PublishedEvents {
+    "created.v1": {
+      authorId: string;
+      id: string;
+      score: number;
+      status: "open" | "considered" | "approved" | "denied" | "implemented";
+    };
+    "statusChanged.v1": {
+      authorId: string;
+      id: string;
+      score: number;
+      status: "open" | "considered" | "approved" | "denied" | "implemented";
+    };
+  }
   interface EventContracts {
     "suggestions.created.v1": {
       authorId: string;

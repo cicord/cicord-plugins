@@ -1,5 +1,5 @@
 import { expect, test } from "vite-plus/test";
-import { createTestContext, runCommand } from "@cicord/sdk/testing";
+import { createTestContext, runCommand, callRoute } from "@cicord/sdk/testing";
 import plugin from "../src/index.ts";
 import { pay, transact } from "../src/ledger.ts";
 import schema from "../config.schema.json" with { type: "json" };
@@ -33,4 +33,54 @@ test("replayed credit, two members, erasure and disabled pilot", async () => {
   const off = createTestContext({ schema, locales: { en }, members: [{ id: "1" }] });
   expect((await runCommand(plugin, off, "daily", { user: "1" })).replies).toEqual([en.off]);
   expect(off.kv.size).toBe(0);
+});
+test("credit and debit have independent idempotency namespaces for the same caller key", async () => {
+  const h = createTestContext({ schema, config: { enabled: true }, locales: { en } });
+  const call = {
+    idempotencyKey: "shared-key".repeat(20),
+    caller: {
+      plugin: "rewards",
+      source: "cicord",
+      bot: "community",
+      instance: "rewards",
+      verified: true,
+    },
+  };
+  const credit = () => plugin.actions!.credit!.run(h.ctx, { userId: "1", amount: 100 }, call);
+  expect(await credit()).toEqual({ balance: 100 });
+  expect(await credit()).toEqual({ balance: 100 });
+  expect(await plugin.actions!.debit!.run(h.ctx, { userId: "1", amount: 10 }, call)).toEqual({
+    balance: 90,
+  });
+  expect(h.published.every((p) => String((p.payload as { id: string }).id).length < 128)).toBe(
+    true,
+  );
+});
+test("portal checkout charges a stable purchase once, retains the chosen item and fulfills the role", async () => {
+  const h = createTestContext({
+    schema,
+    config: {
+      enabled: true,
+      shop: [
+        { id: "one", label: "Role one", price: 5, type: "role", role: "winner" },
+        { id: "two", label: "Role two", price: 5, type: "role", role: "winner" },
+      ],
+    },
+    features: ["permanentRole"],
+    members: [{ id: "1" }],
+    roles: { winner: { name: "winner" } },
+    locales: { en },
+  });
+  await transact(h.ctx, "initial", [{ userId: "1", amount: 10 }], "seed");
+  const body = { purchaseId: "cdfad0ee-53c9-45eb-a106-d522cc34ccf6" },
+    buy = (item: string) =>
+      callRoute(plugin, h, "POST /shop/" + item + "/buy", { viewer: "1", body });
+  expect((await callRoute(plugin, h, "POST /shop/one/buy", { body })).status).toBe(401);
+  const paid = await Promise.all([buy("one"), buy("one")]);
+  expect(paid.every((p) => p.status === 200)).toBe(true);
+  expect((await buy("two")).status).toBe(409);
+  expect(h.kv.get("balance:1")).toBe(5);
+  for (const task of h.scheduled) await plugin.tasks![task.task]!(h.ctx, task.payload);
+  expect(h.member("1")!.hasRole("winner")).toBe(true);
+  expect((await buy("one")).body).toMatchObject({ itemId: "one", state: "delivered" });
 });

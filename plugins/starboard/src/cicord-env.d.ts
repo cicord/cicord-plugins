@@ -18,6 +18,13 @@ declare module "@cicord/sdk" {
 export {};
 
 declare module "@cicord/sdk" {
+  interface PublishedEvents {
+    "starred.v1": {
+      authorId: string;
+      messageId: string;
+      stars: number;
+    };
+  }
   interface EventContracts {
     "starboard.starred.v1": {
       authorId: string;

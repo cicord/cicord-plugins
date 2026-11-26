@@ -29,6 +29,7 @@ spec:
     types: ./src/routes.ts       # portal contract (cicord portal typegen)
   delivery: at-least-once
   locales: ./locales
+  assets: ./assets
   optional:
     - {feature: privacyCopies, capabilities: [discord.messages.read]}
     - {feature: pollBonus, capabilities: [events.subscribe]}

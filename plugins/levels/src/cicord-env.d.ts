@@ -66,6 +66,14 @@ declare module "@cicord/sdk" {
 export {};
 
 declare module "@cicord/sdk" {
+  interface PublishedEvents {
+    "levelUp.v1": {
+      level: number;
+      previous: number;
+      userId: string;
+      xp: number;
+    };
+  }
   interface EventContracts {
     "levels.levelUp.v1": {
       level: number;

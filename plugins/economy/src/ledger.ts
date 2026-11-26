@@ -32,6 +32,7 @@ export async function transact(
 ): Promise<number> {
   if (!ctx.config.enabled) throw new Error("off");
   const uid = changes[0]!.userId;
+  const transactionId = crypto.randomUUID();
   const rowId = (user: string) => `ledger:${user}:${id}`;
   for (;;) {
     const existing = await ctx.kv.get<LedgerRow>(rowId(uid));
@@ -82,7 +83,7 @@ export async function transact(
       const after = change.set ? change.amount : before + change.amount;
       if (!Number.isSafeInteger(after) || after < 0) throw new Error("funds");
       const row = {
-        id,
+        id: transactionId,
         userId: change.userId,
         amount: after - before,
         balance: after,
@@ -117,7 +118,7 @@ async function publish(ctx: Context, id: string, changes: Change[]) {
     const row = await ctx.kv.get<LedgerRow>(`ledger:${userId}:${id}`);
     if (row) {
       const { at: _, ...event } = row;
-      await ctx.events.publish("transaction", event, { idempotencyKey: `${id}:${userId}` });
+      await ctx.events.publish("transaction", event, { idempotencyKey: `${row.id}:${userId}` });
     }
   }
 }

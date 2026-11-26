@@ -260,7 +260,7 @@ async function payout(ctx: Context, g: Giveaway, userId: string) {
   for (const c of calls)
     if (c.enabled) {
       if (!ctx.features.enabled(c.feature) || !ctx.plugins.has(c.plugin)) {
-        ctx.log.warn("Reward requires provider and grant", { feature: c.feature });
+        ctx.status.set("reward-" + c.feature, "Reward unavailable: " + c.plugin + "." + c.method);
         continue;
       }
       await ctx.plugins.call(
@@ -425,6 +425,16 @@ async function reconcile(ctx: Context, cursor?: string) {
 }
 export default definePlugin({
   async onStart(ctx) {
+    if (ctx.config.enabled)
+      for (const [required, feature, provider] of requiredProviders(ctx)) {
+        if (required)
+          ctx.status.set(
+            "condition-" + feature,
+            ctx.features.enabled(feature) && ctx.plugins.has(provider)
+              ? null
+              : "Configured condition cannot be verified: " + provider,
+          );
+      }
     if (ctx.config.enabled) await ctx.schedule.after(1, "recover");
   },
   commands: {

@@ -46,10 +46,10 @@ interface Profile {
   avatarUrl: string | null;
 }
 
-export interface Standing {
+export type Standing = {
   userId: string;
   xp: number;
-}
+};
 
 export async function saveProfile(ctx: Context, user: User, displayName: string): Promise<void> {
   const next: Profile = { displayName, avatarUrl: user.avatarUrl ?? null };

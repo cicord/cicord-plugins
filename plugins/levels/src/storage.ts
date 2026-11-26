@@ -1,7 +1,7 @@
 import type { Context, Json } from "@cicord/sdk";
 import { dayKey, dayOf, levelOf, xpKey } from "./levels.ts";
 
-type Receipt = { xp: number; previous: number; level: number };
+type Receipt = { xp: number; previous: number; level: number; eventId?: string };
 const ttl = 30 * 86400;
 export class ConcurrentReaction extends Error {}
 export type ReactionChange = {
@@ -37,7 +37,7 @@ export async function credit(
     const prior = rolling ? 0 : (old?.value ?? 0),
       xp = Math.max(0, absolute ? amount : prior + amount);
     if (!Number.isSafeInteger(xp)) throw new Error("XP exceeds safe integer range");
-    const res = { xp, previous: levelOf(prior), level: levelOf(xp) };
+    const res = { xp, previous: levelOf(prior), level: levelOf(xp), eventId: crypto.randomUUID() };
     const tx = ctx.kv
       .atomic()
       .check(k, old?.version ?? null)

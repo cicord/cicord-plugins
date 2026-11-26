@@ -37,6 +37,15 @@ declare module "@cicord/sdk" {
 export {};
 
 declare module "@cicord/sdk" {
+  interface PublishedEvents {
+    "transaction.v1": {
+      amount: number;
+      balance: number;
+      id: string;
+      reason: string;
+      userId: string;
+    };
+  }
   interface EventContracts {
     "economy.transaction.v1": {
       amount: number;

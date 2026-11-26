@@ -78,6 +78,22 @@ function available(ctx: Context, p: Product) {
     return !!p.role && ctx.features.enabled("temporaryRole") && ctx.plugins.has("member-roles");
   return p.type === "perk" && ctx.features.enabled("perk") && ctx.plugins.has("tickets");
 }
+async function purchase(ctx: Context, uid: string, itemId: string, id: string) {
+  const key = inventoryPrefix(uid) + id;
+  if (!ctx.config.enabled) throw new Error("unavailable");
+  let order = await ctx.kv.get<Order>(key);
+  if (!order) {
+    const item = ctx.config.shop.find((p) => p.id === itemId);
+    if (!item || !available(ctx, item)) throw new Error("unavailable");
+    await transact(ctx, id, [{ userId: uid, amount: -item.price }], "purchase " + item.id, {
+      product: item,
+    });
+    order = await ctx.kv.get<Order>(key);
+  }
+  if (!order || order.item.id !== itemId) throw new Error("purchase_conflict");
+  if (order.state === "pending") await ctx.schedule.after(1, "fulfill", { key });
+  return { orderId: order.id, itemId: order.item.id, state: order.state };
+}
 async function fulfill(ctx: Context, order: Order) {
   if (!ctx.config.enabled || order.state === "delivered") return;
   const { id, userId, item } = order;
@@ -139,7 +155,13 @@ const movement = (direction: number) =>
       return {
         balance: await transact(
           ctx,
-          "action:" + call.idempotencyKey,
+          "action:" +
+            (direction > 0 ? "credit:" : "debit:") +
+            call.caller.bot +
+            "/" +
+            call.caller.instance +
+            ":" +
+            call.idempotencyKey,
           [{ userId: input.userId, amount: direction * input.amount }],
           input.reason ?? (direction === 1 ? "credit" : "debit"),
         ),
@@ -160,6 +182,13 @@ async function pending(ctx: Context, cursor?: string) {
 }
 export default definePlugin({
   async onStart(ctx) {
+    if (ctx.config.enabled) {
+      const missing = ctx.config.shop.filter((p) => !available(ctx, p)).map((p) => p.id);
+      ctx.status.set(
+        "shop-products",
+        missing.length ? "Unavailable shop products: " + missing.join(", ").slice(0, 170) : null,
+      );
+    }
     if (ctx.config.enabled) await ctx.schedule.after(1, "pending");
   },
   schedules: { orders: { cron: "0 * * * *", run: (ctx) => pending(ctx) } },
@@ -230,23 +259,14 @@ export default definePlugin({
       ephemeral: true,
       options: { item: { type: "string", required: true, description: "Product ID" } },
       async run(ctx, i) {
-        const product = ctx.config.shop.find((p) => p.id === i.options.item);
-        if (!ctx.config.enabled || !product || !available(ctx, product))
-          return i.reply(t(ctx, "unavailable"));
         try {
-          await transact(
-            ctx,
-            i.id,
-            [{ userId: i.user.id, amount: -product.price }],
-            "purchase " + product.id,
-            { product },
-          );
+          const order = await purchase(ctx, i.user.id, i.options.item, i.id);
+          await i.reply(t(ctx, order.state === "pending" ? "pending" : "state.delivered"));
         } catch (e) {
-          if (e instanceof Error && e.message === "funds") return i.reply(t(ctx, "funds"));
+          if (e instanceof Error && ["funds", "unavailable"].includes(e.message))
+            return i.reply(t(ctx, e.message));
           throw e;
         }
-        await ctx.schedule.after(1, "fulfill", { key: inventoryPrefix(i.user.id) + i.id });
-        await i.reply(t(ctx, "pending"));
       },
     }),
     inventory: command({
@@ -382,6 +402,27 @@ export default definePlugin({
     "GET /ledger": {
       access: "moderator",
       handler: (ctx, r) => history(ctx, "ledger:", r.query.cursor),
+    },
+    "POST /shop/:id/buy": {
+      access: "member",
+      async handler(ctx, r) {
+        const token = r.body?.purchaseId;
+        if (
+          typeof token !== "string" ||
+          !/^[a-f0-9]{8}-[a-f0-9]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token)
+        )
+          return { status: 400, body: { error: "invalid_purchase_id" } };
+        const uid = r.viewer!.user.id;
+        try {
+          return await purchase(ctx, uid, r.params.id, "portal:" + uid + ":" + token.toLowerCase());
+        } catch (e) {
+          const code = e instanceof Error ? e.message : String(e);
+          if (code === "unavailable") return { status: 404, body: { error: code } };
+          if (code === "funds" || code === "purchase_conflict")
+            return { status: 409, body: { error: code } };
+          throw e;
+        }
+      },
     },
     "GET /shop": {
       access: "member",

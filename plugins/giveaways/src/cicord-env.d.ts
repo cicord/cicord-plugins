@@ -37,6 +37,24 @@ declare module "@cicord/sdk" {
 export {};
 
 declare module "@cicord/sdk" {
+  interface PublishedEvents {
+    "ended.v1": {
+      channelId: string;
+      entrants: number;
+      id: string;
+      messageId: string;
+      prize: string;
+      winners: string[];
+    };
+    "started.v1": {
+      channelId: string;
+      entrants: number;
+      id: string;
+      messageId: string;
+      prize: string;
+      winners: string[];
+    };
+  }
   interface EventContracts {
     "giveaways.ended.v1": {
       channelId: string;

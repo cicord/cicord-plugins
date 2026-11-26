@@ -14,7 +14,6 @@ import {
   authorKey,
   bar,
   cooldownKey,
-  dayOf,
   leaderboard,
   levelOf,
   leaders,
@@ -22,7 +21,6 @@ import {
   progress,
   render,
   saveProfile,
-  standings,
 } from "./levels.ts";
 import {
   credit,
@@ -33,6 +31,7 @@ import {
   ConcurrentReaction,
   type ReactionChange,
 } from "./storage.ts";
+import { collect, prune } from "./recap.ts";
 import type { GrantXp } from "./contracts.ts";
 import type { Routes } from "./routes.ts";
 
@@ -54,13 +53,20 @@ async function award(
   absolute = false,
   reaction?: ReactionChange,
 ): Promise<number> {
-  const { xp, previous, level } = await credit(ctx, userId, amount, id, absolute, reaction);
+  const { xp, previous, level, eventId } = await credit(
+    ctx,
+    userId,
+    amount,
+    id,
+    absolute,
+    reaction,
+  );
   if (level > previous) {
     if (ctx.features.enabled("levelEvents"))
       await ctx.events.publish(
         "levelUp",
         { userId, level, previous, xp },
-        { idempotencyKey: id + ":" + userId },
+        { idempotencyKey: eventId ?? id + ":" + userId },
       );
     // A role transition may be reconciled repeatedly; send at most one public celebration per award.
     const notice = "notice:" + userId + ":" + id;
@@ -307,6 +313,8 @@ export default definePlugin({
       );
   },
   tasks: {
+    "recap-page": collect,
+    "recap-prune": prune,
     "migrate-ranking": migrate,
     "import-csv": importCsv,
     season: seasonBatch,
@@ -386,7 +394,15 @@ export default definePlugin({
     grantXp: action({
       async run(ctx, input: GrantXp, call) {
         if (!ctx.config.enabled) throw new Error("Levels disabled");
-        return { xp: await award(ctx, input.userId, input.amount, {}, call.idempotencyKey) };
+        return {
+          xp: await award(
+            ctx,
+            input.userId,
+            input.amount,
+            {},
+            "interop:" + call.caller.bot + "/" + call.caller.instance + ":" + call.idempotencyKey,
+          ),
+        };
       },
     }),
   },
@@ -525,41 +541,49 @@ export default definePlugin({
         if (ctx.config.rankCard.enabled && ctx.features.enabled("rankCard")) {
           const p = progress(xp),
             theme = ctx.config.rankCard;
-          const photo = await ctx.render.image({
-            width: 550,
-            height: 150,
-            background: theme.asset ? { asset: theme.asset } : theme.background,
-            layers: [
-              {
-                type: "text",
-                x: 24,
-                y: 40,
-                size: 28,
-                color: theme.foreground,
-                text: name,
-                maxWidth: 500,
-                ellipsis: true,
-              },
-              {
-                type: "text",
-                x: 24,
-                y: 82,
-                size: 22,
-                color: theme.foreground,
-                text: xp + " XP · #" + (rank ?? "—"),
-              },
-              {
-                type: "progress",
-                x: 24,
-                y: 110,
-                width: 500,
-                height: 12,
-                color: theme.foreground,
-                value: p.current / p.needed,
-              },
-            ],
-          });
-          files = [{ name: "rank.png", ...photo }];
+          try {
+            const photo = await ctx.render.image({
+              width: 550,
+              height: 150,
+              background: theme.asset ? { asset: theme.asset } : theme.background,
+              layers: [
+                {
+                  type: "text",
+                  x: 24,
+                  y: 40,
+                  size: 28,
+                  color: theme.foreground,
+                  text: name,
+                  maxWidth: 500,
+                  ellipsis: true,
+                },
+                {
+                  type: "text",
+                  x: 24,
+                  y: 82,
+                  size: 22,
+                  color: theme.foreground,
+                  text: xp + " XP · #" + (rank ?? "—"),
+                },
+                {
+                  type: "progress",
+                  x: 24,
+                  y: 110,
+                  width: 500,
+                  height: 12,
+                  color: theme.foreground,
+                  value: p.current / p.needed,
+                },
+              ],
+            });
+            files = [{ name: "rank.png", ...photo }];
+            ctx.status.set("rank-card", null);
+          } catch (error) {
+            ctx.status.set(
+              "rank-card",
+              "Image unavailable; text rank cards active: " + String(error).slice(0, 160),
+            );
+          }
         }
         await interaction.reply({
           ...(files ? { files } : {}),
@@ -615,43 +639,7 @@ export default definePlugin({
     }),
   },
 
-  schedules: {
-    /** Yesterday's most active members, every day at 09:00 UTC. */
-    recap: {
-      cron: "0 9 * * *",
-      async run(ctx) {
-        if (!ctx.config.enabled) return;
-        const yesterday = dayOf(new Date(Date.now() - 24 * 3600 * 1000));
-        const prefix = `day:${yesterday}:`;
-        const top = await standings(ctx, prefix);
-        // Daily counters are only needed for this recap.
-        const { items } = await ctx.kv.list({ prefix: "day:", limit: 1000 });
-        for (const { key } of items) if (key.slice(4, 14) <= yesterday) await ctx.kv.delete(key);
-
-        const channel = ctx.config.recap.channel ?? ctx.config.announce.channel;
-        if (!ctx.config.recap.enabled || !channel || top.length === 0) return;
-        const lines = top
-          .slice(0, ctx.config.recap.top)
-          .map((s, i) => `${["🥇", "🥈", "🥉"][i] ?? `#${i + 1}`} <@${s.userId}> — +${s.xp} XP`);
-        const posted = await ctx.server.channel(channel).send({
-          embeds: [
-            {
-              title: tr(ctx, "recap", { date: yesterday }),
-              description: lines.join("\n"),
-              color: "#f1c40f",
-            },
-          ],
-          allowedMentions: { users: false },
-        });
-        for (const person of top.slice(0, ctx.config.recap.top))
-          await ctx.kv.set("copy:" + person.userId + ":" + posted.id, {
-            channelId: posted.channel.id,
-            messageId: posted.id,
-            kind: "recap",
-          });
-      },
-    },
-  },
+  schedules: { recap: { cron: "0 9 * * *", run: (ctx) => collect(ctx) } },
 
   subscriptions: {
     /** Bonus XP for every voter of a closed poll (plugin polls). */
