@@ -15,5 +15,9 @@ export type PollClosedV2 = Omit<PollClosedV1, "voters"> & {
   voterCount: number;
   votersTruncated?: boolean;
 };
-export type VotersInput = { pollId: string; cursor?: string };
+export type VotersInput = {
+  pollId: string;
+  cursor?: string;
+  publisher?: { bot: string; instance: string };
+};
 export type VotersPage = { userIds: string[]; cursor?: string };

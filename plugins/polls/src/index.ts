@@ -31,6 +31,7 @@ import {
   voteKey,
   type Poll,
 } from "./polls.ts";
+import type { VotersInput } from "./contracts.ts";
 import type { Routes } from "./routes.ts";
 
 const HOUR = 3_600_000;
@@ -329,7 +330,15 @@ export default definePlugin({
   },
   queries: {
     voters: query({
-      async run(ctx, input: { pollId: string; cursor?: string }, call) {
+      async run(ctx, input: VotersInput, call) {
+        if (
+          input.publisher &&
+          (input.publisher.bot !== ctx.bot.key || input.publisher.instance !== ctx.plugin.instance)
+        )
+          throw new InteropError(
+            "not_found",
+            "The event originated at another polls installation.",
+          );
         if (call.onBehalfOf?.access === "scoped")
           throw new InteropError("denied", "A case-scoped session cannot read ballots.");
         const p = await getPoll(ctx, input.pollId);

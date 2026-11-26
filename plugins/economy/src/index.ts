@@ -122,7 +122,12 @@ type Rule = "level" | "birthday" | "star" | "suggestion" | "poll" | "attendee" |
 const earn = (ctx: Context, id: string, uid: string, reward: number, reason: string) =>
   transact(ctx, id, [{ userId: uid, amount: reward }], reason, { earned: true });
 const handler =
-  (rule: Rule, field: string) => async (ctx: Context, input: Json, meta?: { id: string }) => {
+  (rule: Rule, field: string) =>
+  async (
+    ctx: Context,
+    input: Json,
+    meta?: { id: string; publisher?: { bot: string; instance: string } },
+  ) => {
     const data = input as Record<string, Json>,
       rate = ctx.config.earnings[rule];
     if (
@@ -136,7 +141,13 @@ const handler =
     if (!origin) throw new Error("Missing event receipt");
     if (rule === "poll" && data.votersTruncated) {
       if (!ctx.features.enabled("pollPages")) throw new Error("Missing polls.voters grant");
-      await ctx.schedule.after(1, "voters", { origin, pollId: data.pollId!, rate });
+      if (!meta?.publisher) throw new Error("Missing poll publisher for voter rewards");
+      await ctx.schedule.after(1, "voters", {
+        origin,
+        pollId: data.pollId!,
+        rate,
+        publisher: { bot: meta.publisher.bot, instance: meta.publisher.instance },
+      });
       return;
     }
     const targets = data[field],
@@ -364,9 +375,17 @@ export default definePlugin({
     },
     async voters(ctx, p) {
       if (!ctx.config.enabled) return;
-      const v = p as { origin: string; pollId: string; cursor?: string; rate: number };
+      const v = p as {
+        origin: string;
+        pollId: string;
+        cursor?: string;
+        publisher?: { bot: string; instance: string };
+        rate: number;
+      };
+      if (!v.publisher) throw new Error("Missing poll publisher for voter rewards");
       const page = (await ctx.plugins.query("polls", "voters", {
         pollId: v.pollId,
+        publisher: v.publisher,
         ...(v.cursor ? { cursor: v.cursor } : {}),
       })) as { userIds: string[]; cursor?: string };
       for (let n = 0; n < page.userIds.length; n += 50)

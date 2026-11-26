@@ -325,9 +325,17 @@ export default definePlugin({
     },
     async "voter-page"(ctx, p) {
       if (!ctx.config.enabled) return;
-      const v = p as { pollId: string; cursor?: string; xp: number; origin: string };
+      const v = p as {
+        pollId: string;
+        cursor?: string;
+        publisher?: { bot: string; instance: string };
+        xp: number;
+        origin: string;
+      };
+      if (!v.publisher) throw new Error("Missing poll publisher for voter rewards");
       const r = (await ctx.plugins.query("polls", "voters", {
         pollId: v.pollId,
+        publisher: v.publisher,
         ...(v.cursor ? { cursor: v.cursor } : {}),
       })) as { userIds: string[]; cursor?: string };
       await batch(ctx, r.userIds, v.xp, v.origin);
@@ -653,10 +661,12 @@ export default definePlugin({
       const e = payload as { pollId: string; voters?: string[]; votersTruncated?: boolean };
       const origin = meta?.id ?? "legacy-poll:" + e.pollId;
       if (e.votersTruncated) {
+        if (!meta?.publisher) throw new Error("Missing poll publisher for voter rewards");
         if (!ctx.features.enabled("pollPages")) throw new Error("Missing polls.voters grant");
         await ctx.schedule.after(1, "voter-page", {
           origin,
           pollId: e.pollId,
+          publisher: { bot: meta.publisher.bot, instance: meta.publisher.instance },
           xp: ctx.config.pollBonusXp,
         });
       } else if (e.voters) await batch(ctx, e.voters, ctx.config.pollBonusXp, origin);

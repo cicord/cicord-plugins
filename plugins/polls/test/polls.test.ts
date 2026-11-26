@@ -449,6 +449,13 @@ test("native mode refuses incompatible options and publishes the Discord tally",
 
 test("delegated voter queries and the public results route recheck source visibility", async () => {
   const h = setup();
+  await expect(
+    plugin.queries!.voters!.run(
+      h.ctx,
+      { pollId: "1", publisher: { bot: "other", instance: h.ctx.plugin.instance } },
+      caller,
+    ),
+  ).rejects.toMatchObject({ code: "not_found" });
   await start(h);
   await plugin.tasks!.close!(h.ctx, { id: "1" });
   const denied = { ...caller, onBehalfOf: { userId: "unavailable", access: "admin" as const } };
