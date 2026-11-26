@@ -21,6 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       plugins: ${{ steps.list.outputs.plugins }}
+      core-ref: ${{ (github.ref_name == 'feature/0.2.0' || github.base_ref == 'feature/0.2.0' || (github.head_ref == 'feature/0.2.0' && github.event.pull_request.head.repo.full_name == github.repository)) && '8c2f477fae8b5e3ec321c744353ea130e6e4d3f6' || vars.CICORD_VERSION || 'main' }}
+      feature-build: ${{ github.ref_name == 'feature/0.2.0' || github.base_ref == 'feature/0.2.0' || (github.head_ref == 'feature/0.2.0' && github.event.pull_request.head.repo.full_name == github.repository) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -42,8 +44,8 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-cicord
         with:
-          version: ${{ (github.ref_name == 'feature/0.2.0' || github.base_ref == 'feature/0.2.0' || (github.head_ref == 'feature/0.2.0' && github.event.pull_request.head.repo.full_name == github.repository)) && '8c2f477fae8b5e3ec321c744353ea130e6e4d3f6' || vars.CICORD_VERSION || 'main' }}
-          feature-build: ${{ github.ref_name == 'feature/0.2.0' || github.base_ref == 'feature/0.2.0' || (github.head_ref == 'feature/0.2.0' && github.event.pull_request.head.repo.full_name == github.repository) }}
+          version: ${{ needs.list.outputs.core-ref }}
+          feature-build: ${{ needs.list.outputs.feature-build }}
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -56,6 +58,7 @@ jobs:
         run: bash scripts/check-plugin.sh "plugins/$PLUGIN"
 
   index:
+    needs: list
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -63,8 +66,8 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-cicord
         with:
-          version: ${{ (github.ref_name == 'feature/0.2.0' || github.base_ref == 'feature/0.2.0' || (github.head_ref == 'feature/0.2.0' && github.event.pull_request.head.repo.full_name == github.repository)) && '8c2f477fae8b5e3ec321c744353ea130e6e4d3f6' || vars.CICORD_VERSION || 'main' }}
-          feature-build: ${{ github.ref_name == 'feature/0.2.0' || github.base_ref == 'feature/0.2.0' || (github.head_ref == 'feature/0.2.0' && github.event.pull_request.head.repo.full_name == github.repository) }}
+          version: ${{ needs.list.outputs.core-ref }}
+          feature-build: ${{ needs.list.outputs.feature-build }}
       - name: Check index.yaml
         env:
           EVENT: ${{ github.event_name }}
@@ -75,3 +78,45 @@ jobs:
           else
             bash scripts/check-index.sh
           fi
+
+  persistence:
+    needs: list
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:19
+        env:
+          POSTGRES_PASSWORD: ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: cicord/cicord
+          ref: ${{ needs.list.outputs.core-ref }}
+          path: .cicord-src
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5
+        with:
+          go-version-file: .cicord-src/go.mod
+          cache-dependency-path: .cicord-src/go.sum
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version-file: .node-version
+      - name: Verify published migrations on SQLite and PostgreSQL
+        env:
+          CICORD_SOURCE: ${{ github.workspace }}/.cicord-src
+          CICORD_TEST_POSTGRES_URL: postgres://postgres:ci-only@localhost:5432/postgres?sslmode=disable
+        run: |
+          set -euo pipefail
+          for test in plugins/*/test/persistence/run.mjs; do
+            node "$test"
+          done

@@ -6,7 +6,7 @@ accepted by review, in one repository, with a **signed** index.
 
 ## Plugin catalogue
 
-Descriptions cover the source on this branch. Published versions come from the signed registry. Bundled versions ship in the core catalogue for offline installs. A dash means that distribution has no entry for the plugin.
+Descriptions cover the source on this branch. Published versions come from the signed registry. Bundled versions identify the offline copies in the matching core source tree. Released binaries carry the versions embedded at build time. A dash means that distribution has no entry for the plugin.
 
 | Plugin | What it does | Published | Bundled |
 |---|---|---|---|

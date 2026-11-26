@@ -7,7 +7,7 @@ metadata:
   description: Server points, daily claims, transfers and a community rewards shop.
   license: Apache-2.0
 spec:
-  engine: ">=0.2.0"
+  engine: ">=0.2.0-0"
   entry: ./src/index.ts
   config: {schema: ./config.schema.json}
   locales: ./locales

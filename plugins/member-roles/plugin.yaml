@@ -8,7 +8,7 @@ metadata:
   license: Apache-2.0
   keywords: [roles, membership, boosts]
 spec:
-  engine: ">=0.2.0"
+  engine: ">=0.2.0-0"
   entry: ./src/index.ts
   config: {schema: ./config.schema.json}
   locales: ./locales
