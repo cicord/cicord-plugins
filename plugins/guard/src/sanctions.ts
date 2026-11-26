@@ -23,7 +23,14 @@ export async function sanction(
     await ctx.plugins.call(
       "moderation",
       "sanction",
-      { userId: member.id, action: action.type, reason, durationMinutes: action.minutes },
+      {
+        userId: member.id,
+        action: action.type,
+        reason,
+        ...(action.type === "timeout" || action.type === "quarantine"
+          ? { durationMinutes: action.minutes }
+          : {}),
+      },
       { idempotencyKey: key },
     );
     return;

@@ -4,6 +4,7 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 import schema from "../config.schema.json" with { type: "json" };
 import plugin from "../src/index.ts";
 import { open, quiet } from "../src/raid.ts";
+import { sanction } from "../src/sanctions.ts";
 import { linksIn } from "../src/rules.ts";
 const setup = (
   config = {},
@@ -204,4 +205,26 @@ test("an uncertain provider response records the violation without a direct time
   expect(calls).toEqual(["guard:links:lost"]);
   expect(t.moderation).toEqual([]);
   expect(t.kv.get("violations:user")).toMatchObject([{ status: "needs_review" }]);
+});
+
+test("sanctions send a duration only for timeout and quarantine", async () => {
+  const t = setup({}, ["sanctions"]);
+  const ctx: Context = { ...t.ctx, plugins: { ...t.ctx.plugins, has: () => true } };
+  const recorded = new Error("request recorded");
+  const call = vi.spyOn(ctx.plugins, "call").mockRejectedValue(recorded);
+  const member = t.member("user")!;
+  for (const type of ["ban", "ban", "kick", "warn", "timeout", "quarantine"] as const) {
+    const minutes = call.mock.calls.length === 0 ? 0 : 10;
+    await expect(
+      sanction(ctx, member, { type, minutes }, "review", "fixture-" + call.mock.calls.length),
+    ).rejects.toBe(recorded);
+  }
+  expect(call.mock.calls.map(([, , input]) => input)).toEqual(
+    ["ban", "ban", "kick", "warn", "timeout", "quarantine"].map((action) => ({
+      userId: "user",
+      action,
+      reason: "review",
+      ...(["timeout", "quarantine"].includes(action) ? { durationMinutes: 10 } : {}),
+    })),
+  );
 });
