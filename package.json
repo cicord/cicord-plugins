@@ -9,7 +9,7 @@
     "check": "bash scripts/check-all.sh"
   },
   "devDependencies": {
-    "@cicord/sdk": "file:vendor/cicord-sdk-0.2.0-rc.1-e1aca42c8d0d.tgz",
+    "@cicord/sdk": "file:vendor/cicord-sdk-0.2.0-rc.1-e6584fc13726.tgz",
     "@types/node": "^26.6.6",
     "typescript": "^7.0.2",
     "vite": "npm:@voidzero-dev/vite-plus-core@8.3.8000",

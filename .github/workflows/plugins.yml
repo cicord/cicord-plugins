@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       plugins: ${{ steps.list.outputs.plugins }}
-      core-ref: ${{ (github.ref_name == 'feature/0.2.0' || github.base_ref == 'feature/0.2.0' || (github.head_ref == 'feature/0.2.0' && github.event.pull_request.head.repo.full_name == github.repository)) && 'e1aca42c8d0d1e7cd119b5d096414bcb77f6e974' || vars.CICORD_VERSION || 'main' }}
+      core-ref: ${{ (github.ref_name == 'feature/0.2.0' || github.base_ref == 'feature/0.2.0' || (github.head_ref == 'feature/0.2.0' && github.event.pull_request.head.repo.full_name == github.repository)) && 'e6584fc1372619eedcae2407b27db48c44e4a4fd' || vars.CICORD_VERSION || 'main' }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
