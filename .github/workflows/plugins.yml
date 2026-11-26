@@ -102,6 +102,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          # The mixed-version fixture reads the immutable, published levels 0.1.0 source.
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -125,3 +127,8 @@ jobs:
           for test in plugins/*/test/persistence/run.mjs; do
             node "$test"
           done
+      - name: Verify mixed-version poll rewards across a runtime restart
+        env:
+          CICORD_SOURCE: ${{ github.workspace }}/.cicord-src
+          GOMAXPROCS: 2
+        run: node scripts/interop/run.mjs
