@@ -3,13 +3,13 @@ apiVersion: cicord.dev/v1alpha1
 kind: Plugin
 metadata:
   name: voice-rooms
-  version: 0.1.0
+  version: 0.1.1
   displayName: Voice rooms
   description: 'Voice channels on demand. Joining a hub such as "➕ Create a channel" gives the member a voice channel of their own, deleted once empty. Several hubs (name, category, limit, allowed roles). Owners manage their room with /voice (rename, limit, lock, permit, kick, transfer, claim).'
   license: Apache-2.0
   keywords: [voice, channels, rooms, join-to-create]
 spec:
-  engine: ">=0.1.9"
+  engine: ">=0.1.10"
   entry: ./src/index.ts
   capabilities:
     - discord.channels.read     # resolve the hubs
