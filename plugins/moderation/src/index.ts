@@ -284,7 +284,10 @@ export default definePlugin({
         guard ? "guard handles duplicates" : "disabled in configuration",
       );
     if (audit) ctx.features.report("legacyMemberLog", false, "audit-log handles member events");
-    await migrateCases(ctx);
+    // Startup must finish before bounded migration work starts. A restart may
+    // enqueue another wakeup; the stored cursor and case indexes tolerate replay.
+    if (((await ctx.kv.get<number>("meta:schema")) ?? 1) < 3)
+      await ctx.schedule.after(0, "migrateCases");
   },
   privacy,
   contextMenus: {

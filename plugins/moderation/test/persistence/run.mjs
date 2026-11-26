@@ -10,10 +10,14 @@ const dir = await mkdtemp(join(tmpdir(), "moderation-restore-"));
 try {
   const overlay = join(dir, "overlay.json");
   const fixture = fileURLToPath(new URL("ban_restore_test.go", import.meta.url));
+  const migration = fileURLToPath(new URL("migration_test.go", import.meta.url));
   await writeFile(
     overlay,
     JSON.stringify({
-      Replace: { [resolve(core, "internal/runtime/registry_ban_restore_test.go")]: fixture },
+      Replace: {
+        [resolve(core, "internal/runtime/registry_ban_restore_test.go")]: fixture,
+        [resolve(core, "internal/plugin/registry_moderation_migration_test.go")]: migration,
+      },
     }),
   );
   const result = execFileSync(
@@ -23,8 +27,9 @@ try {
       "-overlay",
       overlay,
       "./internal/runtime",
+      "./internal/plugin",
       "-run",
-      "^TestRegistryBanEraseAndRestore$",
+      "^TestRegistry(BanEraseAndRestore|ModerationCaseMigration)$",
       "-count=1",
       "-v",
     ],
@@ -39,8 +44,10 @@ try {
     },
   );
   process.stdout.write(result);
-  if (!result.includes("--- PASS: TestRegistryBanEraseAndRestore ("))
-    throw new Error("The required restore case did not run");
+  if(process.env.CICORD_TEST_POSTGRES_URL && !result.includes("--- PASS: TestRegistryModerationCaseMigration/Postgres ("))throw new Error("The required PostgreSQL migration case did not run");
+  for (const name of ["TestRegistryBanEraseAndRestore", "TestRegistryModerationCaseMigration"])
+    if (!result.includes("--- PASS: " + name + " ("))
+      throw new Error("Missing persistence case: " + name);
 } finally {
   await rm(dir, { recursive: true, force: true });
 }

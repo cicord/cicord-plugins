@@ -98,3 +98,5 @@ Pre-upgrade notices without a reference or delivery marker may need manual
 removal. New external webhook notifications contain only the case number and
 action. Older messages already delivered to another service remain under that
 service's retention policy.
+
+On upgrade, startup enqueues a durable migration when the stored schema is older than version 3. Each delivery processes up to 25 legacy cases. Restarting resumes from the saved cursor, and a repeated delivery preserves staff edits and moderator totals.
