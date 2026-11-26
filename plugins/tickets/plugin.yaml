@@ -48,6 +48,7 @@ spec:
     records:
       - {name: tickets, policy: anonymize, description: Ticket participants and their authored content including staff notes and portal responses., retention: While open and 1 to 730 days after closing.}
       - {name: transcripts, policy: anonymize, description: Authored transcript lines and tracked Discord copies., retention: Configurable between 1 and 365 days.}
+      - {name: relays, policy: erase, description: Pending private texts and durable receipts for bot-authored copies.}
       - {name: indexes, policy: erase, description: Member lookup keys and open-ticket indexes.}
   config:
     schema: ./config.schema.json

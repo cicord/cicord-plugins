@@ -1,3 +1,4 @@
+import { relay } from "./relay.ts";
 import english from "../locales/en.json";
 import { ordered } from "./ordered.ts";
 import * as sdk from "@cicord/sdk";
@@ -27,7 +28,6 @@ import {
   relayAllowed,
   publish,
   allTickets,
-  ticketChannel,
   addEvent,
   channelKey,
   closeTicket,
@@ -44,6 +44,8 @@ import {
   notice,
   numberOf,
   openTicket,
+  requestTicket,
+  provisionTicket,
   OpenLimit,
   openTickets,
   panelMessage,
@@ -141,6 +143,11 @@ const isPriority = (v: unknown): v is Priority => PRIORITIES.includes(v as Prior
 const USER_ID = /^\d{1,20}$/;
 const PRIORITY_LIST = PRIORITIES.join(", ");
 
+async function mayReadModmail(ctx: Context, t: Ticket, viewer?: Member) {
+  if (!viewer || !mayRead(ctx, t, viewer, true)) return false;
+  return t.status === "closed" ? mayReadTranscript(ctx, t, viewer) : relayAllowed(ctx, t, viewer);
+}
+
 async function staffTicket(ctx: Context, id: string, viewer: Viewer) {
   const t = await ticketById(ctx, id);
   return failed(t) || !mayRead(ctx, t, viewer?.member)
@@ -168,6 +175,19 @@ async function rate(ctx: Context, t: Ticket, userId: string, rating: number) {
 export default definePlugin({
   privacy: { export: privacy.export, erase: ordered(privacy.erase) },
   schedules: { maintenance: { cron: "* * * * *", run: ordered(maintenance) } },
+  tasks: {
+    provision: ordered(async (ctx, payload) => {
+      if (
+        !payload ||
+        typeof payload !== "object" ||
+        Array.isArray(payload) ||
+        typeof payload.number !== "number"
+      )
+        return;
+      const t = await getTicket(ctx, payload.number);
+      if (t) await provisionTicket(ctx, t);
+    }),
+  },
   queries: {
     openFor: query({
       async run(ctx, input, call) {
@@ -252,7 +272,10 @@ export default definePlugin({
         );
         if (previous) {
           if (previous.author.id !== data.userId) throw new Error("Idempotency key already used");
-          return { id: previous.id, channelId: previous.channelId };
+          return {
+            id: previous.id,
+            ...(previous.channelId ? { channelId: previous.channelId } : {}),
+          };
         }
         const member = await ctx.server.member(data.userId);
         if ((await openTickets(ctx, data.userId)).length >= ctx.config.maxOpenPerMember)
@@ -268,7 +291,7 @@ export default definePlugin({
           data.caseNumber && call.caller.plugin === "moderation"
             ? { number: data.caseNumber, bot: call.caller.bot, instance: call.caller.instance }
             : undefined;
-        const { ticket } = await openTicket(ctx, {
+        return requestTicket(ctx, {
           user,
           member,
           appeal,
@@ -279,7 +302,6 @@ export default definePlugin({
           label: null,
           type: type.key,
         });
-        return { id: ticket.id, channelId: ticket.channelId };
       }),
     }),
   },
@@ -545,66 +567,74 @@ export default definePlugin({
       for (const id of open) {
         const t = await getTicket(ctx, id);
         if (t?.source !== "modmail" || t.status !== "open" || t.author.id !== member.id) continue;
-        const channel = ticketChannel(ctx, t);
-        if (!channel) return;
-        if (!(await relayAllowed(ctx, t, member))) {
-          ctx.log.warn("Modmail withheld after a permission change", { ticket: t.id });
+        const delivered = await relay(
+          ctx,
+          t,
+          "inbound",
+          person(m.author, member),
+          (text || ctx.i18n.t("attachment")).slice(0, 2000),
+          m.id,
+          m.createdAt,
+        );
+        if (!delivered) {
+          ctx.log.warn("Modmail withheld after permission change", { ticket: t.id });
           await member.send(ctx.i18n.t("relayDenied"));
-          return;
         }
-        const copy = await channel.send({
-          content: (text || ctx.i18n.t("attachment")).slice(0, 2000),
-          allowedMentions: { users: false, roles: false, everyone: false },
-        });
-        t.copies = [...(t.copies ?? []), { userId: member.id, messageId: copy.id }];
-        await receivedReply(ctx, t, m.createdAt, false, true);
-        await ctx.kv.increment(activityKey(id));
         return;
       }
       if (open.length >= ctx.config.maxOpenPerMember) {
         await member.send(ctx.i18n.t("openLimit"));
         return;
       }
-      await openTicket(ctx, {
+      const { ticket } = await openTicket(ctx, {
         user: m.author,
         member,
         type: type.key,
         source: "modmail",
         subject: ctx.i18n.t("modmail"),
-        description: text.slice(0, 4000),
+        description: "",
         label: null,
       });
+      const delivered = await relay(
+        ctx,
+        ticket,
+        "inbound",
+        person(m.author, member),
+        (text || ctx.i18n.t("attachment")).slice(0, 2000),
+        m.id,
+        m.createdAt,
+      );
+      if (!delivered) await member.send(ctx.i18n.t("relayDenied"));
     }),
     /** Activity of ticket channels: who and when, never what (the content is not stored). */
     messageCreate: ordered(async (ctx, message) => {
       if (message.author.bot) return;
       const n = await ctx.kv.get<number>(channelKey(message.channel.id));
       if (n === undefined) return;
-      await ctx.kv.increment(activityKey(n));
       const t = await getTicket(ctx, n);
       if (!t || t.status !== "open") return;
       const staff = isStaff(ctx, message.member, t.type) && message.author.id !== t.author.id;
       if (t.source === "modmail" && staff) {
-        const member = await ctx.server.member(t.author.id);
-        if (member) {
-          const dm = await member.send(
-            {
-              content:
-                [message.content, ...message.attachments.map((a) => a.url)]
-                  .filter(Boolean)
-                  .join("\n")
-                  .slice(0, 2000) || ctx.i18n.t("attachment"),
-              allowedMentions: { users: false, roles: false, everyone: false },
-            },
-            { retractable: true },
-          );
-          t.directCopies = [
-            ...(t.directCopies ?? []),
-            { messageId: dm.id, authorId: message.author.id, sourceMessageId: message.id },
-          ];
-        }
+        const body =
+          [message.content, ...message.attachments.map((a) => a.url)]
+            .filter(Boolean)
+            .join("\n")
+            .slice(0, 2000) || ctx.i18n.t("attachment");
+        const delivered = await relay(
+          ctx,
+          t,
+          "outbound",
+          person(message.author, message.member),
+          body,
+          message.id,
+          message.createdAt,
+        );
+        if (!delivered)
+          ctx.log.warn("Outbound modmail withheld after permission change", { ticket: t.id });
+        return;
       }
-      await receivedReply(ctx, t, message.createdAt, staff, t.source === "modmail" && staff);
+      await ctx.kv.increment(activityKey(n));
+      await receivedReply(ctx, t, message.createdAt, staff);
     }),
   },
 
@@ -730,6 +760,8 @@ export default definePlugin({
           !mayRead(ctx, ticket, viewer.member, true)
         )
           return fail(404, "not_found", "no such ticket");
+        if (ticket.source === "modmail" && !(await mayReadModmail(ctx, ticket, viewer.member)))
+          return fail(404, "not_found", "No verified modmail source");
         return myDetail(ctx, ticket);
       },
     },
@@ -820,6 +852,11 @@ export default definePlugin({
           !(await mayReadTranscript(ctx, ticket, request.viewer?.member))
         )
           return fail(404, "not_found", "No verified transcript source");
+        if (
+          ticket.source === "modmail" &&
+          !(await mayReadModmail(ctx, ticket, request.viewer?.member))
+        )
+          return fail(404, "not_found", "No verified modmail source");
         return staffDetail(ctx, ticket);
       },
     },
@@ -958,7 +995,10 @@ export default definePlugin({
         if (ticket.status !== "open") return fail(409, "closed", "the ticket is closed");
         const channel = await liveChannel(ctx, ticket);
         if (!channel) return fail(409, "closed", "the ticket channel no longer exists");
-        return { status: 201, body: { id: await postReply(ctx, ticket, channel, me, content) } };
+        const id = await postReply(ctx, ticket, channel, me, content);
+        return id
+          ? { status: 201, body: { id } }
+          : fail(403, "forbidden", "Cannot verify private message recipients");
       }),
     },
   }),

@@ -575,8 +575,7 @@ describe("staff routes", () => {
     // a closed ticket has no channel any more
     await route(t, "POST /tickets/1/close", { viewer: "2", body: { reason: "Fixed" } });
     // A deleted source cannot authorize access to its captured participants or messages.
-    expect((await route(t,"GET /tickets/1",{viewer:"2"})).status).toBe(404);
-
+    expect((await route(t, "GET /tickets/1", { viewer: "2" })).status).toBe(404);
   });
 
   test("GET /staff lists the staff roles' members, the owner and the viewer", async () => {
@@ -792,14 +791,11 @@ describe("staff routes", () => {
     expect(res.status).toBe(201);
     const id = (res.body as { id: string }).id;
     const post = t.sent.at(-1)!;
-    expect(post).toMatchObject({
-      id,
-      to: channel.id,
-      message: {
-        embeds: [
-          { description: "Restart it with @everyone <@1>", footer: { text: "— sam (via portal)" } },
-        ],
-      },
+    expect(post).toMatchObject({ id, to: channel.id, message: { content: en.relayPending } });
+    expect(t.edits.find((e) => e.id === id)?.message).toMatchObject({
+      embeds: [
+        { description: "Restart it with @everyone <@1>", footer: { text: "— sam (via portal)" } },
+      ],
       allowedMentions: { users: false, roles: false, everyone: false },
     });
     expect(t.kv.get("ticket:00000001")).toMatchObject({
@@ -1143,7 +1139,7 @@ describe("ticket types and modmail", () => {
       expect.objectContaining({ label: "Order number", required: true }),
     );
     const dm = (user: string, content: string) => ({
-      ...messageIn(t, t.channel("help-desk")!, user),
+      ...messageIn(t, t.channel("help-desk")!, user, content),
       content,
     });
     const started = Date.now();
@@ -1154,7 +1150,7 @@ describe("ticket types and modmail", () => {
     expect(
       t.sent
         .filter((s) => s.to === channel.id)
-        .map((s) => JSON.stringify(s.message))
+        .map((s) => t.message(s.id)?.content)
         .join(" "),
     ).toContain("One more detail");
     const welcome = t.sent.find((s) => s.to === channel.id)!;
@@ -1163,12 +1159,12 @@ describe("ticket types and modmail", () => {
     await plugin.events!.messageCreate!(t.ctx, { ...dm("5", "wrong staff"), channel });
     expect(t.sent.some((s) => s.to === "dm:1")).toBe(false);
     await plugin.events!.messageCreate!(t.ctx, { ...dm("2", "Staff response"), channel });
-    expect(t.sent.find((s) => s.to === "dm:1")?.message).toMatchObject({
+    expect(t.message(t.sent.find((s) => s.to === "dm:1")!.id)).toMatchObject({
       content: "Staff response",
     });
     expect(Date.now() - started).toBeLessThan(2000);
     await route(t, "POST /tickets/1/messages", { viewer: "2", body: { content: "Portal reply" } });
-    expect(t.sent.filter((s) => s.to === "dm:1").at(-1)?.message).toMatchObject({
+    expect(t.message(t.sent.filter((s) => s.to === "dm:1").at(-1)!.id)).toMatchObject({
       content: "Portal reply",
     });
   });
@@ -1227,6 +1223,10 @@ test("concurrent opens share the limit, and action retries share the original ti
   const action = plugin.actions!.open!;
   const first = await action.run(t.ctx, data, call);
   expect(await action.run(t.ctx, data, call)).toEqual(first);
+  expect(t.createdChannels).toHaveLength(1);
+  expect(first).toEqual({ id: "2" });
+  await plugin.tasks!.provision!(t.ctx, { number: 2 });
+  await plugin.tasks!.provision!(t.ctx, { number: 2 });
   expect(t.createdChannels).toHaveLength(2);
   await expect(action.run(t.ctx, { ...data, caseNumber: 71 }, call)).rejects.toThrow("scope");
   expect(await plugin.queries!.openFor!.run(t.ctx, { userId: "3" }, call)).toEqual({ tickets: [] });
@@ -1241,7 +1241,10 @@ test("DM retraction removes the erased staff writer's relays and retains other s
     ["2", "Sam reply"],
     ["4", "Max reply"],
   ] as const)
-    await plugin.events!.messageCreate!(t.ctx, { ...messageIn(t, channel, id), content });
+    await plugin.events!.messageCreate!(t.ctx, {
+      ...messageIn(t, channel, id, id + "message"),
+      content,
+    });
   const sent = t.sent.filter((m) => m.to === "dm:1");
   expect(sent).toHaveLength(2);
   const ctx = {
@@ -1577,6 +1580,7 @@ test("incoming DM text and attachments are withheld after an extra member gains 
   const sensitive = "https://cdn.discordapp.com/attachments/private/file.png";
   await plugin.events!.directMessage!(t.ctx, {
     ...original,
+    id: "new-private-dm",
     content: "Private follow-up",
     member,
     attachments: [{ filename: "private.png", url: sensitive }] as unknown as Message["attachments"],
@@ -1585,4 +1589,266 @@ test("incoming DM text and attachments are withheld after an extra member gains 
   expect(JSON.stringify(posts)).not.toContain("Private follow-up");
   expect(JSON.stringify(posts)).not.toContain(sensitive);
   expect(t.sent.at(-1)).toMatchObject({ to: "dm:1", message: en.relayDenied });
+});
+
+test("outbound modmail rechecks each recipient's channel history access, including portal replies", async () => {
+  const t = setup({ types: [{ key: "help", name: "Help", staffRoles: ["support"] }] });
+  for (const id of ["1", "3"])
+    await plugin.events!.directMessage!(t.ctx, {
+      ...messageIn(t, t.channel("help-desk")!, id),
+      content: "Open private conversation",
+    });
+  const first = t.createdChannels[0]!.channel,
+    second = t.createdChannels[1]!.channel;
+  await plugin.events!.messageCreate!(t.ctx, {
+    ...messageIn(t, first, "2"),
+    content: "First staff message",
+  });
+  expect(t.sent.filter((m) => m.to === "dm:1")).toHaveLength(1);
+  await t.ctx.server.editChannel(first, {
+    overwrites: { "member:1": { deny: ["ReadMessageHistory"] } },
+  });
+  expect(t.member("1")!.canView(first)).toBe(false);
+  const attachment = "https://cdn.discordapp.com/attachments/private-document";
+  const docs = [
+    { filename: "private-document", url: attachment },
+  ] as unknown as Message["attachments"];
+  await plugin.events!.messageCreate!(t.ctx, {
+    ...messageIn(t, first, "2", "revoked"),
+    content: "Revoked staff message",
+    attachments: docs,
+  });
+  expect(t.sent.filter((m) => m.to === "dm:1")).toHaveLength(1);
+  expect(
+    (
+      await route(t, "POST /tickets/1/messages", {
+        viewer: "2",
+        body: { content: "Private portal content" },
+      })
+    ).status,
+  ).toBe(403);
+  expect(JSON.stringify(t.sent)).not.toContain("Private portal content");
+  await plugin.events!.messageCreate!(t.ctx, {
+    ...messageIn(t, second, "2"),
+    content: "Unchanged recipient",
+    attachments: docs,
+  });
+  expect(t.message(t.sent.filter((m) => m.to === "dm:3").at(-1)!.id)).toMatchObject({
+    content: "Unchanged recipient\n" + attachment,
+  });
+});
+
+test("a lost private relay edit in either direction keeps its receipt through erasure", async () => {
+  const t = setup();
+  const open = {
+    ...messageIn(t, t.channel("help-desk")!, "1", "initial"),
+    content: "First private DM",
+  };
+  await plugin.events!.directMessage!(t.ctx, open);
+  const channel = t.createdChannels[0]!.channel;
+  const { getTicket } = await import("../src/tickets.ts");
+  const { relay, pendingRelays } = await import("../src/relay.ts");
+  const { privacy } = await import("../src/privacy.ts");
+  const base = t.ctx.server;
+  const injected = {
+    ...t.ctx,
+    server: {
+      ...base,
+      channel: (ref: Parameters<typeof base.channel>[0]) => {
+        const original = base.channel(ref);
+        if (original.id !== channel.id) return original;
+        return {
+          ...original,
+          message: async (id: string) => {
+            const m = await original.message(id);
+            if (!m) return m;
+            return {
+              ...m,
+              edit: async (input: Parameters<typeof m.edit>[0]) => {
+                await m.edit(input);
+                throw Error("Lost channel edit acknowledgement");
+              },
+            };
+          },
+        };
+      },
+      editRetractableDM: async (
+        id: string,
+        input: Parameters<typeof base.editRetractableDM>[1],
+      ) => {
+        await base.editRetractableDM(id, input);
+        throw Error("Lost DM edit acknowledgement");
+      },
+    },
+  };
+  const ticket = (await getTicket(t.ctx, 1))!;
+  expect(ticket.description).toBe("");
+  await expect(
+    relay(
+      injected,
+      ticket,
+      "inbound",
+      { id: "1", displayName: "Alice" },
+      "Inbound confidential text",
+      "in-2",
+      new Date(),
+    ),
+  ).rejects.toThrow("Lost channel");
+  await expect(
+    relay(
+      injected,
+      ticket,
+      "outbound",
+      { id: "2", displayName: "Sam" },
+      "Outbound confidential text",
+      "out-2",
+      new Date(),
+    ),
+  ).rejects.toThrow("Lost DM");
+  const receipts = (await pendingRelays(t.ctx, 1)).map((j) => j.targets[0]!.id!);
+  expect(receipts).toHaveLength(2);
+  expect(receipts.map((id) => t.message(id)!.content).sort()).toEqual([
+    "Inbound confidential text",
+    "Outbound confidential text",
+  ]);
+  expect(t.sent.every((s) => !JSON.stringify(s.message).includes("confidential text"))).toBe(true);
+  const eraseCtx = {
+    ...t.ctx,
+    privacy: { ...t.ctx.privacy, pseudonym: async () => "deleted-user-0123456789abcdef" },
+  };
+  await privacy.erase(eraseCtx, "1");
+  expect(await pendingRelays(t.ctx, 1)).toEqual([]);
+  for (const id of receipts) expect(t.message(id)).toBeUndefined();
+  expect(JSON.stringify([...t.kv.values()])).not.toContain("confidential text");
+});
+
+test("a pending outbound private edit cannot recreate the erased recipient's message", async () => {
+  const t = setup();
+  await plugin.events!.directMessage!(t.ctx, {
+    ...messageIn(t, t.channel("help-desk")!, "1", "open"),
+    content: "Initial",
+  });
+  const { getTicket } = await import("../src/tickets.ts");
+  const { relay, pendingRelays } = await import("../src/relay.ts");
+  const { privacy } = await import("../src/privacy.ts");
+  let confirmed!: () => void, unblock!: () => void;
+  const ready = new Promise<void>((r) => {
+      confirmed = r;
+    }),
+    paused = new Promise<void>((r) => {
+      unblock = r;
+    });
+  const ctx = {
+    ...t.ctx,
+    server: {
+      ...t.ctx.server,
+      async editRetractableDM(
+        id: string,
+        msg: Parameters<typeof t.ctx.server.editRetractableDM>[1],
+      ) {
+        confirmed();
+        await paused;
+        await t.ctx.server.editRetractableDM(id, msg);
+      },
+    },
+  };
+  const underway = relay(
+    ctx,
+    (await getTicket(t.ctx, 1))!,
+    "outbound",
+    { id: "2", displayName: "Sam" },
+    "Delayed private reply",
+    "src-delayed",
+    new Date(),
+  );
+  await ready;
+  const receipt = (await pendingRelays(t.ctx, 1))[0]!.targets[0]!.id!;
+  expect(t.message(receipt)?.content).toBe(en.relayPending);
+  await privacy.erase(
+    {
+      ...t.ctx,
+      privacy: { ...t.ctx.privacy, pseudonym: async () => "deleted-user-0123456789abcdef" },
+    },
+    "1",
+  );
+  unblock();
+  await expect(underway).rejects.toThrow();
+  expect(t.message(receipt)).toBeUndefined();
+  expect(await pendingRelays(t.ctx, 1)).toEqual([]);
+});
+
+test("both modmail detail routes withhold legacy initial text and URLs after source revocation or deletion", async () => {
+  const t = setup({ types: [{ key: "help", name: "Help", staffRoles: ["support"] }] });
+  const initial = "Confidential https://cdn.discordapp.com/attachments/private/original.png";
+  await plugin.events!.directMessage!(t.ctx, {
+    ...messageIn(t, t.channel("help-desk")!, "1", "original"),
+    content: initial,
+  });
+  const raw = t.kv.get("ticket:00000001") as Record<string, Json>;
+  expect(raw.description).toBe("");
+  expect(raw.subject).not.toContain("Confidential");
+  t.kv.set("ticket:00000001", { ...raw, description: initial });
+  const channel = t.createdChannels[0]!.channel;
+  await t.ctx.server.editChannel(channel, {
+    overwrites: { "member:3": { allow: ["ViewChannel", "ReadMessageHistory"] } },
+  });
+  for (const [path, viewer] of [
+    ["GET /tickets/mine/1", "1"],
+    ["GET /tickets/1", "2"],
+  ] as const) {
+    const result = await route(t, path, { viewer });
+    expect(result.status).toBe(404);
+    expect(JSON.stringify(result.body)).not.toContain(initial);
+  }
+  await t.ctx.server.deleteChannel(channel);
+  for (const [path, viewer] of [
+    ["GET /tickets/mine/1", "1"],
+    ["GET /tickets/1", "2"],
+  ] as const) {
+    const result = await route(t, path, { viewer });
+    expect(result.status).toBe(404);
+    expect(JSON.stringify(result.body)).not.toContain(initial);
+  }
+});
+
+test("a committed interop ticket recovers the already-owned channel after losing its creation acknowledgement", async () => {
+  const t = setup();
+  const call = {
+    caller: { plugin: "moderation", bot: "bot", instance: "mod", source: "local", verified: false },
+    onBehalfOf: { userId: "1", access: "member" as const },
+    idempotencyKey: "recover",
+  };
+  const out = await plugin.actions!.open!.run(
+    t.ctx,
+    { userId: "1", subject: "Provision once" },
+    call,
+  );
+  expect(out).toEqual({ id: "1" });
+  expect(t.createdChannels).toHaveLength(0);
+  const grant = t.ctx.server.createChannel;
+  const lost = {
+    ...t.ctx,
+    server: {
+      ...t.ctx.server,
+      async createChannel(opts: Parameters<typeof grant>[0]) {
+        await grant(opts);
+        throw Error("Lost creation acknowledgement");
+      },
+    },
+  };
+  await expect(plugin.tasks!.provision!(lost, { number: 1 })).rejects.toThrow(
+    "Lost creation acknowledgement",
+  );
+  expect(t.createdChannels).toHaveLength(1);
+  const { getTicket, saveTicket } = await import("../src/tickets.ts");
+  const record = (await getTicket(t.ctx, 1))!;
+  expect(record.channelId).toBe("");
+  expect(record.provision?.phase).toBe("creating");
+  record.provision!.since = Date.now() - 180000;
+  await saveTicket(t.ctx, record);
+  await plugin.tasks!.provision!(t.ctx, { number: 1 });
+  await plugin.tasks!.provision!(t.ctx, { number: 1 });
+  expect(t.createdChannels).toHaveLength(1);
+  expect((await getTicket(t.ctx, 1))!.channelId).toBe(t.createdChannels[0]!.channel.id);
+  expect(t.published.filter((e) => e.topic === "opened")).toHaveLength(1);
 });

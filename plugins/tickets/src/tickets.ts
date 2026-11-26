@@ -1,3 +1,4 @@
+import { relay } from "./relay.ts";
 /**
  * Ticket records and the operations shared by the Discord handlers and the portal routes
  * (open, close, reopen, reply…). The portal shapes are declared in routes.ts.
@@ -40,6 +41,8 @@ export interface Ticket {
   id: string;
   number: number;
   revision?: number;
+  erasing?: boolean;
+  provision?: { topic: string; phase: "queued" | "creating" | "welcome"; since: number };
   subject: string;
   description: string;
   status: TicketStatus;
@@ -65,8 +68,13 @@ export interface Ticket {
   closedAudience?: { known: boolean; roles: string[]; members: string[]; denied: string[] };
   labels: string[];
   notes: { by: Person; at: string; content: string }[];
-  copies?: { messageId: string; userId: string }[];
-  directCopies?: { messageId: string; authorId: string; sourceMessageId?: string }[];
+  copies?: { messageId: string; userId: string; origin?: string }[];
+  directCopies?: {
+    messageId: string;
+    authorId: string;
+    sourceMessageId?: string;
+    origin?: string;
+  }[];
   redactedMessageIds?: string[];
   notices?: { messageId: string; users: string[] }[];
   firstResponseAt?: string;
@@ -142,7 +150,7 @@ export function channelName(template: string, n: number, member: string): string
 }
 
 export function channelUrl(ctx: Context, t: Ticket): string | null {
-  return t.status === "open"
+  return t.status === "open" && t.channelId
     ? `https://discord.com/channels/${ctx.server.id}/${t.channelId}`
     : null;
 }
@@ -187,10 +195,12 @@ export async function getTicket(ctx: Context, n: number): Promise<Ticket | undef
   return raw ? normalize(raw) : undefined;
 }
 
-export async function saveTicket(ctx: Context, t: Ticket): Promise<void> {
+export async function saveTicket(ctx: Context, t: Ticket, privacyWrite = false): Promise<void> {
   const key = ticketKey(t.number);
   const entry = await ctx.kv.getEntry(key);
   const saved = entry?.value as unknown as Ticket | undefined;
+  if (saved?.erasing && !privacyWrite)
+    throw new TicketConflict("Ticket privacy update in progress");
   const prior = saved ? (saved.revision ?? 0) : -1;
   if (prior !== (t.revision ?? -1))
     throw new TicketConflict("Ticket changed; reload before saving");
@@ -291,6 +301,7 @@ export function mayRead(ctx: Context, t: Ticket, member?: Member, allowOwner = f
     return false;
   // Application records belong to their author and the configured staff. Archived
   // channel content has a separate, stronger gate (mayReadTranscript).
+  if (t.provision && !t.channelId) return true;
   if (t.channelRemoved ?? t.status === "closed") return true;
   return member.canView({ id: t.channelId });
 }
@@ -343,6 +354,21 @@ export async function relayAllowed(ctx: Context, t: Ticket, actor: Member) {
     check.fingerprint === t.sourcePolicy
   );
 }
+/** Check both principals immediately before forwarding rendered text or attachment URLs.
+ * Guild membership alone cannot authorize reading a ticket channel's history. */
+export async function relayRecipient(ctx: Context, t: Ticket, staffId: string) {
+  const [staff, member] = await Promise.all([
+    ctx.server.member(staffId),
+    ctx.server.member(t.author.id),
+  ]);
+  if (!staff || !member || !isStaff(ctx, staff, t.type)) return undefined;
+  const [sender, recipient] = await Promise.all([
+    relayAllowed(ctx, t, staff),
+    relayAllowed(ctx, t, member),
+  ]);
+  return sender && recipient ? member : undefined;
+}
+
 /** At most this many holders of each staff role are listed by `GET /staff`. */
 const MAX_STAFF_PER_ROLE = 1000;
 
@@ -479,7 +505,7 @@ function ticketEmbed(ctx: Context, t: Ticket): Embed {
  * out a handle for a deleted channel it saw earlier: use `liveChannel` before relying on it.
  */
 export function ticketChannel(ctx: Context, t: Ticket): TextChannel | undefined {
-  if (t.channelRemoved ?? t.status === "closed") return undefined;
+  if (!t.channelId || (t.channelRemoved ?? t.status === "closed")) return undefined;
   try {
     return ctx.server.channel({ id: t.channelId });
   } catch {
@@ -527,7 +553,7 @@ export async function notice(
 /** Private channel of a ticket: the member, the staff roles and the bot. */
 async function createTicketChannel(
   ctx: Context,
-  t: Pick<Ticket, "number" | "subject" | "author" | "type">,
+  t: Pick<Ticket, "number" | "subject" | "author" | "type" | "provision">,
 ): Promise<TextChannel> {
   // Keys: "@everyone", a role key, "role:<id>" or "member:<id>".
   const overwrites: Record<string, { allow?: Permission[]; deny?: Permission[] }> = {
@@ -542,11 +568,13 @@ async function createTicketChannel(
   return ctx.server.createChannel({
     name: channelName(ctx.config.channelName, t.number, t.author.displayName),
     ...(type.category ? { category: type.category } : {}),
-    topic: ctx.i18n.t("channelTopic", {
-      number: t.number,
-      subject: t.subject,
-      member: t.author.displayName,
-    }),
+    topic:
+      t.provision?.topic ??
+      ctx.i18n.t("channelTopic", {
+        number: t.number,
+        subject: t.subject,
+        member: t.author.displayName,
+      }),
     overwrites,
   });
 }
@@ -570,38 +598,24 @@ async function reserve(ctx: Context, userId: string, number: number) {
   }
 }
 
-/** Opens a ticket: channel, records, welcome message. The caller checks the limit. */
-export async function openTicket(
-  ctx: Context,
-  input: {
-    user: Pick<User, "id" | "displayName" | "mention">;
-    member: Member | undefined;
-    subject: string;
-    description: string;
-    label: string | null;
-    source: TicketSource;
-    type?: string;
-    appeal?: Ticket["appeal"];
-    request?: Ticket["request"];
-  },
-): Promise<{ ticket: Ticket; channel: TextChannel }> {
+type OpenInput = {
+  user: Pick<User, "id" | "displayName" | "mention">;
+  member: Member | undefined;
+  subject: string;
+  description: string;
+  label: string | null;
+  source: TicketSource;
+  type?: string;
+  appeal?: Ticket["appeal"];
+  request?: Ticket["request"];
+};
+
+async function allocate(ctx: Context, input: OpenInput): Promise<Ticket> {
   const type = ticketType(ctx, input.type);
   if (!type) throw new Error("Unknown ticket type");
   const author = person(input.user, input.member);
   const number = await ctx.kv.increment("seq");
   await reserve(ctx, author.id, number);
-  let channel: TextChannel;
-  try {
-    channel = await createTicketChannel(ctx, {
-      number,
-      subject: input.subject,
-      author,
-      type: type.key,
-    });
-  } catch (error) {
-    await ctx.kv.delete(openKey(author.id, number));
-    throw error;
-  }
   const now = new Date().toISOString();
   const ticket: Ticket = {
     id: String(number),
@@ -610,7 +624,7 @@ export async function openTicket(
     description: input.description,
     status: "open",
     author,
-    channelId: channel.id,
+    channelId: "",
     createdAt: now,
     priority: "normal",
     label: input.label ?? type.defaultLabels?.[0] ?? null,
@@ -623,6 +637,96 @@ export async function openTicket(
     events: [],
     source: input.source,
   };
+  addEvent(ticket, "opened", author, input.source, now);
+  return ticket;
+}
+
+async function storeOpen(ctx: Context, t: Ticket) {
+  await saveTicket(ctx, t);
+  await ctx.kv.set(openKey(t.author.id, t.number), true);
+  await ctx.kv.set(authorKey(t.author.id, t.number), true);
+  await ctx.kv.increment("stats:opened");
+  if (t.channelId) await ctx.kv.set(channelKey(t.channelId), t.number);
+}
+
+/** Interop actions commit this request with their idempotency result. Discord effects
+ * start in a separate invocation that can read the authoritative committed record. */
+export async function requestTicket(ctx: Context, input: OpenInput) {
+  const t = await allocate(ctx, input);
+  t.provision = {
+    topic:
+      "Cicord · " + ctx.bot.key + "/" + ctx.plugin.instance + "/" + t.number + "/" + t.createdAt,
+    phase: "queued",
+    since: 0,
+  };
+  await storeOpen(ctx, t);
+  await ctx.schedule.after(1000, "provision", { number: t.number });
+  return { id: t.id };
+}
+
+export async function provisionTicket(ctx: Context, t: Ticket) {
+  const job = t.provision;
+  if (!job || t.status !== "open") return;
+  if (!t.channelId) {
+    if (job.phase === "creating" && Date.now() - job.since < 120000) return;
+    job.phase = "creating";
+    job.since = Date.now();
+    await saveTicket(ctx, t);
+    const receipt = await ctx.server.recoverOwnedChannel(job.topic);
+    if (receipt.status === "conflict")
+      throw new Error("Conflicting channel ownership; provisioning paused");
+    const channel =
+      receipt.status === "owned" && receipt.id
+        ? ctx.server.channel({ id: receipt.id })
+        : await createTicketChannel(ctx, t);
+    t.channelId = channel.id;
+    job.phase = "welcome";
+    await saveTicket(ctx, t);
+  }
+  const channel = ctx.server.channel({ id: t.channelId });
+  const check = await verifyReaders(ctx, t);
+  if (!check?.known || !check.confined)
+    throw new Error("Cannot verify the provisioned ticket audience");
+  await ctx.kv.set(channelKey(channel.id), t.number);
+  if (!t.welcomeId) {
+    let before: string | undefined;
+    for (;;) {
+      const rows = await channel.messages({ limit: 100, ...(before ? { before } : {}) });
+      const previous = rows.find(
+        (m) =>
+          m.author.id === ctx.bot.user.id && m.embeds.some((e) => e.footer?.text === job.topic),
+      );
+      if (previous) {
+        t.welcomeId = previous.id;
+        await saveTicket(ctx, t);
+        break;
+      }
+      if (rows.length < 100) break;
+      const next = rows[rows.length - 1]!.id;
+      if (next === before) throw new Error("Welcome history cursor did not advance");
+      before = next;
+    }
+  }
+  if (!t.welcomeId) await welcomeTicket(ctx, t, channel);
+  await publish(ctx, t, "opened");
+  delete t.provision;
+  await saveTicket(ctx, t);
+}
+
+export async function openTicket(
+  ctx: Context,
+  input: OpenInput,
+): Promise<{ ticket: Ticket; channel: TextChannel }> {
+  const ticket = await allocate(ctx, input);
+  const { number, author } = ticket;
+  let channel: TextChannel;
+  try {
+    channel = await createTicketChannel(ctx, ticket);
+  } catch (error) {
+    await ctx.kv.delete(openKey(author.id, number));
+    throw error;
+  }
+  ticket.channelId = channel.id;
   if (ticket.source === "modmail") {
     const check = await verifyReaders(ctx, ticket, { viewer: author.id });
     if (!check?.known || !check.confined || !check.viewerCanRead) {
@@ -635,13 +739,16 @@ export async function openTicket(
     }
     ticket.sourcePolicy = check.fingerprint;
   }
-  addEvent(ticket, "opened", author, input.source, now);
-  await saveTicket(ctx, ticket);
-  await ctx.kv.set(openKey(author.id, number), true);
-  await ctx.kv.set(channelKey(channel.id), number);
-  await ctx.kv.set(authorKey(author.id, number), true);
-  await ctx.kv.increment("stats:opened");
+  await storeOpen(ctx, ticket);
+  await welcomeTicket(ctx, ticket, channel, input.member);
+  await publish(ctx, ticket, "opened");
+  return { ticket, channel };
+}
 
+async function welcomeTicket(ctx: Context, ticket: Ticket, channel: TextChannel, member?: Member) {
+  const number = ticket.number;
+  const type = ticketType(ctx, ticket.type);
+  if (!type) throw new Error("Unknown ticket type");
   let staff =
     type.staffRoles.map((r) => ctx.server.role(r).mention).join(" ") || ctx.i18n.t("team");
   let mentions: string[] = [];
@@ -657,38 +764,32 @@ export async function openTicket(
       ctx.log.warn("On-duty staff unavailable");
     }
   }
-  if (
-    ticket.source === "modmail" &&
-    (!input.member || !(await relayAllowed(ctx, ticket, input.member)))
-  ) {
-    await input.member?.send(ctx.i18n.t("relayDenied"));
-    return { ticket, channel };
+  if (ticket.source === "modmail" && (!member || !(await relayAllowed(ctx, ticket, member)))) {
+    await member?.send(ctx.i18n.t("relayDenied"));
+    return;
   }
   const welcome = await channel.send({
     content: render(ctx.config.welcomeMessage ?? ctx.i18n.t("welcome"), {
-      member: input.user.mention,
+      member: "<@" + ticket.author.id + ">",
       staff,
-      subject: input.subject,
+      subject: ticket.subject,
       number: String(number),
     }),
-    embeds: [ticketEmbed(ctx, ticket)],
+    embeds: [
+      {
+        ...ticketEmbed(ctx, ticket),
+        ...(ticket.provision ? { footer: { text: ticket.provision.topic } } : {}),
+      },
+    ],
     components: closeButton(ctx, number),
     allowedMentions: {
-      users: [input.user.id, ...mentions],
+      users: [ticket.author.id, ...mentions],
       roles: type.staffRoles.map((r) => ctx.server.role(r).id),
       everyone: false,
     },
   });
   ticket.welcomeId = welcome.id;
   await saveTicket(ctx, ticket);
-  await publish(ctx, ticket, "opened");
-  ctx.log.info("ticket opened", {
-    ticket: number,
-    member: author.id,
-    channel: channel.id,
-    source: input.source,
-  });
-  return { ticket, channel };
 }
 
 /**
@@ -856,38 +957,12 @@ export async function reopenTicket(ctx: Context, ticket: Ticket, by: Person): Pr
 export async function postReply(
   ctx: Context,
   ticket: Ticket,
-  channel: TextChannel,
+  _channel: TextChannel,
   by: Person,
   content: string,
-): Promise<string> {
-  const message = await channel.send({
-    embeds: [
-      {
-        description: content,
-        color: ctx.config.panel.color,
-        footer: { text: ctx.i18n.t("replyAuthor", { staff: by.displayName }) },
-      },
-    ],
-    allowedMentions: NO_MENTIONS,
-  });
-  if (ticket.source === "modmail") {
-    const member = await ctx.server.member(ticket.author.id);
-    if (member) {
-      const dm = await member.send(
-        { content, allowedMentions: NO_MENTIONS },
-        { retractable: true },
-      );
-      ticket.directCopies = [...(ticket.directCopies ?? []), { messageId: dm.id, authorId: by.id }];
-    }
-  }
-  ticket.copies = [...(ticket.copies ?? []), { userId: by.id, messageId: message.id }];
-  ticket.firstResponseAt ??= message.createdAt.toISOString();
-  delete ticket.warningAt;
-  addEvent(ticket, "replied", by, message.id);
-  await saveTicket(ctx, ticket);
-  await ctx.kv.increment(activityKey(ticket.number));
-  await ctx.kv.set(lastActivityKey(ticket.number), message.createdAt.toISOString());
-  return message.id;
+): Promise<string | undefined> {
+  const seq = await ctx.kv.increment("portal:relaySeq");
+  return relay(ctx, ticket, "portal", by, content, "portal-" + seq, new Date());
 }
 
 // ───────────────────────────────────────────────────────────── portal views
@@ -914,7 +989,7 @@ export async function staffView(ctx: Context, t: Ticket): Promise<StaffTicket> {
     author: t.author,
     createdAt: t.createdAt,
     closedAt: t.closedAt ?? null,
-    channelId: t.status === "open" ? t.channelId : null,
+    channelId: t.status === "open" ? t.channelId || null : null,
     messages: a.messages,
     lastActivityAt: a.last,
     number: t.number,

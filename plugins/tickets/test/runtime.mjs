@@ -52,13 +52,13 @@ async function prepare({repo}) {
       "servers: [acceptance]",
       "servers: [acceptance, secondary]\n  directMessages: {instance: tickets}",
     ) +
-      "\n    - name: fixtures\n      source: ../../plugins/fixtures\n      grants: [discord.members.read, discord.roles.assign, discord.dm.send, discord.channels.read, discord.messages.read]\n",
+      "\n    - name: fixtures\n      source: ../../plugins/fixtures\n      grants: [discord.members.read, discord.roles.assign, discord.dm.send, discord.channels.read, discord.messages.read, plugins.call:tickets.open]\n",
   );
   const root = join(repo, "plugins/fixtures");
   await mkdir(join(root, "src"), { recursive: true });
   await writeFile(
     join(root, "plugin.yaml"),
-    "apiVersion: cicord.dev/v1alpha1\nkind: Plugin\nmetadata: {name: fixtures, version: 0.1.0}\nspec: {entry: ./src/index.ts, engine: '>=0.2.0-0', intents: [MessageContent], capabilities: [discord.members.read, discord.roles.assign, discord.dm.send, discord.channels.read, discord.messages.read]}\n",
+    "apiVersion: cicord.dev/v1alpha1\nkind: Plugin\nmetadata: {name: fixtures, version: 0.1.0}\nspec: {entry: ./src/index.ts, engine: '>=0.2.0-0', intents: [MessageContent], delivery: at-least-once, interop: {consumes: {actions: [tickets.open]}}, capabilities: [discord.members.read, discord.roles.assign, discord.dm.send, discord.channels.read, discord.messages.read, plugins.call:tickets.open]}\n",
   );
   // Drive real Discord role changes from a disposable operator command. Opening the
   // initial DM supplies its bot/user channel ID to the simulator's POST /sim/messages.
@@ -71,6 +71,10 @@ async function prepare({repo}) {
           role:{type:"string",required:true,description:"Role key"},
           remove:{type:"boolean",description:"Remove the role"}},
         async run(ctx,i){const m=await ctx.server.member(i.options.user.id);if(i.options.remove)await m.removeRole(i.options.role);else await m.addRole(i.options.role);await i.reply("ok");}}),
+      "fixture-open":command({description:"Request a ticket through its versioned action",async run(ctx,i){
+        const result=await ctx.plugins.call("tickets","open",{userId:i.user.id,type:"help",subject:"Deferred action",description:"One request"},{idempotencyKey:"fixture-open-"+i.user.id});
+        await i.reply(JSON.stringify(result));
+      }}),
       "fixture-files":command({description:"Inspect a simulated transcript upload",permissions:["ManageRoles"],async run(ctx,i){
         const rows=await ctx.server.channel("private-log").messages({limit:50});
         await i.reply(JSON.stringify(rows.flatMap(m=>m.attachments.map(a=>a.filename))));
@@ -87,6 +91,8 @@ async function prepare({repo}) {
   } finally {
     await writeFile(bot, valid);
   }
+  const restored = spawnSync("cicord", ["validate", repo], { encoding: "utf8" });
+  assert.equal(restored.status, 0, restored.stdout + restored.stderr);
 }
 
 async function until(description, read, timeout = 3000) {
@@ -215,6 +221,25 @@ test(
     await role(first, bob, "moderator", true);
     await assert.rejects(tickets("acceptance", bob, "/" + a.id + "/transcript"), /404/);
     await assert.rejects(tickets("acceptance", bob, "/" + a.id), /403|404/);
+    const accepted = await command(second, charlie, "fixture-open", {});
+    const logical = JSON.parse(accepted.response.content);
+    assert.ok(logical.id);
+    assert.equal(logical.channelId, undefined, "the action commits before Discord provisioning");
+    const committed = await until(
+      "committed action provisions its channel",
+      async () => {
+        const detail = await tickets("secondary", bob, "/" + logical.id);
+        return detail.channelId ? detail : undefined;
+      },
+      7000,
+    );
+    const retried = await command(second, charlie, "fixture-open", {});
+    assert.deepEqual(JSON.parse(retried.response.content), logical);
+    assert.equal(
+      (await tickets("secondary", bob)).items.filter((x) => x.id === logical.id).length,
+      1,
+    );
+    assert.ok(committed.channelId);
     const bootstrap = await command(first, alice, "fixture-dm", {});
     const dm = bootstrap.response.content;
     const dms = () => sim.api("/api/v1/sim/users/" + alice.id + "/dms");
@@ -243,8 +268,10 @@ test(
     );
     const messages = () => sim.api("/api/v1/sim/channels/" + mail.channelId + "/messages");
     await until("initial DM delivered", async () =>
-      (await messages()).items.some((m) =>
-        m.embeds?.some((e) => e.description === "Modmail original"),
+      (await messages()).items.some(
+        (m) =>
+          m.content === "Modmail original" ||
+          m.embeds?.some((e) => e.description === "Modmail original"),
       ),
     );
     const inbound = Date.now();
@@ -263,6 +290,35 @@ test(
       2000,
     );
     assert.ok(Date.now() - outbound < 2000);
+    const other = await sim.api("/api/v1/sim/users", { username: "dave" });
+    await sim.api("/api/v1/sim/servers/" + second.id + "/members", { userId: other.id });
+    const otherDm = (await command(second, other, "fixture-dm", {})).response.content;
+    await say(other, otherDm, "Unchanged conversation");
+    const otherTicket = await until("second open conversation", async () =>
+      (await tickets("secondary", bob)).items.find(
+        (t) => t.source === "modmail" && t.author.id === other.id,
+      ),
+    );
+    const moderators = second.roles.find((r) => r.name === "Moderator");
+    await sim.api("/api/v1/sim/channels/" + mail.channelId + "/permissions", {
+      overwrites: [
+        { type: "role", id: second.id, deny: ["ViewChannel"] },
+        {
+          type: "role",
+          id: moderators.id,
+          allow: ["ViewChannel", "ReadMessageHistory", "SendMessages"],
+        },
+        { type: "member", id: alice.id, allow: ["ViewChannel"], deny: ["ReadMessageHistory"] },
+      ],
+    });
+    await say(bob, mail.channelId, "After revoked history");
+    await say(bob, otherTicket.channelId, "Unaffected thread");
+    await until("unchanged recipient receives the staff answer", async () =>
+      (await sim.api("/api/v1/sim/users/" + other.id + "/dms")).items.some(
+        (m) => m.content === "Unaffected thread",
+      ),
+    );
+    assert.ok(!(await dms()).items.some((m) => m.content === "After revoked history"));
     // Discord ACL drift while the member conversation is active. Wait for the
     // withheld-delivery response before asserting the selected guild got no copy.
     await sim.api("/api/v1/sim/channels/" + mail.channelId + "/permissions", {

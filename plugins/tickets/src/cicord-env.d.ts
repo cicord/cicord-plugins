@@ -122,7 +122,7 @@ declare module "@cicord/sdk" {
       type?: string;
       userId: string;
     }; output: {
-      channelId: string;
+      channelId?: string;
       id: string;
     }};
   }

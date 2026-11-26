@@ -1,7 +1,9 @@
+import { repairRelays } from "./relay.ts";
 import type { Context, TextChannel } from "@cicord/sdk";
 import {
   allTickets,
   closeTicket,
+  provisionTicket,
   finishClose,
   getTicket,
   lastActivityKey,
@@ -18,6 +20,11 @@ import { purgeArchive, reconcileCopy } from "./transcript.ts";
 export async function maintenance(ctx: Context) {
   for (const t of await allTickets(ctx)) {
     try {
+      await repairRelays(ctx, t);
+      if (t.provision && t.status === "open") {
+        await provisionTicket(ctx, t);
+        continue;
+      }
       if (t.status === "closed") {
         if (t.pendingClose) await finishClose(ctx, t);
         if (t.logCopy || t.logDelivery) await reconcileCopy(ctx, t);

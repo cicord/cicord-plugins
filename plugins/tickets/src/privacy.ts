@@ -1,3 +1,4 @@
+import { eraseRelays, pendingRelays } from "./relay.ts";
 import type { Context, Json } from "@cicord/sdk";
 import {
   verifyReaders,
@@ -19,6 +20,8 @@ export const privacy = {
         .filter((e) => e.by.id === userId)
         .map((e) => ({ type: e.type, at: e.at }));
       const messages: { at: string; text: string }[] = [];
+      for (const job of await pendingRelays(ctx, t.number))
+        if (job.author.id === userId) messages.push({ at: job.at, text: job.text });
       const live = ticketChannel(ctx, t);
       if (live) {
         const ids = new Set([
@@ -82,7 +85,9 @@ export const privacy = {
     await ctx.kv.delete("admission:" + userId);
     let erased = 0;
     for (const t of tickets) {
-      let changed = false;
+      t.erasing = true;
+      await saveTicket(ctx, t, true);
+      let changed = (await eraseRelays(ctx, t, userId)) > 0;
       const clean = (s: string) => {
         const v = s.replace(mentions, ctx.i18n.t("deletedMember"));
         if (s !== v) changed = true;
@@ -103,6 +108,21 @@ export const privacy = {
         const previous = t.archivePolicy
           ? await verifyReaders(ctx, t, { withoutMember: userId })
           : undefined;
+        if (t.provision) {
+          if (!t.channelId && t.provision.phase === "creating") {
+            const candidate = await ctx.server.recoverOwnedChannel(t.provision.topic);
+            if (candidate.status === "conflict")
+              throw new Error("Unverified provisioning channel needs operator review");
+            if (candidate.id)
+              await ctx.server.deleteChannel({ id: candidate.id }, "Member privacy request");
+          }
+          if (!t.channelId) {
+            t.status = "closed";
+            t.closedAt = new Date().toISOString();
+            t.channelRemoved = true;
+          }
+          delete t.provision;
+        }
         delete t.appeal;
         delete t.request;
         if (live && t.welcomeId)
@@ -229,7 +249,8 @@ export const privacy = {
         erased++;
       }
       // Invalidate retained snapshots even if this ticket did not yet mention the subject.
-      await saveTicket(ctx, t);
+      delete t.erasing;
+      await saveTicket(ctx, t, true);
     }
     return { erased };
   },

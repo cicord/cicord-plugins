@@ -26,10 +26,7 @@
         "minimum": 1
       }
     },
-    "required": [
-      "userId",
-      "subject"
-    ],
+    "required": ["userId", "subject"],
     "additionalProperties": false
   },
   "output": {
@@ -42,10 +39,7 @@
         "type": "string"
       }
     },
-    "required": [
-      "id",
-      "channelId"
-    ],
+    "required": ["id"],
     "additionalProperties": false
   }
 }
