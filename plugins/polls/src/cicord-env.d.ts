@@ -7,6 +7,11 @@ declare module "@cicord/sdk" {
     managerRoles: string[];
     confirmVotes: boolean;
     color: string;
+    eligibleRoles: string[];
+    roleWeights: {
+      role: string;
+      weight: number;
+    }[];
   }
 }
 export {};

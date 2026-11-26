@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "series": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,50}$"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 800
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time",
+            "description": "First occurrence as an ISO 8601 timestamp. The series repeats weekly at this UTC time."
+          },
+          "durationMinutes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10080
+          },
+          "channel": {
+            "type": "string",
+            "x-cicord-ref": "channel"
+          },
+          "location": {
+            "type": "string",
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "key",
+          "name",
+          "start",
+          "durationMinutes"
+        ],
+        "additionalProperties": false
+      },
+      "default": []
+    },
+    "weeksAhead": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 26,
+      "default": 4
+    },
+    "minMinutes": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 5
+    },
+    "announcementChannel": {
+      "type": "string",
+      "x-cicord-ref": "channel"
+    },
+    "role": {
+      "type": "string",
+      "x-cicord-ref": "role"
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}

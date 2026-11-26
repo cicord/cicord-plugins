@@ -1,0 +1,37 @@
+{
+  "input": {
+    "type": "object",
+    "properties": {
+      "userId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "userId"
+    ],
+    "additionalProperties": false
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "valid": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "fake": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "left": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "required": [
+      "valid",
+      "fake",
+      "left"
+    ],
+    "additionalProperties": false
+  }
+}

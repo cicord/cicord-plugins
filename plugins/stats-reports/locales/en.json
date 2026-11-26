@@ -1,0 +1,18 @@
+{
+  "title": "Statistics reports",
+  "cohort": "Departed within 7 days: {left} of {joined} recorded arrivals (through publication).",
+  "noCohort": "Short-stay departures unavailable (ServerMembers collection disabled).",
+  "channels": "Public channel messages",
+  "daily": "Messages per day",
+  "peak": "Busiest posting time: {when} ({best} messages).",
+  "members.total": "Members",
+  "members.joined": "Joins",
+  "members.left": "Departures",
+  "members.active": "Daily active members (average)",
+  "messages.sent": "Messages",
+  "voice.seconds": "Voice seconds",
+  "invites.uses": "Invitation uses",
+  "moderation.actions": "Moderation actions",
+  "members.online": "Online",
+  "members.boosting": "Boosts"
+}

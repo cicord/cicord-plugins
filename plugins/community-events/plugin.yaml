@@ -1,0 +1,33 @@
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: community-events
+  version: 0.1.0
+  displayName: Community events
+  description: Recurring Discord events, attendance and opt-in reminders with a public calendar feed.
+  license: Apache-2.0
+spec:
+  engine: ">=0.2.0"
+  entry: ./src/index.ts
+  config: {schema: ./config.schema.json}
+  locales: ./locales
+  delivery: at-least-once
+  capabilities:
+    - discord.events.read
+    - discord.events.manage
+    - discord.members.read
+    - discord.channels.read
+    - discord.messages.send
+    - discord.dm.send
+    - scheduler
+    - storage.kv
+    - portal.routes
+    - events.publish
+  intents: [ServerScheduledEvents, ServerVoiceStates]
+  interop:
+    types: ./src/contracts.ts
+    publishes: [{topic: started, version: 1, scope: server}, {topic: ended, version: 1, scope: server}]
+  privacy:
+    records:
+      - {name: members, policy: erase, description: "Attendance and reminder subscription records."}
+  routes: {types: ./src/routes.ts}

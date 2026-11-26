@@ -1,0 +1,9 @@
+{
+  "title": "Invite tracker",
+  "empty": "No invitations recorded.",
+  "counts": "{valid} valid · {fake} fake · {left} left",
+  "commands.invites.name": "invites",
+  "commands.invites.description": "Count invitations for a member",
+  "commands.invite-leaderboard.name": "invite-leaderboard",
+  "commands.invite-leaderboard.description": "Top inviters by valid invitations"
+}

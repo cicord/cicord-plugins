@@ -1,0 +1,21 @@
+{
+  "title": "Événements communautaires",
+  "staff": "Accès réservé à l’équipe.",
+  "modal": "Créer un événement",
+  "name": "Nom",
+  "start": "Début (ISO 8601)",
+  "end": "Fin (ISO 8601)",
+  "location": "Lieu",
+  "invalid": "Saisissez un nom, un lieu et des dates futures de début et de fin.",
+  "created": "Événement créé.",
+  "optin": "Rappels activés.",
+  "optout": "Rappels désactivés.",
+  "starting": "{name} commence.",
+  "commands.event.name": "événement",
+  "commands.event.description": "Événements communautaires",
+  "commands.event.create.name": "créer",
+  "commands.event.create.description": "Programmer un événement communautaire",
+  "commands.event.reminders.name": "rappels",
+  "commands.event.reminders.description": "Gérer les rappels privés de vos événements",
+  "hour": "{name} commence dans une heure."
+}

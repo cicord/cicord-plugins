@@ -1,5 +1,7 @@
 import {
   command,
+  query,
+  type MessagePayload,
   definePlugin,
   defineRoutes,
   subcommand,
@@ -33,30 +35,178 @@ const HOUR = 3_600_000;
 
 /** Closes a poll: final results, cancels the scheduled closing, publishes `polls.closed`. */
 async function closePoll(ctx: Context, poll: Poll, by: string | null) {
-  const closed: Poll = {
-    ...poll,
-    status: "closed",
-    closedAt: new Date().toISOString(),
-    closedBy: by,
-  };
-  await savePoll(ctx, closed);
+  // Persist results before disclosure or erasure. A retry uses the same publication key.
+  if (!poll.final && !poll.closing) {
+    const key = "poll:" + poll.id,
+      entry = await ctx.kv.getEntry(key);
+    if (!entry) throw new Error("Poll no longer exists");
+    const current = entry.value as unknown as Poll;
+    if (current.status === "open") {
+      const frozen: Poll = {
+        ...current,
+        status: "closed",
+        closing: true,
+        closedAt: new Date().toISOString(),
+        closedBy: by,
+      };
+      const claimed = await ctx.kv
+        .atomic()
+        .check(key, entry.version)
+        .set(key, frozen as unknown as Json)
+        .commit();
+      if (!claimed.ok) throw new Error("Poll closure changed; retry");
+      poll = frozen;
+    } else poll = current;
+  }
+  if (!poll.final) {
+    const native =
+      poll.style === "native" ? await findMessage(ctx, poll.channelId, poll.messageId) : undefined;
+    if (poll.style === "native" && !native?.poll) throw new Error("Discord poll is unavailable");
+    const result = native && !native.poll?.finalized ? await native.endPoll() : native;
+    let t = await tally(ctx, poll);
+    if (result?.poll) {
+      const ids = new Set<string>();
+      for (const a of result.poll.answers) {
+        let after: string | undefined;
+        for (;;) {
+          const users = await result.pollVoters(a.id, after);
+          for (const id of users) ids.add(id);
+          if (users.length < 100) break;
+          after = users[users.length - 1];
+        }
+      }
+      t = { counts: result.poll.answers.map((a) => a.votes), voters: [...ids].sort() };
+      for (let offset = 0; offset < t.voters.length; offset += 1000)
+        await ctx.kv.set(`native:${poll.id}:${offset}`, t.voters.slice(offset, offset + 1000));
+    }
+    poll = {
+      ...poll,
+      status: "closed",
+      closing: false,
+      final: { counts: t.counts, voterCount: t.voters.length },
+    };
+    await savePoll(ctx, poll);
+  }
+  const t = { ...poll.final!, voters: [] as string[] };
+  if (!poll.published) {
+    if (poll.anonymous) {
+      let cursor: string | undefined;
+      do {
+        const page = await ctx.kv.list({ prefix: `vote:${poll.id}:`, limit: 50, cursor });
+        if (page.items.length) {
+          const batch = ctx.kv.atomic();
+          for (const { key } of page.items) batch.delete(key);
+          await batch.commit();
+        }
+        cursor = page.cursor;
+      } while (cursor);
+    } else if (t.voterCount <= 10000) {
+      let cursor: string | undefined;
+      do {
+        const page = await voterPage(ctx, poll, cursor);
+        t.voters.push(...page.userIds);
+        cursor = page.cursor;
+      } while (cursor);
+    }
+    const legacy = closedEvent(poll, t);
+    const { voters, ...summary } = legacy;
+    const modern = {
+      ...summary,
+      voterCount: t.voterCount,
+      ...(!poll.anonymous && t.voterCount > 10000 ? { votersTruncated: true } : { voters }),
+    };
+    await ctx.events.publish("closed", legacy as unknown as Json, {
+      version: 1,
+      idempotencyKey: `close:${poll.id}:v1`,
+    });
+    await ctx.events.publish("closed", modern, {
+      version: 2,
+      idempotencyKey: `close:${poll.id}:v2`,
+    });
+    await savePoll(ctx, { ...poll, published: true });
+  }
   if (by !== null && poll.taskId) await ctx.schedule.cancel(poll.taskId);
-  const t = await tally(ctx, closed);
-  await ctx.events.publish("closed", closedEvent(closed, t) as unknown as Json);
-  ctx.log.info("poll closed", { poll: poll.id, voters: t.voters.length, by });
-  return renderPoll(closed, t, ctx.config.color);
+  return renderPoll(poll, t, ctx.config.color);
+}
+
+async function voterPage(
+  ctx: Context,
+  poll: Poll,
+  cursor?: string,
+): Promise<{ userIds: string[]; cursor?: string }> {
+  if (poll.anonymous || poll.status !== "closed") return { userIds: [] };
+  if (poll.style === "native") {
+    const n = Number(cursor ?? 0);
+    if (!Number.isSafeInteger(n) || n < 0 || n % 1000 !== 0)
+      throw new Error("invalid voter cursor");
+    const userIds = (await ctx.kv.get<string[]>(`native:${poll.id}:${n}`)) ?? [];
+    return {
+      userIds,
+      ...(n + 1000 < (poll.final?.voterCount ?? 0) ? { cursor: String(n + 1000) } : {}),
+    };
+  }
+  const prefix = `vote:${poll.id}:`;
+  if (cursor && !cursor.startsWith(prefix)) throw new Error("invalid voter cursor");
+  const page = await ctx.kv.list({ prefix, cursor, limit: 1000 });
+  return {
+    userIds: page.items.map((x) => x.key.slice(prefix.length)),
+    ...(page.cursor ? { cursor: page.cursor } : {}),
+  };
+}
+
+function pollPayload(poll: Poll, color: string): MessagePayload {
+  return poll.style === "native"
+    ? {
+        poll: {
+          question: poll.question,
+          answers: poll.choices.map((text) => ({ text })),
+          durationHours: poll.hours!,
+          multiselect: poll.multiple,
+        },
+      }
+    : renderPoll(poll, { counts: poll.choices.map(() => 0), voters: [] }, color);
 }
 
 /** Records the voter's choice indexes and refreshes the poll message. */
 async function vote(ctx: Context, interaction: ComponentInteraction, poll: Poll, picked: number[]) {
+  if (poll.style === "native") return;
+  if (
+    poll.eligibleRoles?.length &&
+    !poll.eligibleRoles.some((role) => interaction.member?.hasRole(role))
+  ) {
+    await interaction.reply({ content: ctx.i18n.t("ineligible"), ephemeral: true });
+    return;
+  }
+  if (picked.length > (poll.maxChoices ?? poll.choices.length)) {
+    await interaction.reply({
+      content: ctx.i18n.t("limit", { max: poll.maxChoices! }),
+      ephemeral: true,
+    });
+    return;
+  }
+  const weight = Math.max(
+    1,
+    ...(poll.weights ?? []).filter((w) => interaction.member?.hasRole(w.role)).map((w) => w.weight),
+  );
   const key = voteKey(poll.id, interaction.user.id);
-  if (picked.length === 0) await ctx.kv.delete(key);
-  else await ctx.kv.set(key, picked);
+  const pollKey = "poll:" + poll.id,
+    state = await ctx.kv.getEntry(pollKey);
+  if (!state || (state.value as unknown as Poll).status !== "open") {
+    await interaction.reply({ content: ctx.i18n.t("votingClosed"), ephemeral: true });
+    return;
+  }
+  const batch = ctx.kv.atomic().check(pollKey, state.version);
+  if (!picked.length) batch.delete(key);
+  else batch.set(key, weight === 1 ? picked : { choices: picked, weight });
+  if (!(await batch.commit()).ok) {
+    await interaction.reply({ content: ctx.i18n.t("votingClosed"), ephemeral: true });
+    return;
+  }
   await interaction.update(renderPoll(poll, await tally(ctx, poll), ctx.config.color));
   if (ctx.config.confirmVotes) {
     const labels = picked.map((i) => poll.choices[i]).join(", ");
     await interaction.followUp({
-      content: labels ? `Your vote: **${labels}**` : "Your vote was removed.",
+      content: labels ? ctx.i18n.t("confirmation", { labels }) : ctx.i18n.t("removed"),
       ephemeral: true,
     });
   }
@@ -70,7 +220,7 @@ async function openPoll(
   const poll = await getPoll(ctx, id);
   if (!poll || poll.status !== "open") {
     if (poll) await interaction.update(renderPoll(poll, await tally(ctx, poll), ctx.config.color));
-    else await interaction.reply({ content: "This poll no longer exists.", ephemeral: true });
+    else await interaction.reply({ content: ctx.i18n.t("gone"), ephemeral: true });
     return undefined;
   }
   return poll;
@@ -133,7 +283,61 @@ function pollOption(onlyOpen: boolean) {
 /** "#12 Pizza night?" or "12" (what the user typed when not picking a suggestion). */
 const pollId = (raw: string): string => /^#?(\d+)/.exec(raw.trim())?.[1] ?? "";
 
+async function privatePollData(ctx: Context, id: string, erase: boolean) {
+  const rows: Json[] = [];
+  for (const p of await listPolls(ctx)) {
+    const key = voteKey(p.id, id),
+      vote = await ctx.kv.get(key);
+    if (vote !== undefined) {
+      if (!p.anonymous) rows.push({ pollId: p.id, vote });
+      else if (erase) rows.push({ pollId: p.id });
+      if (erase) await ctx.kv.delete(key);
+    }
+    if (p.authorId === id || p.closedBy === id) {
+      rows.push({ pollId: p.id, author: p.authorId === id, closer: p.closedBy === id });
+      if (erase) {
+        if (p.authorId === id) p.authorId = "";
+        if (p.closedBy === id) p.closedBy = null;
+        await savePoll(ctx, p);
+      }
+    }
+    if (p.style === "native" && p.final) {
+      for (let n = 0; n < p.final.voterCount; n += 1000) {
+        const k = `native:${p.id}:${n}`,
+          ids = await ctx.kv.get<string[]>(k);
+        if (ids?.includes(id)) {
+          rows.push({ pollId: p.id, voter: true });
+          if (erase)
+            await ctx.kv.set(
+              k,
+              ids.filter((x) => x !== id),
+            );
+        }
+      }
+    }
+  }
+  return rows;
+}
 export default definePlugin({
+  privacy: {
+    export: (ctx, id) => privatePollData(ctx, id, false),
+    async erase(ctx, id) {
+      return { erased: (await privatePollData(ctx, id, true)).length };
+    },
+  },
+  queries: {
+    voters: query({
+      async run(ctx, input: { pollId: string; cursor?: string }, call) {
+        const p = await getPoll(ctx, input.pollId);
+        if (!p || p.anonymous) return { userIds: [] };
+        if (call.onBehalfOf) {
+          const member = await ctx.server.member(call.onBehalfOf.userId);
+          if (!member?.canView({ id: p.channelId })) throw new Error("denied");
+        }
+        return voterPage(ctx, p, input.cursor);
+      },
+    }),
+  },
   commands: {
     poll: command({
       description: "Start a poll",
@@ -149,8 +353,14 @@ export default definePlugin({
           type: "number",
           description: "How long it stays open, in hours (0.5 = 30 min)",
           min: 0.05,
-          max: 720,
+          max: 768,
         },
+        anonymous: {
+          type: "boolean",
+          description: "Keep voter identities private (buttons and select only)",
+        },
+        maximum: { type: "integer", description: "Maximum selections per voter", min: 1, max: 10 },
+        start: { type: "string", description: "Schedule a future start (ISO 8601 date and time)" },
         multiple: { type: "boolean", description: "Allow several choices" },
         style: {
           type: "string",
@@ -158,6 +368,7 @@ export default definePlugin({
           choices: [
             { name: "Buttons", value: "buttons" },
             { name: "Select menu", value: "select" },
+            { name: "Discord poll", value: "native" },
           ],
         },
         ping: { type: "mentionable", description: "Member or role to notify" },
@@ -167,21 +378,19 @@ export default definePlugin({
         const o = interaction.options;
         const channel = interaction.channel;
         if (!channel) {
-          await interaction.reply("Polls can only be started in a server channel.");
+          await interaction.reply(ctx.i18n.t("serverOnly"));
           return;
         }
         const allowed = ctx.config.channels.map((key) => ctx.server.channel(key).id);
         if (allowed.length > 0 && !allowed.includes(channel.id)) {
           await interaction.reply(
-            `Polls can be started in ${allowed.map((id) => `<#${id}>`).join(", ")}.`,
+            ctx.i18n.t("allowed", { channels: allowed.map((id) => `<#${id}>`).join(", ") }),
           );
           return;
         }
         const choices = parseChoices(o.choices);
         if (choices.length < 2 || choices.length > MAX_CHOICES) {
-          await interaction.reply(
-            `A poll needs 2 to ${MAX_CHOICES} different choices, separated by |.`,
-          );
+          await interaction.reply(ctx.i18n.t("choiceCount", { max: MAX_CHOICES }));
           return;
         }
         const ping = pingMentions(ctx, interaction.member, o.ping);
@@ -189,23 +398,61 @@ export default definePlugin({
           await interaction.reply({ content: ping.refused, ephemeral: true });
           return;
         }
-        const hours = Math.min(o.hours ?? ctx.config.defaultHours, ctx.config.maxHours);
+        const requested = o.hours ?? ctx.config.defaultHours;
+        const native = o.style === "native";
+        if (
+          native &&
+          (o.anonymous ||
+            o.maximum !== undefined ||
+            ctx.config.eligibleRoles.length ||
+            ctx.config.roleWeights.length ||
+            !Number.isInteger(requested) ||
+            requested < 1 ||
+            requested > 768 ||
+            requested > ctx.config.maxHours ||
+            choices.some((c) => c.length > 55))
+        ) {
+          await interaction.reply(ctx.i18n.t("nativeOptions"));
+          return;
+        }
+        const start = o.start ? Date.parse(o.start) : Date.now();
+        if (o.start && (!Number.isFinite(start) || start <= Date.now())) {
+          await interaction.reply(ctx.i18n.t("future"));
+          return;
+        }
+        if (o.start && (o.ping || o.thread)) {
+          await interaction.reply(ctx.i18n.t("scheduledOptions"));
+          return;
+        }
+        const hours = Math.min(requested, ctx.config.maxHours);
         const now = Date.now();
         const poll: Poll = {
           id: String(await ctx.kv.increment("seq")),
           question: o.question.slice(0, 200),
           choices,
           multiple: o.multiple ?? false,
-          style: o.style === "select" ? "select" : "buttons",
+          style: native ? "native" : o.style === "select" ? "select" : "buttons",
+          anonymous: o.anonymous ?? false,
+          hours,
+          eligibleRoles: ctx.config.eligibleRoles,
+          weights: ctx.config.roleWeights,
+          ...(o.maximum ? { maxChoices: o.maximum, multiple: o.maximum > 1 } : {}),
           authorId: interaction.user.id,
           channelId: channel.id,
           messageId: "",
           createdAt: new Date(now).toISOString(),
-          closesAt: new Date(now + hours * HOUR).toISOString(),
+          closesAt: new Date(start + hours * HOUR).toISOString(),
           status: "open",
         };
+        if (o.start) {
+          poll.status = "scheduled";
+          await savePoll(ctx, poll);
+          await ctx.schedule.after(start - now, "open", { id: poll.id });
+          await interaction.reply(ctx.i18n.t("scheduled", { id: poll.id }));
+          return;
+        }
         const message = await channel.send({
-          ...renderPoll(poll, { counts: choices.map(() => 0), voters: [] }, ctx.config.color),
+          ...pollPayload(poll, ctx.config.color),
           ...(o.ping
             ? { content: `${o.ping.mention} — new poll by ${interaction.user.mention}` }
             : {}),
@@ -218,7 +465,7 @@ export default definePlugin({
           await channel.createThread(`Poll: ${poll.question}`.slice(0, 100), {
             fromMessage: message.id,
           });
-        await interaction.reply(`Poll #${poll.id} posted. It closes in ${hours} h.`);
+        await interaction.reply(ctx.i18n.t("posted", { id: poll.id, hours }));
       },
     }),
 
@@ -233,21 +480,21 @@ export default definePlugin({
           async run(ctx, interaction) {
             const poll = await getPoll(ctx, pollId(interaction.options.poll));
             if (!poll) {
-              await interaction.reply("No such poll.");
+              await interaction.reply(ctx.i18n.t("unknown"));
               return;
             }
             if (poll.status !== "open") {
-              await interaction.reply(`Poll #${poll.id} is already closed.`);
+              await interaction.reply(ctx.i18n.t("alreadyClosed", { id: poll.id }));
               return;
             }
             if (poll.authorId !== interaction.user.id && !isManager(ctx, interaction.member)) {
-              await interaction.reply("Only the author of the poll can close it.");
+              await interaction.reply(ctx.i18n.t("authorOnly"));
               return;
             }
             const final = await closePoll(ctx, poll, interaction.user.id);
             const message = await findMessage(ctx, poll.channelId, poll.messageId);
-            if (message) await message.edit(final);
-            await interaction.reply(`Poll #${poll.id} is closed.`);
+            if (message && poll.style !== "native") await message.edit(final);
+            await interaction.reply(ctx.i18n.t("closed", { id: poll.id }));
           },
         }),
         results: subcommand({
@@ -256,7 +503,7 @@ export default definePlugin({
           async run(ctx, interaction) {
             const poll = await getPoll(ctx, pollId(interaction.options.poll));
             if (!poll) {
-              await interaction.reply("No such poll.");
+              await interaction.reply(ctx.i18n.t("unknown"));
               return;
             }
             const { embeds } = renderPoll(poll, await tally(ctx, poll), ctx.config.color);
@@ -274,7 +521,10 @@ export default definePlugin({
       if (!poll) return;
       const choice = Number(interaction.componentId.split(":")[2]);
       if (!Number.isInteger(choice) || choice < 0 || choice >= poll.choices.length) return;
-      const current = (await ctx.kv.get<number[]>(voteKey(poll.id, interaction.user.id))) ?? [];
+      const ballot = await ctx.kv.get<number[] | { choices: number[]; weight: number }>(
+        voteKey(poll.id, interaction.user.id),
+      );
+      const current = Array.isArray(ballot) ? ballot : (ballot?.choices ?? []);
       const picked = current.includes(choice)
         ? current.filter((i) => i !== choice)
         : poll.multiple
@@ -300,7 +550,7 @@ export default definePlugin({
       if (!poll) return;
       if (poll.authorId !== interaction.user.id && !isManager(ctx, interaction.member)) {
         await interaction.reply({
-          content: "Only the author of the poll can close it.",
+          content: ctx.i18n.t("authorOnly"),
           ephemeral: true,
         });
         return;
@@ -310,13 +560,41 @@ export default definePlugin({
   },
 
   tasks: {
+    async open(ctx, payload) {
+      const poll = await getPoll(ctx, (payload as { id: string }).id);
+      if (!poll || poll.status !== "scheduled") return;
+      const channel = ctx.server.channel({ id: poll.channelId });
+      const marker = `Poll #${poll.id} · ${ctx.plugin.instance}`;
+      const history = await channel.messages({ limit: 100 });
+      const msg =
+        history.find((m) => m.author.id === ctx.bot.user.id && m.content === marker) ??
+        (await channel.send({
+          ...pollPayload(poll, ctx.config.color),
+          content: marker,
+          allowedMentions: { users: [], roles: [], everyone: false },
+        }));
+      poll.messageId = msg.id;
+      poll.status = "open";
+      poll.taskId = (
+        await ctx.schedule.after(Math.max(1, Date.parse(poll.closesAt) - Date.now()), "close", {
+          id: poll.id,
+        })
+      ).id;
+      await savePoll(ctx, poll);
+    },
     /** Scheduled when the poll is created; closes it unless it was closed manually. */
     async close(ctx, payload) {
       const id = (payload as { id?: string } | undefined)?.id ?? "";
       const poll = await getPoll(ctx, id);
-      if (!poll || poll.status !== "open") return;
+      if (
+        !poll ||
+        poll.status === "scheduled" ||
+        (poll.status === "closed" && (poll.published || (!poll.final && !poll.closing)))
+      )
+        return;
       const final = await closePoll(ctx, poll, null);
       const message = await findMessage(ctx, poll.channelId, poll.messageId);
+      if (poll.style === "native") return;
       if (message) await message.edit(final);
       else await ctx.server.channel({ id: poll.channelId }).send(final);
     },
@@ -329,7 +607,11 @@ export default definePlugin({
       access: "public",
       async handler(ctx, request) {
         const poll = await getPoll(ctx, request.params.id);
-        if (!poll)
+        if (
+          !poll ||
+          (!ctx.server.audience({ id: poll.channelId }).public &&
+            !request.viewer?.member?.canView({ id: poll.channelId }))
+        )
           return { status: 404, body: { error: { code: "not_found", message: "no such poll" } } };
         const t = await tally(ctx, poll);
         return {
@@ -341,7 +623,7 @@ export default definePlugin({
           closesAt: poll.closesAt,
           closedAt: poll.closedAt ?? null,
           choices: poll.choices.map((label, i) => ({ label, votes: t.counts[i] ?? 0 })),
-          voters: t.voters.length,
+          voters: t.voterCount ?? t.voters.length,
         };
       },
     },

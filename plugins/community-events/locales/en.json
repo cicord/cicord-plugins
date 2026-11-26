@@ -1,0 +1,21 @@
+{
+  "title": "Community events",
+  "staff": "Staff access required.",
+  "modal": "Create event",
+  "name": "Name",
+  "start": "Start (ISO 8601)",
+  "end": "End (ISO 8601)",
+  "location": "Location",
+  "invalid": "Enter a name, location and future start and end times.",
+  "created": "Event created.",
+  "optin": "Reminders enabled.",
+  "optout": "Reminders disabled.",
+  "starting": "{name} is starting.",
+  "commands.event.name": "event",
+  "commands.event.description": "Community events",
+  "commands.event.create.name": "create",
+  "commands.event.create.description": "Create a scheduled community event",
+  "commands.event.reminders.name": "reminders",
+  "commands.event.reminders.description": "Opt in or out of DMs for events you mark Interested",
+  "hour": "{name} begins in one hour."
+}

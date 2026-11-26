@@ -1,0 +1,36 @@
+{
+  "input": {
+    "type": "object",
+    "properties": {
+      "pollId": {
+        "type": "string"
+      },
+      "cursor": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "pollId"
+    ],
+    "additionalProperties": false
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "userIds": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 1000
+      },
+      "cursor": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "userIds"
+    ],
+    "additionalProperties": false
+  }
+}

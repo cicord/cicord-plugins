@@ -1,0 +1,18 @@
+{
+  "title": "Rapports statistiques",
+  "cohort": "Départs sous 7 jours : {left} sur {joined} arrivées enregistrées (à la publication).",
+  "noCohort": "Départs sous 7 jours indisponibles (collecte ServerMembers désactivée).",
+  "channels": "Messages des salons publics",
+  "daily": "Messages par jour",
+  "peak": "Créneau le plus actif : {when} ({best} messages).",
+  "members.total": "Membres",
+  "members.joined": "Arrivées",
+  "members.left": "Départs",
+  "members.active": "Membres actifs par jour (moyenne)",
+  "messages.sent": "Messages",
+  "voice.seconds": "Secondes en vocal",
+  "invites.uses": "Utilisations des invitations",
+  "moderation.actions": "Actions de modération",
+  "members.online": "En ligne",
+  "members.boosting": "Boosts"
+}

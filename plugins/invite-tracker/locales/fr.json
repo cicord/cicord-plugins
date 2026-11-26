@@ -1,0 +1,9 @@
+{
+  "title": "Suivi des invitations",
+  "empty": "Aucune invitation enregistrée.",
+  "counts": "{valid} valides · {fake} suspectes · {left} départs",
+  "commands.invites.name": "invitations",
+  "commands.invites.description": "Compter les invitations d’un membre",
+  "commands.invite-leaderboard.name": "classement-invitations",
+  "commands.invite-leaderboard.description": "Classement des invitations valides"
+}

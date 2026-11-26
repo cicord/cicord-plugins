@@ -1,0 +1,32 @@
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: stats-reports
+  version: 0.1.0
+  displayName: Statistics reports
+  description: Weekly and monthly aggregate activity reports, short-stay counts and voice channel counters.
+  license: Apache-2.0
+spec:
+  engine: ">=0.2.0"
+  entry: ./src/index.ts
+  config: {schema: ./config.schema.json}
+  locales: ./locales
+  delivery: at-least-once
+  capabilities:
+    - analytics.read
+    - discord.channels.read
+    - discord.messages.send
+    - scheduler
+    - storage.kv
+    - discord.messages.read # recover a posted report after interrupted delivery
+  optional:
+    - feature: charts
+      capabilities: [render]
+    - feature: cohorts
+      capabilities: [discord.members.read]
+      intents: [ServerMembers]
+    - feature: counters
+      capabilities: [discord.channels.manage]
+  privacy:
+    records:
+      - {name: members, policy: erase, description: "Pseudonymous join date until departure or expiry after thirty days."}

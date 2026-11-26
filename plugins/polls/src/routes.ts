@@ -8,7 +8,7 @@
 export interface PollResults {
   id: string;
   question: string;
-  status: "open" | "closed";
+  status: "scheduled" | "open" | "closed";
   /** Several choices per voter. */
   multiple: boolean;
   createdAt: string;

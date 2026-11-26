@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "properties": {
+    "userId": {
+      "type": "string"
+    },
+    "inviterId": {
+      "type": "string"
+    },
+    "code": {
+      "type": "string"
+    },
+    "fake": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "userId",
+    "fake"
+  ],
+  "additionalProperties": false
+}

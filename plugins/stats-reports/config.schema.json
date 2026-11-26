@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "staffChannel": {
+      "type": "string",
+      "x-cicord-ref": "channel"
+    },
+    "counters": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "members.total",
+          "members.online",
+          "members.boosting"
+        ],
+        "type": "string"
+      },
+      "uniqueItems": true,
+      "default": []
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}

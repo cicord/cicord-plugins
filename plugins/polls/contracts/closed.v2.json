@@ -1,0 +1,73 @@
+{
+  "type": "object",
+  "properties": {
+    "pollId": {
+      "type": "string"
+    },
+    "question": {
+      "type": "string"
+    },
+    "choices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "votes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "label",
+          "votes"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "winners": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "voters": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "closedBy": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "channelId": {
+      "type": "string"
+    },
+    "messageId": {
+      "type": "string"
+    },
+    "voterCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "votersTruncated": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "pollId",
+    "question",
+    "choices",
+    "winners",
+    "closedBy",
+    "channelId",
+    "messageId",
+    "voterCount"
+  ],
+  "additionalProperties": false
+}

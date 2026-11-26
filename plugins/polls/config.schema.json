@@ -7,7 +7,7 @@
       "description": "How long a poll stays open when /poll does not say (hours).",
       "type": "number",
       "exclusiveMinimum": 0,
-      "maximum": 720,
+      "maximum": 768,
       "default": 24,
       "x-cicord-access": "moderator"
     },
@@ -15,14 +15,16 @@
       "description": "Longest poll allowed (hours).",
       "type": "number",
       "exclusiveMinimum": 0,
-      "maximum": 720,
+      "maximum": 768,
       "default": 168,
       "x-cicord-access": "moderator"
     },
     "channels": {
       "description": "Channels where /poll may be used. Empty: everywhere.",
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "uniqueItems": true,
       "default": [],
       "x-cicord-ref": "channel",
@@ -31,7 +33,9 @@
     "managerRoles": {
       "description": "Poll managers: they may close any poll (its author always can) and ping any role with /poll ping (others only mentionable roles). Members with Administrator or Manage Server are managers too.",
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "uniqueItems": true,
       "default": [],
       "x-cicord-ref": "role"
@@ -47,6 +51,38 @@
       "pattern": "^#[0-9a-fA-F]{6}$",
       "default": "#5865f2",
       "x-cicord-widget": "color"
+    },
+    "eligibleRoles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true,
+      "default": [],
+      "x-cicord-ref": "role"
+    },
+    "roleWeights": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "x-cicord-ref": "role"
+          },
+          "weight": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "role",
+          "weight"
+        ],
+        "additionalProperties": false
+      },
+      "default": []
     }
   },
   "additionalProperties": false

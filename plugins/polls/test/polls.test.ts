@@ -7,6 +7,8 @@ import {
   runComponent,
 } from "@cicord/sdk/testing";
 import { describe, expect, test } from "vite-plus/test";
+import en from "../locales/en.json" with { type: "json" };
+import fr from "../locales/fr.json" with { type: "json" };
 import schema from "../config.schema.json" with { type: "json" };
 import plugin from "../src/index.ts";
 import { parseChoices, suggestPolls, type Poll } from "../src/polls.ts";
@@ -24,11 +26,12 @@ const grants = [
 
 function setup(config: Record<string, unknown> = {}) {
   return createTestContext({
+    locales: { en, fr },
     schema,
     config: { managerRoles: ["mod"], ...config },
     grants,
     plugin: { name: "polls" },
-    server: { id: "server-1" },
+    server: { id: "server-1", everyonePermissions: ["ViewChannel", "ReadMessageHistory"] },
     roles: {
       mod: { name: "Moderator" },
       events: { name: "Events", mentionable: true },
@@ -209,7 +212,7 @@ describe("closing", () => {
     expect(t.scheduled).toEqual([]);
     expect(r.updates[0]).toMatchObject({ components: [] });
     expect(description(r.updates[0])).toContain("**3. Sunday** 🏆");
-    expect(t.published).toEqual([
+    expect(t.published.slice(0, 1)).toMatchObject([
       {
         topic: "closed",
         payload: expect.objectContaining({
@@ -249,7 +252,7 @@ describe("closing", () => {
     expect(t.published[0]?.payload).toMatchObject({ closedBy: null, winners: ["Saturday"] });
     // running it twice is harmless
     await plugin.tasks!.close!(t.ctx, { id: "1" });
-    expect(t.published).toHaveLength(1);
+    expect(t.published).toHaveLength(2);
   });
 });
 
@@ -351,4 +354,112 @@ test("helpers", () => {
   expect(suggestPolls([{ id: "1", question: "x".repeat(200) } as Poll], "")[0]?.name).toHaveLength(
     100,
   );
+});
+
+test("weights, eligibility and anonymous erasure cover events, portal and delegated queries", async () => {
+  const t = setup({ eligibleRoles: ["mod"], roleWeights: [{ role: "mod", weight: 3 }] });
+  const { message } = await start(t, { anonymous: true });
+  const refused = await runComponent(plugin, t, "vote:1:0", { user: "2", message });
+  expect(refused.replies[0]).toMatchObject({ content: "Voting requires an eligible role." });
+  await runComponent(plugin, t, "vote:1:1", { user: "3", message });
+  await plugin.tasks!.close!(t.ctx, { id: "1" });
+  expect(t.published[1]?.payload).toMatchObject({
+    choices: [{ votes: 0 }, { votes: 3 }, { votes: 0 }],
+    voters: [],
+    voterCount: 1,
+  });
+  expect(t.kv.has("vote:1:3")).toBe(false);
+  expect(await plugin.queries!.voters!.run(t.ctx, { pollId: "1" }, caller)).toEqual({
+    userIds: [],
+  });
+  expect((await callRoute(plugin, t, "GET /polls/1")).body).toMatchObject({
+    voters: 1,
+    choices: [{ votes: 0 }, { votes: 3 }, { votes: 0 }],
+  });
+});
+const caller = {
+  caller: { bot: "main", instance: "levels", plugin: "levels", source: "cicord", verified: true },
+};
+test.each([4000, 10001])("complete voter pages and bounded v2 for %d participants", async (n) => {
+  const t = setup();
+  await start(t);
+  for (let i = 0; i < n; i++) t.kv.set("vote:1:" + String(100000 + i), [0]);
+  await plugin.tasks!.close!(t.ctx, { id: "1" });
+  const payload = t.published[1]!.payload as {
+    voterCount: number;
+    voters?: string[];
+    votersTruncated?: boolean;
+  };
+  expect(payload.voterCount).toBe(n);
+  if (n > 10000) {
+    expect(payload.voters).toBeUndefined();
+    expect(payload.votersTruncated).toBe(true);
+  } else expect(payload.voters).toHaveLength(n);
+  const all = new Set<string>();
+  let cursor: string | undefined;
+  do {
+    const page = (await plugin.queries!.voters!.run(t.ctx, { pollId: "1", cursor }, caller)) as {
+      userIds: string[];
+      cursor?: string;
+    };
+    expect(page.userIds.length).toBeLessThanOrEqual(1000);
+    for (const id of page.userIds) all.add(id);
+    cursor = page.cursor;
+  } while (cursor);
+  expect(all.size).toBe(n);
+  await plugin.tasks!.close!(t.ctx, { id: "1" });
+  expect(t.published).toHaveLength(2);
+});
+test("native mode refuses incompatible options and publishes the Discord tally", async () => {
+  for (const opt of [{ hours: 0.5 }, { anonymous: true }, { maximum: 1 }]) {
+    const t = setup();
+    const result = await runCommand(plugin, t, "poll", {
+      user: "1",
+      channel: "polls",
+      options: { question: "Q", choices: "A|B", style: "native", ...opt },
+    });
+    expect(result.replies[0]).toContain("Native polls");
+    expect(t.sent).toHaveLength(0);
+  }
+  const t = setup();
+  const { message, payload } = await start(t, { style: "native", multiple: true });
+  expect(payload.poll?.multiselect).toBe(true);
+  t.votePoll(message.id, 2, "2");
+  t.votePoll(message.id, 2, "3");
+  t.votePoll(message.id, 3, "3");
+  await plugin.tasks!.close!(t.ctx, { id: "1" });
+  expect(t.published[1]?.payload).toMatchObject({
+    voterCount: 2,
+    voters: ["2", "3"],
+    choices: [{ votes: 0 }, { votes: 2 }, { votes: 1 }],
+  });
+});
+
+test("delegated voter queries and the public results route recheck source visibility", async () => {
+  const h = setup();
+  await start(h);
+  await plugin.tasks!.close!(h.ctx, { id: "1" });
+  const denied = { ...caller, onBehalfOf: { userId: "unavailable", access: "admin" as const } };
+  await expect(plugin.queries!.voters!.run(h.ctx, { pollId: "1" }, denied)).rejects.toThrow();
+  h.ctx.server.audience = () => ({
+    known: true,
+    public: false,
+    allowRoles: [],
+    allowMembers: [],
+    denyMembers: [],
+  });
+  expect((await callRoute(plugin, h, "GET /polls/1")).status).toBe(404);
+});
+test("a scheduled poll opens once on task replay", async () => {
+  const h = setup();
+  const at = new Date(Date.now() + 3600000).toISOString();
+  await runCommand(plugin, h, "poll", {
+    user: "1",
+    channel: "polls",
+    options: { start: at, choices: "a|b", question: "When?" },
+  });
+  expect(h.sent).toHaveLength(0);
+  await plugin.tasks!.open!(h.ctx, { id: "1" });
+  await plugin.tasks!.open!(h.ctx, { id: "1" });
+  expect(h.sent).toHaveLength(1);
 });

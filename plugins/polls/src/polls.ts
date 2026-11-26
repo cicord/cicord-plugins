@@ -1,7 +1,7 @@
 /** Poll records, tallies and rendering, independent of the handlers. */
 import type { ActionRow, Context, Json, Message, MessagePayload } from "@cicord/sdk";
 
-type PollStyle = "buttons" | "select";
+type PollStyle = "buttons" | "select" | "native";
 
 /** Stored under `poll:<id>`. */
 export interface Poll {
@@ -17,7 +17,15 @@ export interface Poll {
   closesAt: string;
   /** Scheduled closing task (ctx.schedule.after). */
   taskId?: string;
-  status: "open" | "closed";
+  status: "scheduled" | "open" | "closed";
+  maxChoices?: number;
+  anonymous?: boolean;
+  eligibleRoles?: string[];
+  weights?: { role: string; weight: number }[];
+  hours?: number;
+  final?: { counts: number[]; voterCount: number };
+  published?: boolean;
+  closing?: boolean;
   closedAt?: string;
   closedBy?: string | null;
 }
@@ -25,6 +33,7 @@ export interface Poll {
 export interface Tally {
   counts: number[];
   voters: string[];
+  voterCount?: number;
 }
 
 /** Payload of the `polls.closed` event. */
@@ -68,19 +77,28 @@ export async function savePoll(ctx: Context, poll: Poll): Promise<void> {
 
 /** Counts votes (one KV key per voter, so concurrent votes never overwrite each other). */
 export async function tally(ctx: Context, poll: Poll): Promise<Tally> {
+  if (poll.final)
+    return { counts: poll.final.counts, voters: [], voterCount: poll.final.voterCount };
+  if (poll.style === "native") {
+    const message = await findMessage(ctx, poll.channelId, poll.messageId);
+    if (!message?.poll) throw new Error("Discord poll results are unavailable");
+    return { counts: message.poll.answers.map((a) => a.votes), voters: [] };
+  }
   const counts = poll.choices.map(() => 0);
   const voters: string[] = [];
   let cursor: string | undefined;
   do {
-    const page = await ctx.kv.list<number[]>({
+    const page = await ctx.kv.list<number[] | { choices: number[]; weight: number }>({
       prefix: `vote:${poll.id}:`,
       limit: 1000,
       ...(cursor ? { cursor } : {}),
     });
     for (const { key, value } of page.items) {
-      if (!Array.isArray(value) || value.length === 0) continue;
+      const picks = Array.isArray(value) ? value : value.choices;
+      const weight = Array.isArray(value) ? 1 : value.weight;
+      if (!picks?.length) continue;
       voters.push(key.slice(key.lastIndexOf(":") + 1));
-      for (const i of value) if (i >= 0 && i < counts.length) counts[i] = (counts[i] ?? 0) + 1;
+      for (const i of picks) if (i >= 0 && i < counts.length) counts[i] = (counts[i] ?? 0) + weight;
     }
     cursor = page.cursor;
   } while (cursor);
@@ -98,6 +116,7 @@ export function renderPoll(poll: Poll, t: Tally, color: string): MessagePayload 
   const total = t.counts.reduce((a, b) => a + b, 0);
   const max = Math.max(0, ...t.counts);
   const open = poll.status === "open";
+  const voters = t.voterCount ?? t.voters.length;
   const lines = poll.choices.map((label, i) => {
     const n = t.counts[i] ?? 0;
     const share = total > 0 ? n / total : 0;
@@ -107,7 +126,7 @@ export function renderPoll(poll: Poll, t: Tally, color: string): MessagePayload 
   const closes = Math.floor(Date.parse(poll.closesAt) / 1000);
   const footer = open
     ? `${poll.multiple ? "Several choices allowed" : "One choice"} · closes <t:${closes}:R>`
-    : `Closed · ${t.voters.length} voter${t.voters.length === 1 ? "" : "s"}`;
+    : `Closed · ${voters} voter${voters === 1 ? "" : "s"}`;
   return {
     embeds: [
       {
@@ -132,7 +151,7 @@ function components(poll: Poll): ActionRow[] {
           id: `pick:${poll.id}`,
           placeholder: poll.multiple ? "Pick one or more" : "Pick one",
           minValues: 1,
-          maxValues: poll.multiple ? poll.choices.length : 1,
+          maxValues: poll.multiple ? (poll.maxChoices ?? poll.choices.length) : 1,
           options: poll.choices.map((label, i) => ({ value: String(i), label })),
         },
       ],
@@ -166,7 +185,7 @@ export function closedEvent(poll: Poll, t: Tally): PollClosed {
     question: poll.question,
     choices: poll.choices.map((label, i) => ({ label, votes: t.counts[i] ?? 0 })),
     winners: max > 0 ? poll.choices.filter((_, i) => t.counts[i] === max) : [],
-    voters: t.voters,
+    voters: poll.anonymous ? [] : t.voters,
     closedBy: poll.closedBy ?? null,
     channelId: poll.channelId,
     messageId: poll.messageId,
