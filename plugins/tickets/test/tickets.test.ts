@@ -1626,7 +1626,7 @@ test("outbound modmail rechecks each recipient's channel history access, includi
         body: { content: "Private portal content" },
       })
     ).status,
-  ).toBe(403);
+  ).toBe(404);
   expect(JSON.stringify(t.sent)).not.toContain("Private portal content");
   await plugin.events!.messageCreate!(t.ctx, {
     ...messageIn(t, second, "2"),
@@ -1800,6 +1800,12 @@ test("both modmail detail routes withhold legacy initial text and URLs after sou
     expect(result.status).toBe(404);
     expect(JSON.stringify(result.body)).not.toContain(initial);
   }
+  const notes = await route(t, "POST /tickets/1/notes", {
+    viewer: "2",
+    body: { content: "Should not reveal an earlier DM" },
+  });
+  expect(notes.status).toBe(404);
+  expect(JSON.stringify(notes.body)).not.toContain(initial);
   await t.ctx.server.deleteChannel(channel);
   for (const [path, viewer] of [
     ["GET /tickets/mine/1", "1"],

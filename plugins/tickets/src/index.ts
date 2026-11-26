@@ -150,9 +150,13 @@ async function mayReadModmail(ctx: Context, t: Ticket, viewer?: Member) {
 
 async function staffTicket(ctx: Context, id: string, viewer: Viewer) {
   const t = await ticketById(ctx, id);
-  return failed(t) || !mayRead(ctx, t, viewer?.member)
-    ? fail(404, "not_found", "no such ticket")
-    : t;
+  if (
+    failed(t) ||
+    !mayRead(ctx, t, viewer?.member) ||
+    (t.source === "modmail" && !(await mayReadModmail(ctx, t, viewer?.member)))
+  )
+    return fail(404, "not_found", "no such ticket");
+  return t;
 }
 
 async function rate(ctx: Context, t: Ticket, userId: string, rating: number) {

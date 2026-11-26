@@ -167,6 +167,9 @@ export function normalize(raw: Ticket): Ticket {
       ];
   return {
     ...raw,
+    // Initial modmail content in early 0.4 records was copied into the opening form.
+    // It must never enter a metadata projection, mutation response or renewed channel.
+    ...(raw.source === "modmail" ? { description: "" } : {}),
     revision: raw.revision ?? 0,
     priority: PRIORITIES.includes(raw.priority) ? raw.priority : "normal",
     label: typeof raw.label === "string" ? raw.label : null,
