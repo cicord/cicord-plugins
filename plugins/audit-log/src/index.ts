@@ -1,201 +1,435 @@
-import { definePlugin, type Context, type Message, type Role, type TextChannel } from "@cicord/sdk";
-import { esc, flush, messageLink, record, snowflakeTime, ts } from "./log.ts";
+import {
+  definePlugin,
+  type AuditLogEntry,
+  type Context,
+  type EventHandlers,
+  type Json,
+} from "@cicord/sdk";
+import {
+  auditFact,
+  deadline,
+  deletion,
+  observeProof,
+  probeDeletion,
+  remember,
+} from "./deletions.ts";
+import {
+  esc,
+  feature,
+  flush,
+  housekeeping,
+  ignored,
+  migrate,
+  record,
+  snowflakeTime,
+  tr,
+  ts,
+  type Group,
+} from "./log.ts";
+import { privacy } from "./privacy.ts";
+import { routes } from "./search.ts";
+import type { CaseNotice, PartnerNotice, PollNotice } from "./contracts.ts";
 
-/**
- * Authors of recent messages (instance memory, lost on reload): a deletion event only
- * carries the message id, so this is how the log can say whose message it was.
- */
-const authors = new Map<string, { id: string; name: string }>();
-const AUTHORS_MAX = 5000;
-
-/** Payload of `moderation.case`: the moderation plugin's `Case`. */
-interface ModerationCase {
-  number?: number;
-  action?: string;
-  member?: { id: string; name: string };
-  moderator?: { id: string; name: string } | null;
-  reason?: string;
-  durationMinutes?: number;
+type Flag = keyof Context["config"]["events"];
+type Info = { subjects?: string[]; sources?: string[]; origin?: string };
+async function note(
+  ctx: Context,
+  flag: Flag,
+  group: Group,
+  key: string,
+  vars: Record<string, string | number>,
+  info: Info = {},
+) {
+  if (!ctx.config.enabled || !ctx.config.events[flag] || info.sources?.some((s) => ignored(ctx, s)))
+    return;
+  await record(
+    ctx,
+    {
+      group,
+      category: flag,
+      text: tr(ctx, key, vars),
+      subjects: info.subjects ?? [],
+      sources: info.sources ?? [],
+    },
+    info.origin,
+  );
+}
+function structural(ctx: Context, flag: Flag, key: string, id: string, source?: string) {
+  return note(ctx, flag, "structure", key, { id }, { sources: source ? [source] : [] });
+}
+function groupFor(action: string): [Flag, Group] | undefined {
+  const kind = action.split(".")[0];
+  if (kind === "channel" || kind === "overwrite") return ["channels", "structure"];
+  if (kind === "role") return ["roles", "structure"];
+  if (kind === "thread") return ["threads", "structure"];
+  if (kind === "emoji" || kind === "sticker") return ["expressions", "structure"];
+  if (kind === "server") return ["server", "structure"];
+  if (kind === "invite") return ["invites", "security"];
+  if (kind === "automod") return ["automod", "security"];
+  if (action === "member.ban" || action === "member.unban") return ["bans", "security"];
+}
+async function audit(ctx: Context, e: AuditLogEntry) {
+  if (!ctx.config.enabled) return;
+  if (e.action === "message.delete") {
+    await observeProof(ctx, e);
+    return;
+  }
+  const category = groupFor(e.action);
+  if (!category) return;
+  const [flag, group] = category;
+  if (!ctx.config.events[flag]) return;
+  const cicord = e.attribution.kind === "cicord" && e.attribution.certainty === "confirmed";
+  const who = cicord
+    ? tr(ctx, "via", { revision: e.attribution.revision?.slice(0, 12) ?? "—" })
+    : e.actorId
+      ? esc(e.actor?.username ?? e.actorId) + " (<@" + e.actorId + ">)"
+      : tr(ctx, "unknown");
+  const changes = e.changes
+    .map((c) => {
+      const add = c.addedPermissions?.join(", "),
+        remove = c.removedPermissions?.join(", ");
+      if (add || remove)
+        return [
+          c.key,
+          add ? tr(ctx, "added", { value: add }) : "",
+          remove ? tr(ctx, "removed", { value: remove }) : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+      if (c.key === "name" && typeof c.old === "string" && typeof c.new === "string")
+        return tr(ctx, "renamed", { before: esc(c.old), after: esc(c.new) });
+      return esc(c.key);
+    })
+    .join(" · ");
+  // Invite targets can be active join codes. A reason is untrusted free text.
+  const target = e.targetType === "invite" ? "—" : (e.targetId ?? "—");
+  const sources = e.targetType === "channel" && e.targetId ? [e.targetId] : [];
+  if (sources.some((id) => ignored(ctx, id))) return;
+  // Do not relay private channel names or other change values across audiences.
+  let details = changes;
+  if (sources.length) {
+    try {
+      const dest = ctx.server.channel(ctx.config.channels?.[group] ?? ctx.config.channel!);
+      if (
+        dest.id !== sources[0] ||
+        ctx.server.compareAudience({ id: sources[0]! }, dest) !== "same"
+      )
+        details = e.changes.map((c) => esc(c.key)).join(", ");
+    } catch {
+      details = "";
+    }
+  }
+  await record(
+    ctx,
+    {
+      group,
+      category: flag,
+      text: tr(ctx, "audit", {
+        action: e.action,
+        target,
+        who,
+        certainty:
+          e.actorId || cicord
+            ? tr(ctx, e.mergeable && !cicord ? "probable" : "confirmed")
+            : tr(ctx, "unknown"),
+        changes: details,
+      }),
+      subjects: [
+        ...(e.actorId ? [e.actorId] : []),
+        ...(e.targetType === "member" && e.targetId ? [e.targetId] : []),
+      ],
+      sources,
+    },
+    "audit-" + e.id,
+    true,
+  );
 }
 
-/** Payload of `polls.closed` (see the polls plugin). */
-interface PollClosed {
-  pollId?: string;
-  question?: string;
-  winners?: string[];
-  voters?: string[];
-  channelId?: string;
-  messageId?: string;
-}
-
-const ACTION_ICONS: Record<string, string> = {
-  warn: "⚠️",
-  timeout: "⏳",
-  untimeout: "✅",
-  kick: "👢",
-  ban: "🔨",
-  clear: "🧹",
+const events: EventHandlers = {
+  auditLogEntry: audit,
+  async memberJoin(ctx, m) {
+    if (ctx.config.ignoreBots && m.user.bot) return;
+    const created = snowflakeTime(m.id);
+    await note(
+      ctx,
+      "joins",
+      "members",
+      "join",
+      {
+        who: m.mention,
+        name: esc(m.user.username),
+        age: ts(created),
+        fresh: Date.now() - created < 604800000 ? tr(ctx, "fresh") : "",
+      },
+      { subjects: [m.id] },
+    );
+  },
+  async memberLeave(ctx, u) {
+    if (ctx.config.ignoreBots && u.bot) return;
+    await note(
+      ctx,
+      "leaves",
+      "members",
+      "leave",
+      { who: u.mention, name: esc(u.username) },
+      { subjects: [u.id] },
+    );
+  },
+  async memberUpdate(ctx, m, prev) {
+    if (!prev || (ctx.config.ignoreBots && m.user.bot)) return;
+    if (m.nickname !== prev.nickname)
+      await note(
+        ctx,
+        "nicknames",
+        "members",
+        "nickname",
+        { who: m.mention, before: esc(prev.nickname ?? "—"), after: esc(m.nickname ?? "—") },
+        { subjects: [m.id] },
+      );
+    const plus = m.roles.filter((r) => !prev.roles.some((p) => p.id === r.id)),
+      minus = prev.roles.filter((r) => !m.roles.some((p) => p.id === r.id));
+    if (plus.length || minus.length)
+      await note(
+        ctx,
+        "roles",
+        "members",
+        "roles",
+        {
+          who: m.mention,
+          add: plus.map((r) => r.mention).join(" "),
+          remove: minus.map((r) => r.mention).join(" "),
+        },
+        { subjects: [m.id] },
+      );
+  },
+  messageCreate: remember,
+  messageDelete: (ctx, m) => deletion(ctx, m.id, m.channel),
+  async messageUpdate(ctx, m) {
+    await remember(ctx, m);
+    if (!m.author?.id || (ctx.config.ignoreBots && m.author.bot)) return;
+    await note(
+      ctx,
+      "messageEdits",
+      "messages",
+      "edit",
+      { who: m.author.mention, channel: m.channel.mention, id: m.id },
+      { subjects: [m.author.id], sources: [m.channel.id] },
+    );
+  },
+  channelCreate: (ctx, e) =>
+    structural(ctx, "channels", "channel.create", e.channel.id, e.channel.id),
+  channelUpdate: (ctx, e) =>
+    structural(ctx, "channels", "channel.update", e.channel.id, e.channel.id),
+  channelDelete: (ctx, e) =>
+    structural(ctx, "channels", "channel.delete", e.channel.id, e.channel.id),
+  roleCreate: (ctx, e) => structural(ctx, "roles", "role.create", e.role.id),
+  roleUpdate: (ctx, e) => structural(ctx, "roles", "role.update", e.role.id),
+  roleDelete: (ctx, e) => structural(ctx, "roles", "role.delete", e.role.id),
+  threadCreate: (ctx, e) => structural(ctx, "threads", "thread.create", e.thread.id, e.thread.id),
+  threadDelete: (ctx, e) => structural(ctx, "threads", "thread.delete", e.thread.id, e.thread.id),
+  expressionsUpdate: (ctx, e) =>
+    note(ctx, "expressions", "structure", e.emojis ? "emoji" : "sticker", {
+      count: (e.emojis ?? e.stickers ?? []).length,
+    }),
+  serverUpdate: (ctx, e) =>
+    note(ctx, "server", "structure", "server", {
+      keys: Object.keys(e.changes).map(esc).join(", "),
+    }),
+  banAdd: (ctx, e) =>
+    note(ctx, "bans", "security", "ban", { who: e.user.mention }, { subjects: [e.user.id] }),
+  banRemove: (ctx, e) =>
+    note(ctx, "bans", "security", "unban", { who: e.user.mention }, { subjects: [e.user.id] }),
+  inviteCreate: (ctx, e) =>
+    note(
+      ctx,
+      "invites",
+      "security",
+      "invite.create",
+      { channel: e.channelId ? "<#" + e.channelId + ">" : "—" },
+      { subjects: e.inviter ? [e.inviter.id] : [], sources: e.channelId ? [e.channelId] : [] },
+    ),
+  inviteDelete: (ctx, e) =>
+    note(
+      ctx,
+      "invites",
+      "security",
+      "invite.delete",
+      { channel: e.channelId ? "<#" + e.channelId + ">" : "—" },
+      { sources: e.channelId ? [e.channelId] : [] },
+    ),
+  voiceStateUpdate: (ctx, e) => {
+    if (e.channel?.id === e.previous?.id || (ctx.config.ignoreBots && e.user.bot)) return;
+    return note(
+      ctx,
+      "voice",
+      "voice",
+      e.channel && e.previous ? "voice.move" : e.channel ? "voice.join" : "voice.leave",
+      { who: e.user.mention, from: e.previous?.mention ?? "—", to: e.channel?.mention ?? "—" },
+      {
+        subjects: [e.user.id],
+        sources: [e.previous?.id, e.channel?.id].filter((x): x is string => !!x),
+      },
+    );
+  },
+  automodAction: (ctx, e) =>
+    note(
+      ctx,
+      "automod",
+      "security",
+      "automod",
+      { who: "<@" + e.userId + ">", action: esc(e.action), rule: e.rule },
+      { subjects: [e.userId], sources: e.channelId ? [e.channelId] : [] },
+    ),
 };
 
-function ignored(ctx: Context, channel: TextChannel): boolean {
-  return ctx.config.ignoredChannels.some((key) => {
-    try {
-      return ctx.server.channel(key).id === channel.id;
-    } catch {
-      return false;
+type Meta = { id: string };
+function partner(topic: string) {
+  return async (ctx: Context, payload: Json, meta?: Meta) => {
+    if (
+      !ctx.config.enabled ||
+      !ctx.config.events.plugins ||
+      !feature(ctx, "partners") ||
+      !payload ||
+      typeof payload !== "object" ||
+      Array.isArray(payload)
+    )
+      return;
+    const c = payload as PartnerNotice & CaseNotice & PollNotice;
+    const origin = meta?.id ? "event-" + meta.id : undefined;
+    if (topic === "moderation.case") {
+      if (!c.member?.id || !c.action) return;
+      await note(
+        ctx,
+        "moderation",
+        "plugins",
+        "case",
+        {
+          number: c.number ?? "—",
+          action: esc(c.action),
+          who: "<@" + c.member.id + ">",
+          by: c.moderator?.id ? "<@" + c.moderator.id + ">" : tr(ctx, "automatic"),
+        },
+        { subjects: [c.member.id, ...(c.moderator?.id ? [c.moderator.id] : [])], origin },
+      );
+      return;
     }
-  });
+    if (topic === "polls.closed") {
+      if (!c.pollId) return;
+      await note(
+        ctx,
+        "polls",
+        "plugins",
+        "poll",
+        {
+          id: esc(c.pollId),
+          count: c.voterCount ?? (Array.isArray(payload["voters"]) ? payload["voters"].length : 0),
+        },
+        { sources: c.channelId ? [c.channelId] : [], origin },
+      );
+      return;
+    }
+    const subjects = [c.userId, c.memberId, c.authorId, c.actorId, c.ownerId, c.by].filter(
+      (x): x is string => typeof x === "string",
+    );
+    await note(
+      ctx,
+      "plugins",
+      "plugins",
+      "partner",
+      { event: topic, who: subjects.map((x) => "<@" + x + ">").join(", ") || "—" },
+      { subjects, sources: c.channelId ? [c.channelId] : [], origin },
+    );
+  };
 }
-
-const roleList = (roles: readonly Role[]): string => roles.map((r) => r.mention).join(" ");
-
-function duration(minutes: number): string {
-  if (minutes % 1440 === 0) return `${minutes / 1440} d`;
-  if (minutes % 60 === 0) return `${minutes / 60} h`;
-  return `${minutes} min`;
-}
-
-function remember(message: Message): void {
-  if (authors.size >= AUTHORS_MAX) {
-    const oldest = authors.keys().next().value;
-    if (oldest !== undefined) authors.delete(oldest);
-  }
-  authors.set(message.id, { id: message.author.id, name: message.author.username });
-}
-
+const topics = [
+  "moderation.case",
+  "moderation.caseUpdated",
+  "moderation.appeal",
+  "polls.closed",
+  "levels.levelUp",
+  "guard.violation",
+  "guard.raid",
+  "anti-nuke.triggered",
+  "verification.passed",
+  "verification.failed",
+  "tickets.opened",
+  "tickets.closed",
+  "giveaways.started",
+  "giveaways.ended",
+  "economy.transaction",
+  "member-roles.tempRoleExpired",
+];
 export default definePlugin({
-  events: {
-    async memberJoin(ctx, member) {
-      if (!ctx.config.events.joins || (ctx.config.ignoreBots && member.user.bot)) return;
-      const created = snowflakeTime(member.id);
-      const fresh = Date.now() - created < 7 * 86_400_000 ? " ⚠️ new account" : "";
-      await record(ctx, {
-        group: "members",
-        icon: "📥",
-        text: `${member.mention} **${esc(member.user.username)}** joined · account created ${ts(created)}${fresh}`,
-      });
+  async onStart(ctx) {
+    if (ctx.config.enabled && (await ctx.kv.get("meta:schema")) !== 2)
+      await ctx.schedule.after(1, "migrate");
+  },
+  events,
+  subscriptions: Object.fromEntries(topics.map((topic) => [topic, partner(topic)])),
+  routes,
+  privacy: {
+    async export(ctx, id) {
+      return (await privacy(ctx, id, false)).records;
     },
-
-    async memberLeave(ctx, user) {
-      if (!ctx.config.events.leaves || (ctx.config.ignoreBots && user.bot)) return;
-      await record(ctx, {
-        group: "members",
-        icon: "📤",
-        text: `${user.mention} **${esc(user.username)}** left (or was kicked or banned)`,
-      });
-    },
-
-    async memberUpdate(ctx, member, previous) {
-      if (!previous || (ctx.config.ignoreBots && member.user.bot)) return;
-      const { roles, nicknames } = ctx.config.events;
-      const who = `${member.mention} **${esc(member.user.username)}**`;
-      if (nicknames && (previous.nickname ?? null) !== (member.nickname ?? null)) {
-        const before = previous.nickname ? esc(previous.nickname) : "—";
-        const after = member.nickname ? esc(member.nickname) : "—";
-        await record(ctx, {
-          group: "members",
-          icon: "🏷️",
-          text: `${who} nickname: ${before} → ${after}`,
-        });
-      }
-      if (!roles) return;
-      const before = new Set(previous.roles.map((r) => r.id));
-      const after = new Set(member.roles.map((r) => r.id));
-      const added = member.roles.filter((r) => !before.has(r.id));
-      const removed = previous.roles.filter((r) => !after.has(r.id));
-      const parts: string[] = [];
-      if (added.length > 0) parts.push(`+ ${roleList(added)}`);
-      if (removed.length > 0) parts.push(`− ${roleList(removed)}`);
-      if (parts.length > 0)
-        await record(ctx, {
-          group: "members",
-          icon: "🎭",
-          text: `${who} roles: ${parts.join(" ")}`,
-        });
-    },
-
-    // Only to know who wrote a message that gets deleted later (no content is read).
-    messageCreate(ctx, message) {
-      if (!ctx.config.events.messageDeletes || !message.author?.id) return;
-      if (ctx.config.ignoreBots && message.author.bot) return;
-      remember(message);
-    },
-
-    async messageUpdate(ctx, message) {
-      // Partial updates (link previews) may come without an author.
-      if (!ctx.config.events.messageEdits || !message.author?.id) return;
-      if ((ctx.config.ignoreBots && message.author.bot) || ignored(ctx, message.channel)) return;
-      const link = messageLink(ctx.server.id, message.channel.id, message.id);
-      await record(ctx, {
-        group: "messages",
-        icon: "✏️",
-        text: `${message.author.mention} edited [a message](${link}) in ${message.channel.mention}`,
-      });
-    },
-
-    async messageDelete(ctx, { id, channel }) {
-      if (!ctx.config.events.messageDeletes || ignored(ctx, channel)) return;
-      const author = authors.get(id);
-      authors.delete(id);
-      // Unknown author: older than the plugin's memory, or a bot's (when bots are ignored).
-      const by = author ? ` by <@${author.id}> **${esc(author.name)}**` : "";
-      await record(ctx, {
-        group: "messages",
-        icon: "🗑️",
-        text: `A message${by} was deleted in ${channel.mention} (sent ${ts(snowflakeTime(id))})`,
-      });
+    async erase(ctx, id) {
+      return { erased: (await privacy(ctx, id, true)).erased };
     },
   },
-
-  subscriptions: {
-    /** Published by the moderation plugin for every case. */
-    async "moderation.case"(ctx, payload) {
-      if (!ctx.config.events.moderation) return;
-      const c = (payload ?? {}) as ModerationCase;
-      if (!c.action || !c.member?.id) return;
-      const by = c.moderator ? ` by <@${c.moderator.id}>` : " (automatic)";
-      const length = c.durationMinutes ? ` for ${duration(c.durationMinutes)}` : "";
-      const number = c.number ? `case #${c.number} · ` : "";
-      const reason = c.reason ? ` — ${esc(c.reason)}` : "";
-      await record(ctx, {
-        group: "plugins",
-        icon: ACTION_ICONS[c.action] ?? "🛡️",
-        text: `${number}**${esc(c.action)}** <@${c.member.id}> **${esc(c.member.name ?? "")}**${length}${by}${reason}`,
-      });
-    },
-
-    /** Published by the polls plugin when a poll closes. */
-    async "polls.closed"(ctx, payload) {
-      if (!ctx.config.events.polls) return;
-      const p = (payload ?? {}) as PollClosed;
-      if (!p.pollId) return;
-      const winners = p.winners?.length ? esc(p.winners.join(", ")) : "no votes";
-      const voters = p.voters?.length ?? 0;
-      const where =
-        p.channelId && p.messageId
-          ? ` [poll](${messageLink(ctx.server.id, p.channelId, p.messageId)})`
-          : "";
-      await record(ctx, {
-        group: "plugins",
-        icon: "📊",
-        text: `Poll #${esc(p.pollId)} “${esc(p.question ?? "")}” closed: ${winners} (${voters} voter${voters === 1 ? "" : "s"})${where}`,
-      });
-    },
-  },
-
   tasks: {
-    /** Scheduled by the first entry of a batch. */
+    async probeDeletion(ctx, v) {
+      if (
+        v &&
+        typeof v === "object" &&
+        !Array.isArray(v) &&
+        typeof v.key === "string" &&
+        typeof v.attempt === "number"
+      )
+        await probeDeletion(ctx, v.key, v.attempt);
+    },
+    async cleanup(ctx) {
+      await housekeeping(ctx);
+    },
+    async auditFact(ctx, v) {
+      if (
+        v &&
+        typeof v === "object" &&
+        !Array.isArray(v) &&
+        typeof v.proof === "string" &&
+        typeof v.count === "number"
+      )
+        await auditFact(ctx, v.proof, v.count);
+    },
     async flush(ctx) {
       await flush(ctx);
     },
+    async migrate(ctx) {
+      await migrate(ctx);
+    },
+    async deletionDeadline(ctx, v) {
+      if (v && typeof v === "object" && !Array.isArray(v) && typeof v.key === "string")
+        await deadline(ctx, v.key);
+    },
   },
-
   schedules: {
-    /** Safety net: posts a batch whose flush task was lost (e.g. a crash at the wrong time). */
     sweep: {
       cron: "@every 1m",
       async run(ctx) {
-        if (ctx.config.batchSeconds > 0) await flush(ctx, (ctx.config.batchSeconds + 60) * 1000);
+        await housekeeping(ctx);
+        if (!ctx.config.enabled) return;
+        await migrate(ctx);
+        await flush(ctx, true);
+        const cursor = await ctx.kv.get<string>("deadline:cursor");
+        const page = await ctx.kv.list({ prefix: "pending:", limit: 30, cursor });
+        for (const item of page.items)
+          if (
+            item.value &&
+            typeof item.value === "object" &&
+            !Array.isArray(item.value) &&
+            Number(item.value.at) + 30_000 <= Date.now()
+          )
+            await deadline(ctx, item.key);
+        if (page.cursor) await ctx.kv.set("deadline:cursor", page.cursor);
+        else await ctx.kv.delete("deadline:cursor");
       },
     },
   },

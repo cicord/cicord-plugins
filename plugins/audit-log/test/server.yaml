@@ -1,0 +1,2 @@
+# Disposable CLI smoke guild. Only its owner and administrator bot read the log.
+privateChannels: [audit]

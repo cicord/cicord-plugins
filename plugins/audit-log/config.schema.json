@@ -2,7 +2,6 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Audit log plugin config",
   "type": "object",
-  "required": ["channel"],
   "properties": {
     "channel": {
       "description": "Staff channel of the log. Keep it private: it names members and links to their messages.",
@@ -10,12 +9,36 @@
       "x-cicord-ref": "channel"
     },
     "channels": {
-      "description": "Send a category to its own channel instead (members: joins, leaves, roles, nicknames; messages: edits and deletions; plugins: moderation cases and polls).",
+      "description": "Optional per-category destinations. Each must have a known audience equal to or narrower than the configured private staff log.",
       "type": "object",
       "properties": {
-        "members": { "type": "string", "x-cicord-ref": "channel" },
-        "messages": { "type": "string", "x-cicord-ref": "channel" },
-        "plugins": { "type": "string", "x-cicord-ref": "channel" }
+        "members": {
+          "type": "string",
+          "x-cicord-ref": "channel"
+        },
+        "messages": {
+          "type": "string",
+          "x-cicord-ref": "channel"
+        },
+        "plugins": {
+          "type": "string",
+          "x-cicord-ref": "channel"
+        },
+        "structure": {
+          "type": "string",
+          "x-cicord-ref": "channel",
+          "description": "Structure log destination."
+        },
+        "security": {
+          "type": "string",
+          "x-cicord-ref": "channel",
+          "description": "Security log destination."
+        },
+        "voice": {
+          "type": "string",
+          "x-cicord-ref": "channel",
+          "description": "Voice log destination."
+        }
       },
       "additionalProperties": false
     },
@@ -23,29 +46,100 @@
       "description": "What is logged.",
       "type": "object",
       "properties": {
-        "joins": { "description": "A member joins (with the account age).", "type": "boolean", "default": true },
-        "leaves": { "description": "A member leaves, is kicked or banned.", "type": "boolean", "default": true },
-        "roles": { "description": "Roles added to or removed from a member.", "type": "boolean", "default": true },
-        "nicknames": { "description": "Nickname changes.", "type": "boolean", "default": true },
+        "joins": {
+          "description": "A member joins (with the account age).",
+          "type": "boolean",
+          "default": true
+        },
+        "leaves": {
+          "description": "A member leaves, is kicked or banned.",
+          "type": "boolean",
+          "default": true
+        },
+        "roles": {
+          "description": "Roles added to or removed from a member.",
+          "type": "boolean",
+          "default": true
+        },
+        "nicknames": {
+          "description": "Nickname changes.",
+          "type": "boolean",
+          "default": true
+        },
         "messageEdits": {
           "description": "A message is edited. Discord also reports link previews as edits, so this is noisy.",
           "type": "boolean",
           "default": false
         },
-        "messageDeletes": { "description": "A message is deleted (author when known).", "type": "boolean", "default": true },
+        "messageDeletes": {
+          "description": "A message is deleted (author when known).",
+          "type": "boolean",
+          "default": true
+        },
         "moderation": {
           "description": "Cases published by the moderation plugin (moderation.case).",
           "type": "boolean",
           "default": true
         },
-        "polls": { "description": "Polls closed (polls.closed).", "type": "boolean", "default": false }
+        "polls": {
+          "description": "Polls closed (polls.closed).",
+          "type": "boolean",
+          "default": false
+        },
+        "channels": {
+          "type": "boolean",
+          "default": true,
+          "description": "Channel structure and overwrite changes."
+        },
+        "threads": {
+          "type": "boolean",
+          "default": true,
+          "description": "Thread creation and deletion."
+        },
+        "expressions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Emoji and sticker changes."
+        },
+        "server": {
+          "type": "boolean",
+          "default": true,
+          "description": "Server settings."
+        },
+        "bans": {
+          "type": "boolean",
+          "default": true,
+          "description": "Bans and unbans."
+        },
+        "invites": {
+          "type": "boolean",
+          "default": true,
+          "description": "Invite changes without join codes."
+        },
+        "voice": {
+          "type": "boolean",
+          "default": true,
+          "description": "Voice joins, departures and moves."
+        },
+        "automod": {
+          "type": "boolean",
+          "default": true,
+          "description": "AutoMod enforcement metadata."
+        },
+        "plugins": {
+          "type": "boolean",
+          "default": true,
+          "description": "Declared partner events."
+        }
       },
       "additionalProperties": false
     },
     "ignoredChannels": {
       "description": "Message edits and deletions in these channels are not logged.",
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "uniqueItems": true,
       "default": [],
       "x-cicord-ref": "channel",
@@ -72,7 +166,44 @@
       "maximum": 500,
       "default": 60,
       "x-cicord-access": "moderator"
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Observe enabled categories and post to the staff log."
+    },
+    "retentionDays": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 30,
+      "default": 30,
+      "description": "Days to retain searchable metadata and bot-authored log copies."
+    },
+    "cacheContent": {
+      "type": "boolean",
+      "default": false,
+      "description": "Privacy-sensitive. Cache up to 2,000 characters of non-ignored messages for at most seven days. Requires MessageContent. Staff portal reads check source permissions each time."
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "const": false
+          }
+        }
+      },
+      "then": {},
+      "else": {
+        "required": [
+          "channel"
+        ]
+      }
+    }
+  ]
 }

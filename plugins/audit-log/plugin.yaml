@@ -3,23 +3,57 @@ apiVersion: cicord.dev/v1alpha1
 kind: Plugin
 metadata:
   name: audit-log
-  version: 0.1.0
+  version: 0.2.0
   displayName: Audit log
-  description: Posts server events to a staff log channel in compact batched embeds. Joins and leaves, role and nickname changes, message edits and deletions, moderation cases and closed polls from the other plugins. Each category can be turned off or sent to its own channel.
+  description: Staff-only audit observations with evidence-based attribution and thirty-day search. Optional MessageContent access caches message text for up to seven days.
   license: Apache-2.0
   keywords: [audit, logs, moderation, staff, events]
 spec:
-  engine: ">=0.1.0"
+  engine: ">=0.2.0-0"
   entry: ./src/index.ts
   capabilities:
-    - discord.messages.send     # the log messages
-    - discord.channels.read
-    - storage.kv                # the batch queue
-    - scheduler                 # batch flushes
-    - events.subscribe          # moderation.case, polls.closed
-  # ServerMembers: joins, leaves, role and nickname changes. ServerMessages: edits and
-  # deletions; who posted and where is enough, so no MessageContent (the log never
-  # shows what people wrote).
-  intents: [ServerMembers, ServerMessages]
-  config:
-    schema: ./config.schema.json
+    - discord.messages.send # post observations and edit the bot's own log copies
+    - discord.messages.read # find existing deliveries and retract bot-owned copies
+    - discord.channels.read # check source and destination audiences
+    - discord.auditlog.read # authoritative actor and permission-change evidence
+    - storage.kv # durable outbox, correlation, retention and privacy records
+    - scheduler # attribution deadlines, migrations, retry and retention
+    - portal.routes # moderator search and export
+  intents: [ServerMembers, ServerMessages, ServerModeration, ServerInvites, ServerVoiceStates, ServerExpressions, AutoModerationExecution]
+  optional:
+    - feature: cacheContent
+      when: /cacheContent
+      intents: [MessageContent]
+    - feature: search
+      capabilities: [storage.index]
+    - feature: partners
+      capabilities: [events.subscribe]
+  config: {schema: ./config.schema.json}
+  locales: ./locales
+  routes: {types: ./src/routes.ts}
+  delivery: at-least-once
+  interop:
+    types: ./src/contracts.ts
+    subscribes:
+      - {topic: moderation.case, version: 2}
+      - moderation.caseUpdated
+      - moderation.appeal
+      - {topic: polls.closed, version: 2}
+      - levels.levelUp
+      - guard.violation
+      - guard.raid
+      - anti-nuke.triggered
+      - verification.passed
+      - verification.failed
+      - tickets.opened
+      - tickets.closed
+      - giveaways.started
+      - giveaways.ended
+      - economy.transaction
+      - member-roles.tempRoleExpired
+  privacy:
+    records:
+      - {name: observation, policy: erase, description: "Observations naming the member, pending batch entries, search documents and lines in bot-authored copies.", retention: "1–30 days, configured by retentionDays."}
+      - {name: shared-observation, policy: anonymize, description: "Remove the subject from multi-member observations, discard free text, and redact the corresponding index and Discord copy.", retention: "1–30 days."}
+      - {name: attribution, policy: erase, description: "Short-lived audit evidence, observed authors and unresolved deletions.", retention: "Evidence for 90 seconds; author metadata for up to seven days."}
+      - {name: message-content, policy: erase, description: "Opt-in excerpts from non-ignored channels. Search hits require current access to the source and staff log.", retention: "Up to seven days, or the configured shorter retention."}
