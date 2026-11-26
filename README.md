@@ -104,6 +104,12 @@ pnpm test                                    # every plugin's unit tests
 cicord dev --sim                             # in a Cicord repository using the plugin
 ```
 
+`check-all.sh` also runs the published-migration fixtures (`plugins/*/test/persistence/`)
+and the mixed-version interop fixture (`scripts/interop/`). They run `go test` in a Cicord
+core checkout: pass `--core <dir>` or set `CICORD_SOURCE`; otherwise a sibling `../cicord`
+or `../codi` checkout is used, and the script fails if there is none. Set
+`CICORD_TEST_POSTGRES_URL` to cover PostgreSQL too.
+
 `cicord plugin sdk-types plugins/<name>` writes the SDK types to `plugins/<name>/.cicord/`
 (git-ignored) for editors and `tsc`.
 
