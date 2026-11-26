@@ -479,6 +479,7 @@ export default definePlugin({
         await ctx.kv.set(key, { doc, task: task.id });
         await ctx.index("solved").upsert(doc, {
           text: msg.content.slice(0, 1600),
+          tags: ["member-" + msg.author.id],
           meta: { channel, forum: message, ...(thread ? { thread } : {}) },
         });
         return { saved: true };
