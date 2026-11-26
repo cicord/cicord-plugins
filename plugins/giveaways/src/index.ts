@@ -57,6 +57,12 @@ async function entries(ctx: Context, id: string) {
   } while (cursor);
   return canonical(result);
 }
+function canRead(ctx: Context, g: Giveaway, member?: Member) {
+  const source = { id: g.channelId };
+  // A missing snapshot or channel must never turn a private drawing into a public proof.
+  const audience = ctx.server.audience(source);
+  return audience.known && (member ? member.canView(source) : audience.public);
+}
 function view(g: Giveaway): DrawView {
   return {
     id: g.id,
@@ -204,7 +210,12 @@ async function enter(ctx: Context, i: Interaction, id: string, leave: boolean) {
     1 + ctx.config.bonus.reduce((s, r) => s + (i.member!.hasRole(r.role) ? r.entries : 0), 0);
   for (;;) {
     const [g, e] = await Promise.all([ctx.kv.getEntry<Giveaway>(key(id)), ctx.kv.getEntry(ek)]);
-    if (!g || g.value.state !== "open" || Date.now() >= g.value.closesAt)
+    if (
+      !g ||
+      !canRead(ctx, g.value, i.member) ||
+      g.value.state !== "open" ||
+      Date.now() >= g.value.closesAt
+    )
       return i.reply({ content: t(ctx, "closed"), ephemeral: true });
     if (leave === !e) break;
     const due = Date.now() >= g.value.refreshAt;
@@ -322,14 +333,14 @@ async function settle(ctx: Context, id: string, round: number, count?: number) {
       const marker = `notice:${id}:${uid}`;
       if ((await ctx.kv.atomic().check(marker, null).set(marker, true).commit()).ok) {
         try {
-          await (
-            await ctx.server.member(uid)
-          )?.send(
-            t(ctx, "winner", {
-              prize: g.prize,
-              link: `https://discord.com/channels/${ctx.server.id}/${g.channelId}/${g.messageId}`,
-            }),
-          );
+          const winner = await ctx.server.member(uid);
+          if (winner && canRead(ctx, g, winner))
+            await winner.send(
+              t(ctx, "winner", {
+                prize: g.prize,
+                link: `https://discord.com/channels/${ctx.server.id}/${g.channelId}/${g.messageId}`,
+              }),
+            );
         } catch (error) {
           ctx.log.warn("Winner notification failed", { id, error: String(error) });
         }
@@ -371,6 +382,7 @@ const opts = {
       const q = focused.value.toLowerCase(),
         p = await ctx.kv.list<Giveaway>({ prefix: "gw:", limit: 100 });
       return p.items
+        .filter((e) => canRead(ctx, e.value, i.member))
         .filter((e) => e.value.id.startsWith(q) || e.value.prize.toLowerCase().includes(q))
         .slice(0, 25)
         .map((e) => ({
@@ -387,7 +399,7 @@ const actionCommand = (mode: "end" | "cancel" | "reroll") =>
     async run(ctx, i) {
       if (!ctx.config.enabled || !manager(ctx, i.member)) return i.reply(t(ctx, "staff"));
       const cur = await ctx.kv.getEntry<Giveaway>(key(i.options.id));
-      if (!cur) return i.reply(t(ctx, "closed"));
+      if (!cur || !canRead(ctx, cur.value, i.member)) return i.reply(t(ctx, "closed"));
       if (mode === "cancel" && cur.value.state === "open") {
         const g = {
           ...cur.value,
@@ -487,6 +499,7 @@ export default definePlugin({
             const { items } = await ctx.kv.list<Giveaway>({ prefix: "gw:", limit: 25 });
             await i.reply(
               items
+                .filter((e) => canRead(ctx, e.value, i.member))
                 .map((e) => e.value.id + " · " + e.value.prize)
                 .join("\n")
                 .slice(0, 1900) || t(ctx, "no"),
@@ -545,7 +558,12 @@ export default definePlugin({
       if (!ctx.config.enabled) return i.reply(t(ctx, "off"));
       for (;;) {
         const c = await ctx.kv.getEntry<Giveaway>(key(id));
-        if (!c || !c.value.winners.includes(i.user.id) || c.value.claimBy <= Date.now())
+        if (
+          !c ||
+          !canRead(ctx, c.value, i.member) ||
+          !c.value.winners.includes(i.user.id) ||
+          c.value.claimBy <= Date.now()
+        )
           return i.reply({ content: t(ctx, "unclaimed"), ephemeral: true });
         if (
           c.value.claimed.includes(i.user.id) ||
@@ -612,7 +630,7 @@ export default definePlugin({
       access: "public",
       async handler(ctx, r) {
         const g = await ctx.kv.get<Giveaway>(key(r.params.id));
-        if (!g || !ctx.config.enabled) return { status: 404 };
+        if (!g || !ctx.config.enabled || !canRead(ctx, g, r.viewer?.member)) return { status: 404 };
         return {
           ...view(g),
           ...(ctx.config.publishEntrants && g.state === "ended"
@@ -624,19 +642,27 @@ export default definePlugin({
     "GET /giveaways/:id/entries": {
       access: "moderator",
       async handler(ctx, r) {
-        return { entries: ctx.config.enabled ? await entries(ctx, r.params.id) : [] };
+        const g = await ctx.kv.get<Giveaway>(key(r.params.id));
+        if (!g || !ctx.config.enabled || !canRead(ctx, g, r.viewer?.member)) return { status: 404 };
+        return { entries: await entries(ctx, g.id) };
       },
     },
     "GET /giveaways": {
       access: "moderator",
       async handler(ctx, r) {
         if (!ctx.config.enabled) return { items: [] };
-        const page = await ctx.kv.list<Giveaway>({
-          prefix: "gw:",
-          limit: 50,
-          cursor: r.query.cursor,
-        });
-        return { items: page.items.map((e) => view(e.value)), cursor: page.cursor };
+        const items: DrawView[] = [];
+        let cursor = r.query.cursor;
+        do {
+          const page = await ctx.kv.list<Giveaway>({ prefix: "gw:", limit: 250, cursor });
+          for (const row of page.items)
+            if (canRead(ctx, row.value, r.viewer?.member)) {
+              items.push(view(row.value));
+              if (items.length === 50) return { items, cursor: row.key };
+            }
+          cursor = page.cursor;
+        } while (cursor);
+        return { items };
       },
     },
   }),

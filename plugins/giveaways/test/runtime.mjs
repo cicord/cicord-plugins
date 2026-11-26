@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { appendFile } from "node:fs/promises";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -94,5 +94,33 @@ test(
     });
     assert.deepEqual(done.winners, [alice.id]);
     assert.equal(posts(await channelMessages()).length, 1);
+    const server = join(sim.repo, "servers/acceptance.yaml");
+    const yaml = await readFile(server, "utf8");
+    await writeFile(
+      server,
+      yaml.replace(
+        "    general:\n",
+        '    general:\n      overwrites:\n        "@everyone": {deny: [ReadMessageHistory]}\n        moderator: {allow: [ReadMessageHistory]}\n',
+      ),
+    );
+    const path = "/api/v1/portal/acceptance/plugins/bot/giveaways/giveaways/" + opening.id;
+    const aliceToken = await sim.login(alice);
+    await until(
+      async () => {
+        try {
+          await sim.api(path);
+          return false;
+        } catch (e) {
+          if (!String(e).includes("404")) throw e;
+          return true;
+        }
+      },
+      Boolean,
+      15000,
+    );
+    await assert.rejects(sim.api(path, undefined, aliceToken), /404/);
+    const staff = await sim.api(path, undefined, token);
+    assert.deepEqual(staff.winners, [alice.id]);
+    assert.equal(staff.entrantsHash, done.entrantsHash);
   },
 );

@@ -56,6 +56,7 @@ test("replayed deadline keeps the same result and changes the original announcem
     h = createTestContext({
       schema,
       config: { enabled: true },
+      server: { everyonePermissions: ["ViewChannel", "ReadMessageHistory"] },
       locales: { en },
       channels: { lobby: { name: "Lobby" } },
       members: v.entries.map((e) => ({ id: e.userId })),
@@ -94,4 +95,66 @@ test("replayed deadline keeps the same result and changes the original announcem
   await plugin.privacy!.erase(h.ctx, "9");
   expect(await plugin.privacy!.export(h.ctx, "9")).toEqual([]);
   expect(await plugin.privacy!.export(h.ctx, "20")).toHaveLength(1);
+});
+test("private proof, staff rows and entrant downloads recheck the viewer’s current history permission", async () => {
+  const h = createTestContext({
+    schema,
+    config: { enabled: true },
+    locales: { en },
+    server: { ownerId: "99", everyonePermissions: ["ViewChannel", "ReadMessageHistory"] },
+    access: { moderators: { users: ["1", "2"] } },
+    roles: { reader: { name: "Draw reader" } },
+    members: [{ id: "1", roles: ["reader"] }, { id: "2" }],
+    channels: {
+      staff: {
+        name: "staff",
+        overwrites: {
+          "@everyone": { deny: ["ReadMessageHistory"] },
+          reader: { allow: ["ReadMessageHistory"] },
+        },
+      },
+    },
+  });
+  const v = vectors[0]!,
+    g = {
+      id: v.id,
+      prize: "private prize",
+      description: "",
+      source: "staff",
+      channelId: h.channel("staff")!.id,
+      messageId: "17",
+      closesAt: 1,
+      seed: v.seed,
+      commitment: v.expected.commitment,
+      entrants: 4,
+      slots: 2,
+      state: "ended",
+      history: v.expected.winners,
+      winners: v.expected.winners,
+      claimed: [],
+      round: 1,
+      claimBy: 0,
+      entrantsHash: v.expected.entrantsHash,
+      refreshAt: 0,
+    };
+  await h.ctx.kv.set("gw:" + v.id, g);
+  for (const e of v.entries) await h.ctx.kv.set("entry:" + v.id + ":" + e.userId, e.weight);
+  const route = "GET /giveaways/" + v.id;
+  const hidden = await callRoute(plugin, h, "GET /giveaways/absent");
+  expect(await callRoute(plugin, h, route)).toEqual(hidden);
+  expect((await callRoute(plugin, h, route, { viewer: "1" })).body).toMatchObject({
+    seed: v.seed,
+    entrantsHash: v.expected.entrantsHash,
+  });
+  expect((await callRoute(plugin, h, route, { viewer: "2" })).status).toBe(404);
+  expect((await callRoute(plugin, h, "GET /giveaways", { viewer: "2" })).body).toMatchObject({
+    items: [],
+  });
+  expect((await callRoute(plugin, h, route + "/entries", { viewer: "1" })).status).toBe(200);
+  await h.member("1")!.removeRole("reader");
+  for (const path of [route, route + "/entries"])
+    expect((await callRoute(plugin, h, path, { viewer: "1" })).status).toBe(404);
+  expect((await callRoute(plugin, h, "GET /giveaways", { viewer: "1" })).body).toMatchObject({
+    items: [],
+  });
 });
