@@ -7,6 +7,8 @@ import {
   type TestContextOptions,
 } from "@cicord/sdk/testing";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
+import en from "../locales/en.json" with { type: "json" };
+import fr from "../locales/fr.json" with { type: "json" };
 import schema from "../config.schema.json" with { type: "json" };
 import plugin from "../src/index.ts";
 import { liftBanIfCurrent } from "../src/bans.ts";
@@ -35,6 +37,7 @@ function setup(
 ) {
   const audit: AuditLogEntry[] = [];
   const t = createTestContext({
+    locales: { en, fr },
     schema,
     auditEntries: audit,
     config: { logChannel: "mod-log", ...config },
@@ -421,6 +424,7 @@ describe("webhook and routes", () => {
     const http = vi.spyOn(t.ctx.http, "fetch").mockResolvedValue({
       status: 204,
       headers: {},
+      bytes: async () => new Uint8Array(),
       text: async () => "",
       json: async <T>() => undefined as T,
     });
@@ -589,6 +593,7 @@ describe("case access and approval", () => {
 describe("ownership and delivery recovery", () => {
   test("a channel deny blocks both the preview and a confirmation issued before revocation", async () => {
     const t = createTestContext({
+      locales: { en, fr },
       schema,
       config: { logChannel: "log" },
       grants: [...grants, "discord.channels.manage"],
@@ -778,4 +783,15 @@ describe("ownership and delivery recovery", () => {
     await saveNewCase(t.ctx, { ...c, number: 23, action: "note", reason: "staff only" });
     expect(JSON.stringify([...t.sent, ...t.published])).not.toContain("staff only");
   });
+});
+
+test("French interactions use the French warning reply and sanction DM", async () => {
+  const t = setup({ locale: "fr" });
+  const r = await runCommand(plugin, t, "warn", {
+    user: "1",
+    options: { member: user(t, "2"), reason: "spam" },
+  });
+  expect(r.replies[0]).toContain("a reçu un avertissement");
+  expect(dms(t, "2")[0]).toContain("Vous avez reçu un avertissement");
+  expect(logs(t)[0]?.title).toBe("Dossier nº 1 · Avertissement");
 });

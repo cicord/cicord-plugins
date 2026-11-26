@@ -59,16 +59,16 @@ export async function previewPurge(
 ) {
   const channel = it.channel;
   if (!channel || !(await allowed(ctx, it.user.id, channel))) {
-    await it.reply("You need Manage Messages in this server.");
+    await it.reply(ctx.i18n.t("purge.permission"));
     return;
   }
 
   if (o.count > ctx.config.purge.maxCount) {
-    await it.reply(`The purge limit is ${ctx.config.purge.maxCount} messages.`);
+    await it.reply(ctx.i18n.t("purge.limit", { count: ctx.config.purge.maxCount }));
     return;
   }
   if (o.after_message && !/^[1-9]\d{0,19}$/.test(o.after_message)) {
-    await it.reply("Enter a Discord message ID.");
+    await it.reply(ctx.i18n.t("purge.id"));
     return;
   }
   let ids: string[], skipped: number;
@@ -83,21 +83,26 @@ export async function previewPurge(
     }));
   } catch (error) {
     if (String(error).includes("MessageContent")) {
-      await it.reply("This filter requires the Message Content intent for this instance.");
+      await it.reply(ctx.i18n.t("purge.intent"));
       return;
     }
     throw error;
   }
   const scanned = ids.length + skipped;
   if (!ids.length) {
-    await it.reply(`No messages match. Skipped ${skipped}.`);
+    await it.reply(ctx.i18n.t("purge.zero", { skipped: skipped }));
     return;
   }
   const key = String(await ctx.kv.increment("purge-seq"));
   const preview: Preview = { actor: it.user.id, channel: channel.id, ids, scanned, skipped };
   await ctx.kv.set(`purge:${key}`, preview, { ttlSeconds: 120 });
   await it.reply({
-    content: `Delete ${ids.length} messages in ${channel.mention}? Scanned ${scanned}, skipped ${skipped}. This preview expires in two minutes.`,
+    content: ctx.i18n.t("purge.preview", {
+      count: ids.length,
+      channel: channel.mention,
+      scanned: scanned,
+      skipped: skipped,
+    }),
     components: [
       {
         type: "row",
@@ -106,9 +111,14 @@ export async function previewPurge(
             type: "button",
             style: "danger",
             id: `purge-confirm:${key}`,
-            label: "Delete listed messages",
+            label: ctx.i18n.t("purge.confirm"),
           },
-          { type: "button", style: "secondary", id: `purge-cancel:${key}`, label: "Cancel" },
+          {
+            type: "button",
+            style: "secondary",
+            id: `purge-cancel:${key}`,
+            label: ctx.i18n.t("purge.cancel"),
+          },
         ],
       },
     ],
@@ -118,7 +128,7 @@ export async function previewPurge(
 export async function finishPurge(ctx: Context, it: ComponentInteraction) {
   const [action, id] = it.componentId.split(":");
   if (!id || running.has(id)) {
-    await it.reply({ content: "This preview is already being processed.", ephemeral: true });
+    await it.reply({ content: ctx.i18n.t("purge.busy"), ephemeral: true });
     return;
   }
   running.add(id);
@@ -131,12 +141,12 @@ export async function finishPurge(ctx: Context, it: ComponentInteraction) {
       preview.channel !== it.channel?.id ||
       !(await allowed(ctx, it.user.id, it.channel))
     ) {
-      await it.reply({ content: "This preview is unavailable.", ephemeral: true });
+      await it.reply({ content: ctx.i18n.t("purge.missing"), ephemeral: true });
       return;
     }
     if (action === "purge-cancel") {
       await ctx.kv.delete(key);
-      await it.update({ content: "Purge cancelled.", components: [] });
+      await it.update({ content: ctx.i18n.t("purge.cancelled"), components: [] });
       return;
     }
     // Consume the confirmation before the first external effect. The exact frozen IDs
@@ -152,7 +162,7 @@ export async function finishPurge(ctx: Context, it: ComponentInteraction) {
         );
     } catch {
       await it.update({
-        content: `Purge interrupted after ${deleted} confirmed deletions. Preview again to inspect what remains.`,
+        content: ctx.i18n.t("purge.partial", { count: deleted }),
         components: [],
       });
       return;
@@ -164,7 +174,7 @@ export async function finishPurge(ctx: Context, it: ComponentInteraction) {
       reason: `Deleted ${deleted} messages in ${channel.mention}; skipped ${preview.skipped}.`,
     });
     await it.update({
-      content: `Deleted ${deleted} messages. Skipped ${preview.skipped}.`,
+      content: ctx.i18n.t("purge.done", { count: deleted, skipped: preview.skipped }),
       components: [],
     });
   } finally {

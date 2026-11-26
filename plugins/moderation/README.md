@@ -84,3 +84,9 @@ pseudonymizes historical identities. A current sanction retains the minimum
 target and generation needed for safe enforcement and release. Discord's own
 audit logs and copies already received by external webhooks follow their
 operators' retention policies.
+
+Discord commands, member notices and moderator replies support English and French.
+Set the instance locale to `fr` to select French throughout the server, or leave
+it unset to follow the interaction and server locale. To exclude an assignment
+that was already absent from Discord during quarantine, authorized staff can use
+`DELETE /quarantines/:id/roles/:role` with the member and role IDs before release.

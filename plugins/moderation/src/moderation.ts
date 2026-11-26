@@ -60,47 +60,50 @@ const COLORS: Record<Action, string> = {
   clear: "#2ecc71",
 };
 
-const TITLES: Record<Action, string> = {
-  warn: "Warning",
-  timeout: "Timeout",
-  untimeout: "Timeout removed",
-  kick: "Kick",
-  ban: "Ban",
-  tempban: "Temporary ban",
-  unban: "Ban lifted",
-  note: "Staff note",
-  purge: "Purge",
-  quarantine: "Quarantine",
-  release: "Released",
-  clear: "Warnings cleared",
-};
-
 export const warnPrefix = (userId: string): string => `warn:${userId}:`;
 
 export function who(user: User, displayName?: string): { id: string; name: string } {
   return { id: user.id, name: displayName ?? user.displayName };
 }
 
-export function duration(minutes: number): string {
-  if (minutes % 1440 === 0) return `${minutes / 1440} day${minutes === 1440 ? "" : "s"}`;
-  if (minutes % 60 === 0) return `${minutes / 60} h`;
-  return `${minutes} min`;
+export function duration(ctx: Context, minutes: number): string {
+  if (minutes % 1440 === 0)
+    return ctx.i18n.t(minutes === 1440 ? "duration.day" : "duration.days", { n: minutes / 1440 });
+  if (minutes % 60 === 0) return ctx.i18n.t("duration.hours", { n: minutes / 60 });
+  return ctx.i18n.t("duration.minutes", { n: minutes });
 }
 
-function caseEmbed(c: Case): Embed {
+function caseEmbed(ctx: Context, c: Case): Embed {
   const fields: NonNullable<Embed["fields"]> = [
     ...(c.member
-      ? [{ name: "Member", value: `<@${c.member.id}> (${c.member.name})`, inline: true }]
+      ? [
+          {
+            name: ctx.i18n.t("case.member"),
+            value: `<@${c.member.id}> (${c.member.name})`,
+            inline: true,
+          },
+        ]
       : []),
-    { name: "Moderator", value: c.moderator ? `<@${c.moderator.id}>` : "automatic", inline: true },
+    {
+      name: ctx.i18n.t("case.moderator"),
+      value: c.moderator ? `<@${c.moderator.id}>` : "automatic",
+      inline: true,
+    },
   ];
   if (c.durationMinutes)
-    fields.push({ name: "Duration", value: duration(c.durationMinutes), inline: true });
-  fields.push({ name: "Reason", value: c.reason || "—" });
-  if (c.evidence) fields.push({ name: "Evidence", value: c.evidence });
+    fields.push({
+      name: ctx.i18n.t("case.duration"),
+      value: duration(ctx, c.durationMinutes),
+      inline: true,
+    });
+  fields.push({ name: ctx.i18n.t("case.reason"), value: c.reason || "—" });
+  if (c.evidence) fields.push({ name: ctx.i18n.t("case.evidence"), value: c.evidence });
   const image = c.evidence && /\.(png|jpe?g|gif|webp)(\?|$)/i.test(c.evidence);
   return {
-    title: `Case #${c.number} · ${TITLES[c.action]}`,
+    title: ctx.i18n.t("case.title", {
+      number: c.number,
+      action: ctx.i18n.t("actions." + c.action),
+    }),
     color: COLORS[c.action],
     fields,
     ...(image ? { image: { url: c.evidence as string } } : {}),
@@ -317,7 +320,7 @@ async function deliver(ctx: Context, number: number) {
     await ctx.kv.set(key, d, { ttlSeconds });
     await notifyWebhook(
       ctx,
-      `Case #${number} · ${TITLES[c.action]}: ${c.member?.name ?? "channel"} — ${c.reason || "no reason"}${c.moderator ? ` (by ${c.moderator.name})` : ""}`,
+      `Case #${number} · ${ctx.i18n.t("actions." + c.action)}: ${c.member?.name ?? "channel"} — ${c.reason || "no reason"}${c.moderator ? ` (by ${c.moderator.name})` : ""}`,
     );
   }
   const channel = ctx.server.channel({ id: d.channelId });
@@ -351,7 +354,7 @@ async function deliver(ctx: Context, number: number) {
       if (relation === "same" || relation === "narrower") evidence = c.evidence;
     }
     await channel.send({
-      embeds: [{ ...caseEmbed({ ...c, evidence }), footer: { text: footer } }],
+      embeds: [{ ...caseEmbed(ctx, { ...c, evidence }), footer: { text: footer } }],
       nonce,
       enforceNonce: true,
       allowedMentions: { users: false, roles: false, everyone: false },

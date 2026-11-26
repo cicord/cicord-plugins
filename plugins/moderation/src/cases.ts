@@ -37,10 +37,10 @@ export const caseCommand = command({
       async run(ctx, it) {
         const c = await readCase(ctx, it.options.number);
         if (it.member?.access !== "admin" && it.member?.access !== "moderator") {
-          await it.reply("Staff access required.");
+          await it.reply(ctx.i18n.t("access.staff"));
           return;
         }
-        await it.reply(c ? describe(c) : "Case not found.");
+        await it.reply(c ? describe(c) : ctx.i18n.t("case.missing"));
       },
     }),
     reason: subcommand({
@@ -51,12 +51,12 @@ export const caseCommand = command({
       },
       async run(ctx, it) {
         if (it.member?.access !== "moderator" && it.member?.access !== "admin") {
-          await it.reply("Staff access required.");
+          await it.reply(ctx.i18n.t("access.staff"));
           return;
         }
         const c = await readCase(ctx, it.options.number);
         if (!c) {
-          await it.reply("Case not found.");
+          await it.reply(ctx.i18n.t("case.missing"));
           return;
         }
         c.reason = it.options.text.slice(0, 1500);
@@ -75,12 +75,12 @@ export const caseCommand = command({
       options: { number: numberOption },
       async run(ctx, it) {
         if (it.member?.access !== "admin") {
-          await it.reply("Administrator access required.");
+          await it.reply(ctx.i18n.t("access.admin"));
           return;
         }
         const c = await readCase(ctx, it.options.number);
         if (!c) {
-          await it.reply("Case not found.");
+          await it.reply(ctx.i18n.t("case.missing"));
           return;
         }
         if (c.status !== "void") {
@@ -94,7 +94,7 @@ export const caseCommand = command({
               by: it.user.id,
             });
         }
-        await it.reply(`Case #${c.number} voided.`);
+        await it.reply(ctx.i18n.t("case.void", { number: c.number }));
       },
     }),
   },
@@ -109,7 +109,7 @@ export const noteCommand = command({
   },
   async run(ctx, it) {
     if (it.member?.access !== "moderator" && it.member?.access !== "admin") {
-      await it.reply("Staff access required.");
+      await it.reply(ctx.i18n.t("access.staff"));
       return;
     }
     const number = await ctx.kv.increment("cases");
@@ -125,7 +125,7 @@ export const noteCommand = command({
     };
     await ctx.kv.set(`case:${number}`, c, { ttlSeconds: caseTTL(c.at) });
     await indexCase(ctx, c);
-    await it.reply(`Private note #${number} recorded.`);
+    await it.reply(ctx.i18n.t("case.note", { number: number }));
   },
 });
 export async function history(ctx: Context, user: string, staff: boolean, limit: number) {
@@ -145,12 +145,12 @@ export const historyCommand = command({
   async run(ctx, it) {
     const staff = it.member?.access === "moderator" || it.member?.access === "admin";
     if (!staff && it.options.member.id !== it.user.id) {
-      await it.reply("Staff access required.");
+      await it.reply(ctx.i18n.t("access.staff"));
       return;
     }
     const items = await history(ctx, it.options.member.id, staff, 10);
     await it.reply(
-      items.length ? items.map(describe).join("\n").slice(0, 1950) : "No recent cases.",
+      items.length ? items.map(describe).join("\n").slice(0, 1950) : ctx.i18n.t("case.empty"),
     );
   },
 });

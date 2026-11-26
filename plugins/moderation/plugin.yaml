@@ -11,6 +11,7 @@ metadata:
 spec:
   engine: ">=0.2.0-0"
   entry: ./src/index.ts
+  locales: ./locales
   delivery: at-least-once
   privacy:
     records:
@@ -20,6 +21,8 @@ spec:
       - {name: appeals, policy: erase, description: Erase appeal statements and case access.}
       - {name: warnings-indexes-and-statistics, policy: erase, description: Erase the subject's warning and history indexes and staff totals.}
   optional:
+    - {feature: legacyFlood, capabilities: [discord.messages.manage]}
+    - {feature: legacyMemberLog, capabilities: [discord.messages.send]}
     - {feature: lock, capabilities: [server.overlays]}
     - {feature: quarantine, capabilities: [discord.roles.assign]}
     - {feature: appeals, capabilities: [portal.links]}

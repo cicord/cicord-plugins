@@ -2,6 +2,8 @@ import type { AuditLogEntry, Context, Json, Member } from "@cicord/sdk";
 import { who, editCase, readCase, saveNewCase, type Case } from "./moderation.ts";
 import { serialize } from "./queue.ts";
 
+export class QuarantineRefusal extends Error {}
+
 type Quarantine = {
   number: number;
   user: string;
@@ -21,7 +23,7 @@ const save = (ctx: Context, q: Quarantine) => ctx.kv.set(key(q.user), q as unkno
 async function checkedTarget(ctx: Context, m: Member) {
   const roleKey = ctx.config.quarantineRole;
   if (!roleKey || !ctx.features.enabled("quarantine"))
-    throw new Error("Configure quarantineRole and grant discord.roles.assign first.");
+    throw new QuarantineRefusal(ctx.i18n.t("quarantine.configure"));
   const role = ctx.server.role(roleKey);
   if (
     !role ||
@@ -30,13 +32,13 @@ async function checkedTarget(ctx: Context, m: Member) {
     role.declaredMembers ||
     role.id === ctx.server.id
   )
-    throw new Error("Quarantine requires an assignable role without declared holders.");
+    throw new QuarantineRefusal(ctx.i18n.t("quarantine.role"));
   const bot = await ctx.server.member(ctx.bot.user.id);
   if (!bot || bot.roles.some((r) => r.position === undefined))
-    throw new Error("Bot role hierarchy is unavailable.");
+    throw new QuarantineRefusal(ctx.i18n.t("quarantine.hierarchy"));
   const top = Math.max(0, ...bot.roles.map((r) => r.position!));
   if (role.position >= top || m.roles.some((r) => r.position === undefined || r.position >= top))
-    throw new Error("Target or quarantine role is above the bot.");
+    throw new QuarantineRefusal(ctx.i18n.t("quarantine.above"));
   if (
     m.declaredRoles === undefined ||
     m.roles.some(
@@ -45,13 +47,10 @@ async function checkedTarget(ctx: Context, m: Member) {
         (r.declaredMembers && (!r.key || !m.declaredRoles?.includes(r.key))),
     )
   )
-    throw new Error("Some role ownership is uncertain. Use a timeout.");
+    throw new QuarantineRefusal(ctx.i18n.t("quarantine.uncertain"));
   if (m.declaredRoles.length && !ctx.features.enabled("lock"))
-    throw new Error(
-      "This member holds roles declared in YAML. Enable server.overlays or use a timeout.",
-    );
-  if (m.roles.some((r) => r.managed))
-    throw new Error("Discord manages a target role. Use a timeout.");
+    throw new QuarantineRefusal(ctx.i18n.t("quarantine.overlay"));
+  if (m.roles.some((r) => r.managed)) throw new QuarantineRefusal(ctx.i18n.t("quarantine.managed"));
   return role;
 }
 
@@ -65,13 +64,13 @@ export async function quarantine(
 ) {
   return serialize(key(m.id), async () => {
     const current = await ctx.server.member(m.id);
-    if (!current) throw new Error("Member left the server.");
+    if (!current) throw new QuarantineRefusal(ctx.i18n.t("quarantine.left"));
     const role = await checkedTarget(ctx, current);
     if (!Number.isSafeInteger(minutes) || minutes < 1 || minutes > 10080)
-      throw new Error("Duration must be 1–10080 minutes.");
+      throw new QuarantineRefusal(ctx.i18n.t("quarantine.duration"));
     const old = await ctx.kv.get<Quarantine>(key(m.id));
     if (old && old.role !== role.id)
-      throw new Error("Release the existing quarantine before changing its role.");
+      throw new QuarantineRefusal(ctx.i18n.t("quarantine.releaseFirst"));
     const number = await ctx.kv.increment("cases");
     const until = new Date(Date.now() + minutes * 60000).toISOString();
     const remove = current.roles
@@ -97,13 +96,17 @@ export async function quarantine(
       source,
       expiresAt: until,
     };
-    q.pending=c;
+    q.pending = c;
     // Both handlers inspect the case generation. Scheduling them before persisting
     // intent makes a crash before the first Discord request harmless.
-    await ctx.schedule.after(1000,"applyQuarantine",{user:m.id,number});
-    const task=await ctx.schedule.after(minutes*60000,"expireQuarantine",{number,user:m.id});
-    q.task=task.id;await save(ctx,q);
-    await enforce(ctx,q,current);
+    await ctx.schedule.after(1000, "applyQuarantine", { user: m.id, number });
+    const task = await ctx.schedule.after(minutes * 60000, "expireQuarantine", {
+      number,
+      user: m.id,
+    });
+    q.task = task.id;
+    await save(ctx, q);
+    await enforce(ctx, q, current);
     if (old) {
       if (old.task) await ctx.schedule.cancel(old.task);
       const prior = await readCase(ctx, old.number);
@@ -113,19 +116,29 @@ export async function quarantine(
   });
 }
 
-async function enforce(ctx:Context,q:Quarantine,m:Member){
- const c=q.pending;if(!c || Date.parse(q.until)<=Date.now())return;
- if(q.overlay)await ctx.server.overlays.apply({id:overlayId(m.id),reason:c.reason,until:new Date(q.until),members:{[m.id]:{suspendDeclaredRoles:true}}});
- if(!m.hasRole({id:q.role}))await m.addRole({id:q.role},c.reason);
- for(const id of q.removing)if(m.hasRole({id}))await m.removeRole({id},c.reason);
- await saveNewCase(ctx,c);
- delete q.pending;await save(ctx,q);
+async function enforce(ctx: Context, q: Quarantine, m: Member) {
+  const c = q.pending;
+  if (!c || Date.parse(q.until) <= Date.now()) return;
+  if (q.overlay)
+    await ctx.server.overlays.apply({
+      id: overlayId(m.id),
+      reason: c.reason,
+      until: new Date(q.until),
+      members: { [m.id]: { suspendDeclaredRoles: true } },
+    });
+  if (!m.hasRole({ id: q.role })) await m.addRole({ id: q.role }, c.reason);
+  for (const id of q.removing) if (m.hasRole({ id })) await m.removeRole({ id }, c.reason);
+  await saveNewCase(ctx, c);
+  delete q.pending;
+  await save(ctx, q);
 }
-export async function recoverQuarantine(ctx:Context,user:string,number:number){
- await serialize(key(user),async()=>{
-  const q=await ctx.kv.get<Quarantine>(key(user));if(!q?.pending || q.number!==number)return;
-  const m=await ctx.server.member(user);if(m)await enforce(ctx,q,m);
- });
+export async function recoverQuarantine(ctx: Context, user: string, number: number) {
+  await serialize(key(user), async () => {
+    const q = await ctx.kv.get<Quarantine>(key(user));
+    if (!q?.pending || q.number !== number) return;
+    const m = await ctx.server.member(user);
+    if (m) await enforce(ctx, q, m);
+  });
 }
 
 export async function release(
@@ -218,10 +231,13 @@ export async function staffRoleChange(ctx: Context, e: AuditLogEntry) {
   });
 }
 
-export async function excludeSavedRole(ctx:Context,user:string,role:string){
- return serialize(key(user),async()=>{
-  const q=await ctx.kv.get<Quarantine>(key(user));if(!q)return false;
-  q.restore=q.restore.filter(id=>id!==role);q.removing=q.removing.filter(id=>id!==role);
-  await save(ctx,q);return true;
- });
+export async function excludeSavedRole(ctx: Context, user: string, role: string) {
+  return serialize(key(user), async () => {
+    const q = await ctx.kv.get<Quarantine>(key(user));
+    if (!q) return false;
+    q.restore = q.restore.filter((id) => id !== role);
+    q.removing = q.removing.filter((id) => id !== role);
+    await save(ctx, q);
+    return true;
+  });
 }

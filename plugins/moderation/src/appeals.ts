@@ -45,7 +45,7 @@ export async function appealLink(ctx: Context, c: Case) {
 }
 export async function linkMessage(ctx: Context, c: Case, message: string) {
   const url = await appealLink(ctx, c);
-  return url ? message + "\nAppeal case #" + c.number + ": " + url : message;
+  return url ? message + "\n" + ctx.i18n.t("appeal.link", { number: c.number, url }) : message;
 }
 async function scopedCase(ctx: Context, r: RouteRequest) {
   const number = safeNumber(r.scope?.id);
@@ -95,7 +95,7 @@ export async function submitAppeal(ctx: Context, r: RouteRequest): Promise<Route
         {
           userId: user,
           caseNumber: c.number,
-          subject: "Moderation appeal #" + c.number,
+          subject: ctx.i18n.t("appeal.ticket", { number: c.number }),
           description: a.text,
         },
         { idempotencyKey: "appeal:" + c.number },
@@ -109,12 +109,10 @@ export async function submitAppeal(ctx: Context, r: RouteRequest): Promise<Route
       if (audience === "same" || audience === "narrower") {
         a.notified = true;
         await save(ctx, a);
-        await ctx.server
-          .channel(target)
-          .send({
-            content: "Appeal submitted for case #" + c.number,
-            allowedMentions: { users: false, roles: false, everyone: false },
-          });
+        await ctx.server.channel(target).send({
+          content: ctx.i18n.t("appeal.submitted", { number: c.number }),
+          allowedMentions: { users: false, roles: false, everyone: false },
+        });
       }
     }
     await ctx.events.publish(
@@ -209,10 +207,7 @@ export async function renew(ctx: Context, r: RouteRequest): Promise<RouteRespons
     });
     // Reserve the cooldown before sending. An ambiguous network error cannot send
     // duplicate DMs if the browser retries.
-    await ctx.server.sendDM(
-      c.member!.id,
-      "Your renewed link to appeal case #" + c.number + ": " + url,
-    );
+    await ctx.server.sendDM(c.member!.id, ctx.i18n.t("appeal.renewed", { number: c.number, url }));
     return { status: 200, body: { sent: true } };
   });
 }

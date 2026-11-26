@@ -41,7 +41,15 @@ import {
 import { purge, finishPurge, previewPurge } from "./purge.ts";
 
 import { serialize } from "./queue.ts";
-import { quarantine, release, trackQuarantine, staffRoleChange,recoverQuarantine,excludeSavedRole } from "./quarantine.ts";
+import {
+  QuarantineRefusal,
+  quarantine,
+  release,
+  trackQuarantine,
+  staffRoleChange,
+  recoverQuarantine,
+  excludeSavedRole,
+} from "./quarantine.ts";
 import {
   appealLink,
   linkMessage,
@@ -89,11 +97,19 @@ async function sanction(
   const server = ctx.server.name;
   const why = reason ? `: ${reason}` : ".";
   const text = {
-    timeout: `You were timed out on **${server}** for ${duration(opts.minutes ?? 0)}${why}`,
-    untimeout: `Your timeout on **${server}** was removed.`,
-    kick: `You were kicked from **${server}**${why}`,
-    tempban: `You were temporarily banned from **${server}** for ${duration(opts.minutes ?? 0)}${why}`,
-    ban: `You were banned from **${server}**${why}`,
+    timeout: ctx.i18n.t("dm.timeout", {
+      server: server,
+      duration: duration(ctx, opts.minutes ?? 0),
+      reason: why,
+    }),
+    untimeout: ctx.i18n.t("dm.untimeout", { server: server }),
+    kick: ctx.i18n.t("dm.kick", { server: server, reason: why }),
+    tempban: ctx.i18n.t("dm.tempban", {
+      server: server,
+      duration: duration(ctx, opts.minutes ?? 0),
+      reason: why,
+    }),
+    ban: ctx.i18n.t("dm.ban", { server: server, reason: why }),
   }[action];
   const source = opts.source ?? { type: moderator ? "command" : "escalation" };
   const actor = who(member.user, member.displayName);
@@ -162,9 +178,6 @@ function topPosition(member: Member, strict: boolean): number | undefined {
   return top;
 }
 
-const UNVERIFIABLE =
-  "I cannot check the role hierarchy right now (server roles or owner not loaded yet): try again in a moment.";
-
 /**
  * Discord only checks the bot's role hierarchy, so the plugin checks the moderator's: the
  * server owner may moderate anyone; nobody may moderate the owner; members with the
@@ -173,22 +186,23 @@ const UNVERIFIABLE =
  * verified (an older engine, roles not cached) is refused.
  */
 function hierarchyProblem(
+  ctx: Context,
   ownerId: string | undefined,
   moderator: Member | undefined,
   member: Member,
 ): string | undefined {
-  if (ownerId === undefined) return UNVERIFIABLE;
-  if (member.id === ownerId) return "You cannot moderate the server owner.";
+  if (ownerId === undefined) return ctx.i18n.t("hierarchy.unknown");
+  if (member.id === ownerId) return ctx.i18n.t("hierarchy.owner");
   if (moderator?.id === ownerId) return undefined;
-  if (!moderator) return "Moderation commands can only be used by members of the server.";
-  if (member.access === undefined || moderator.access === undefined) return UNVERIFIABLE;
+  if (!moderator) return ctx.i18n.t("hierarchy.guild");
+  if (member.access === undefined || moderator.access === undefined)
+    return ctx.i18n.t("hierarchy.unknown");
   if (member.access !== "member" && moderator.access !== "admin")
-    return `${member.mention} is staff (${member.access} access): only an admin can moderate them.`;
+    return ctx.i18n.t("moderation.staffTarget", { member: member.mention, access: member.access });
   const theirs = topPosition(member, true);
-  if (theirs === undefined) return UNVERIFIABLE;
+  if (theirs === undefined) return ctx.i18n.t("hierarchy.unknown");
   const mine = topPosition(moderator, false) ?? 0;
-  if (mine <= theirs)
-    return `You cannot moderate ${member.mention}: their highest role is not below yours.`;
+  if (mine <= theirs) return ctx.i18n.t("moderation.hierarchy", { member: member.mention });
   return undefined;
 }
 
@@ -200,10 +214,10 @@ async function target(
 ): Promise<Member | undefined> {
   const member = await ctx.server.member(userId);
   let problem: string | undefined;
-  if (!member) problem = "This user is not a member of the server.";
-  else if (member.id === interaction.user.id) problem = "You cannot moderate yourself.";
-  else if (member.user.bot) problem = "Bots cannot be moderated with these commands.";
-  else problem = hierarchyProblem(ctx.server.ownerId, interaction.member, member);
+  if (!member) problem = ctx.i18n.t("hierarchy.absent");
+  else if (member.id === interaction.user.id) problem = ctx.i18n.t("hierarchy.self");
+  else if (member.user.bot) problem = ctx.i18n.t("hierarchy.bot");
+  else problem = hierarchyProblem(ctx, ctx.server.ownerId, interaction.member, member);
   if (problem) {
     await interaction.reply({ content: problem, ephemeral: true });
     return undefined;
@@ -225,11 +239,17 @@ async function sanctionCommand(
   opts: { minutes?: number; deleteMessages?: boolean } = {},
 ) {
   const done: Record<typeof action, string> = {
-    timeout: `⏳ ${member.mention} is timed out for ${duration(opts.minutes ?? 0)}.`,
-    untimeout: `✅ The timeout of ${member.mention} was removed.`,
-    kick: `👢 ${member.mention} was kicked.`,
-    tempban: `🔨 ${member.mention} was banned for ${duration(opts.minutes ?? 0)}.`,
-    ban: `🔨 ${member.mention} was banned.`,
+    timeout: ctx.i18n.t("moderation.timeout", {
+      member: member.mention,
+      duration: duration(ctx, opts.minutes ?? 0),
+    }),
+    untimeout: ctx.i18n.t("moderation.untimeout", { member: member.mention }),
+    kick: ctx.i18n.t("moderation.kick", { member: member.mention }),
+    tempban: ctx.i18n.t("moderation.tempban", {
+      member: member.mention,
+      duration: duration(ctx, opts.minutes ?? 0),
+    }),
+    ban: ctx.i18n.t("moderation.ban", { member: member.mention }),
   };
   let delivered: boolean;
   try {
@@ -238,14 +258,14 @@ async function sanctionCommand(
   } catch (error) {
     ctx.log.warn("moderation: action failed", { action, member: member.id, error: String(error) });
     await interaction.reply(
-      `I could not ${action} ${member.mention}: check that my role is above theirs and that I have the permission.`,
+      ctx.i18n.t("moderation.failed", { action: action, member: member.mention }),
     );
     return;
   }
   await interaction.reply(done[action]);
   if (!delivered)
     await interaction.followUp({
-      content: "⚠️ I could not DM the member (DMs closed?).",
+      content: ctx.i18n.t("dm.failed"),
       ephemeral: true,
     });
 }
@@ -254,10 +274,15 @@ export default definePlugin({
   async onStart(ctx) {
     if (ctx.config.webhook?.url)
       ctx.log.warn("webhook.url is deprecated; configure the WEBHOOK_URL secret.");
-    if (ctx.plugins.hasFeature("guard", "duplicates") && ctx.config.flood.enabled)
-      ctx.log.warn("Legacy flood suppression disabled because guard is installed.");
-    if (ctx.plugins.has("audit-log"))
-      ctx.log.warn("Legacy member event logging disabled because audit-log is installed.");
+    const guard = ctx.plugins.hasFeature("guard", "duplicates");
+    const audit = ctx.plugins.has("audit-log");
+    if (guard || !ctx.config.flood.enabled)
+      ctx.features.report(
+        "legacyFlood",
+        false,
+        guard ? "guard handles duplicates" : "disabled in configuration",
+      );
+    if (audit) ctx.features.report("legacyMemberLog", false, "audit-log handles member events");
     await migrateCases(ctx);
   },
   privacy,
@@ -271,11 +296,11 @@ export default definePlugin({
         if (!targetMember) return;
         await it.showModal({
           id: "warn:" + targetMember.id,
-          title: "Warn member",
+          title: ctx.i18n.t("warn.modalTitle"),
           fields: [
             {
               id: "reason",
-              label: "Reason sent to the member",
+              label: ctx.i18n.t("warn.modalReason"),
               style: "paragraph",
               required: true,
               maxLength: 512,
@@ -307,7 +332,7 @@ export default definePlugin({
         reason.length > 512 ||
         !member?.permissions?.includes("ModerateMembers")
       ) {
-        await it.reply("Moderate Members permission and a reason are required.");
+        await it.reply(ctx.i18n.t("warn.permission"));
         return;
       }
       await warnMember(ctx, it, user, reason);
@@ -358,16 +383,25 @@ export default definePlugin({
       async run(ctx, it) {
         const m = await target(ctx, it, it.options.user.id);
         if (!m) return;
-        const c = await quarantine(
-          ctx,
-          m,
-          it.options.reason,
-          it.options.duration ?? 10080,
-          moderatorOf(it),
-          { type: "command" },
-        );
-        await dm(ctx, m, await linkMessage(ctx, c, "You were quarantined: " + c.reason));
-        await it.reply("Quarantine case #" + c.number);
+        try {
+          const c = await quarantine(
+            ctx,
+            m,
+            it.options.reason,
+            it.options.duration ?? 10080,
+            moderatorOf(it),
+            { type: "command" },
+          );
+          await dm(
+            ctx,
+            m,
+            await linkMessage(ctx, c, ctx.i18n.t("quarantine.dm", { reason: c.reason })),
+          );
+          await it.reply(ctx.i18n.t("quarantine.saved", { number: c.number }));
+        } catch (error) {
+          if (error instanceof QuarantineRefusal) await it.reply(error.message);
+          else throw error;
+        }
       },
     }),
     release: command({
@@ -380,8 +414,8 @@ export default definePlugin({
         if (!m) return;
         await it.reply(
           (await release(ctx, m.id, undefined, moderatorOf(it), "Staff released quarantine"))
-            ? "Quarantine lifted."
-            : "No active quarantine.",
+            ? ctx.i18n.t("quarantine.lifted")
+            : ctx.i18n.t("quarantine.absent"),
         );
       },
     }),
@@ -411,7 +445,7 @@ export default definePlugin({
         const user = interaction.options.member;
         const list = await activeWarnings(ctx, user.id);
         if (list.length === 0) {
-          await interaction.reply(`${user.mention} has no active warnings.`);
+          await interaction.reply(ctx.i18n.t("moderation.none", { member: user.mention }));
           return;
         }
         const lines = list.map(
@@ -420,7 +454,10 @@ export default definePlugin({
         await interaction.reply({
           embeds: [
             {
-              title: `Warnings of ${user.displayName} (${list.length})`,
+              title: ctx.i18n.t("moderation.warnings", {
+                member: user.displayName,
+                count: list.length,
+              }),
               description: lines.join("\n"),
               color: "#f1c40f",
             },
@@ -509,7 +546,7 @@ export default definePlugin({
             user.id === interaction.user.id ||
             user.bot
           ) {
-            await interaction.reply("This user cannot be banned.");
+            await interaction.reply(ctx.i18n.t("ban.denied"));
             return;
           }
           await applyBan(
@@ -524,14 +561,17 @@ export default definePlugin({
                 const url = await appealLink(ctx, c);
                 if (url)
                   try {
-                    await ctx.server.sendDM(user.id, "Appeal case #" + c.number + ": " + url);
+                    await ctx.server.sendDM(
+                      user.id,
+                      ctx.i18n.t("appeal.link", { number: c.number, url }),
+                    );
                   } catch {
                     ctx.log.info("Appeal DM unavailable", { number: c.number });
                   }
               },
             },
           );
-          await interaction.reply(`🔨 ${user.mention} was banned.`);
+          await interaction.reply(ctx.i18n.t("moderation.ban", { member: user.mention }));
           return;
         }
         const member = await target(ctx, interaction, user.id);
@@ -553,14 +593,17 @@ export default definePlugin({
       },
       async run(ctx, it) {
         await liftBan(ctx, who(it.options.member), who(it.user), it.options.reason);
-        await it.reply("Ban lifted.");
+        await it.reply(ctx.i18n.t("ban.lifted"));
       },
     }),
   },
 
   components: { "purge-confirm": finishPurge, "purge-cancel": finishPurge },
   tasks: {
-    async applyQuarantine(ctx,payload){const p=payload as {user:string;number:number};await recoverQuarantine(ctx,p.user,p.number);},
+    async applyQuarantine(ctx, payload) {
+      const p = payload as { user: string; number: number };
+      await recoverQuarantine(ctx, p.user, p.number);
+    },
     async expireQuarantine(ctx, payload) {
       const p = payload as { user: string; number: number };
       await release(ctx, p.user, p.number, null, "Quarantine expired", true);
@@ -579,12 +622,20 @@ export default definePlugin({
     auditLogEntry: staffRoleChange,
     async memberJoin(ctx, member) {
       if (!ctx.plugins.has("audit-log") && ctx.config.log.joins)
-        await logLine(ctx, `📥 ${member.mention} (${member.user.username}) joined.`, "#2ecc71");
+        await logLine(
+          ctx,
+          ctx.i18n.t("moderation.join", { member: member.mention, user: member.user.username }),
+          "#2ecc71",
+        );
     },
     async memberLeave(ctx, user) {
       recent.delete(user.id);
       if (!ctx.plugins.has("audit-log") && ctx.config.log.leaves)
-        await logLine(ctx, `📤 ${user.mention} (${user.username}) left.`, "#e74c3c");
+        await logLine(
+          ctx,
+          ctx.i18n.t("moderation.leave", { member: user.mention, user: user.username }),
+          "#e74c3c",
+        );
     },
     async memberUpdate(ctx, member, previous) {
       await trackQuarantine(ctx, member, previous);
@@ -640,13 +691,18 @@ export default definePlugin({
   },
 
   routes: {
-    "DELETE /quarantines/:id/roles/:role":{access:"moderator",async handler(ctx,r):Promise<RouteResponse>{
-      const id=r.params.id,role=r.params.role,actor=r.viewer?.member;
-      if(!actor || !id || !role)return {status:403};
-      const m=await ctx.server.member(id);
-      if(!m || hierarchyProblem(ctx.server.ownerId,actor,m))return {status:403};
-      return {status:await excludeSavedRole(ctx,id,role)?204:404};
-    }},
+    "DELETE /quarantines/:id/roles/:role": {
+      access: "moderator",
+      async handler(ctx, r): Promise<RouteResponse> {
+        const id = r.params.id,
+          role = r.params.role,
+          actor = r.viewer?.member;
+        if (!actor || !id || !role) return { status: 403 };
+        const m = await ctx.server.member(id);
+        if (!m || hierarchyProblem(ctx, ctx.server.ownerId, actor, m)) return { status: 403 };
+        return { status: (await excludeSavedRole(ctx, id, role)) ? 204 : 404 };
+      },
+    },
     "GET /stats/moderators": {
       access: "moderator",
       async handler(ctx, r): Promise<RouteResponse> {
@@ -747,14 +803,14 @@ async function interopSanction(ctx: Context, input: SanctionInput, call: Interop
     deny("This installation cannot sanction staff.");
   if (p) {
     const person = await ctx.server.member(p.userId);
-    if (!person || person.id === userId || hierarchyProblem(owner, person, m))
+    if (!person || person.id === userId || hierarchyProblem(ctx, owner, person, m))
       deny("Acting staff cannot moderate this member.");
   }
   const moderator = p ? { id: p.userId, name: p.userId } : null;
   if (action === "release") {
     const q = await ctx.kv.get<{ number: number }>("quarantine:" + m.id);
     if (!q || !(await release(ctx, m.id, q.number, moderator, reason)))
-      throw new InteropError("invalid_input", "No active quarantine.");
+      throw new InteropError("invalid_input", ctx.i18n.t("quarantine.absent"));
     return { number: q.number, action, status: "lifted" };
   }
   let c: Case;
@@ -772,7 +828,7 @@ async function interopSanction(ctx: Context, input: SanctionInput, call: Interop
       warning as unknown as Json,
       { ttlSeconds: Math.max(1, Math.round(ctx.config.warningDays * DAY)) },
     );
-    await dm(ctx, m, await linkMessage(ctx, c, "You received a warning: " + reason));
+    await dm(ctx, m, await linkMessage(ctx, c, ctx.i18n.t("warn.direct", { reason })));
     const count = (await activeWarnings(ctx, m.id)).length,
       rule = ctx.config.escalation.find((v) => v.warnings === count);
     if (rule)
@@ -781,7 +837,7 @@ async function interopSanction(ctx: Context, input: SanctionInput, call: Interop
       });
   } else if (action === "quarantine") {
     c = await quarantine(ctx, m, reason, durationMinutes ?? 10080, moderator, source);
-    await dm(ctx, m, await linkMessage(ctx, c, "You were quarantined: " + reason));
+    await dm(ctx, m, await linkMessage(ctx, c, ctx.i18n.t("quarantine.dm", { reason })));
   } else {
     if (action === "timeout" && !durationMinutes)
       throw new InteropError("invalid_input", "Timeout needs durationMinutes.");
@@ -817,7 +873,7 @@ function overlayCommand(kind: "lock" | "slowmode") {
     },
     async run(ctx, it) {
       if (!ctx.features.enabled("lock")) {
-        await it.reply("Enable the server.overlays grant for this instance.");
+        await it.reply(ctx.i18n.t("overlay.grant"));
         return;
       }
       const ch = it.options.channel,
@@ -827,15 +883,15 @@ function overlayCommand(kind: "lock" | "slowmode") {
         !["admin", "moderator"].includes(staff.access ?? "") ||
         !staff.permissionsIn(ch).some((v) => v === "Administrator" || v === "ManageChannels")
       ) {
-        await it.reply("Staff and Manage Channels permissions are required in this channel.");
+        await it.reply(ctx.i18n.t("overlay.authority"));
         return;
       }
       if (!ch.key) {
-        await it.reply("Choose a channel declared in YAML.");
+        await it.reply(ctx.i18n.t("overlay.managed"));
         return;
       }
       if (kind === "slowmode" && !it.options.seconds) {
-        await it.reply("Supply slowmode seconds.");
+        await it.reply(ctx.i18n.t("overlay.seconds"));
         return;
       }
       await ctx.server.overlays.apply({
@@ -849,7 +905,7 @@ function overlayCommand(kind: "lock" | "slowmode") {
               : { slowmodeSeconds: it.options.seconds },
         },
       });
-      await it.reply("Applied " + kind + " to " + ch.name + ".");
+      await it.reply(ctx.i18n.t("overlay.applied", { kind, channel: ch.name }));
     },
   });
 }
@@ -892,26 +948,30 @@ async function warnMember(
   );
   const count = (await activeWarnings(ctx, member.id)).length;
   await interaction.reply(
-    `⚠️ ${member.mention} was warned (case #${c.number}). Active warnings: ${count}.`,
+    ctx.i18n.t("moderation.warn", { member: member.mention, number: c.number, count: count }),
   );
   const delivered = await dm(
     ctx,
     member,
-    await linkMessage(ctx, c, `⚠️ You received a warning on **${ctx.server.name}**: ${reason}`),
+    await linkMessage(
+      ctx,
+      c,
+      ctx.i18n.t("moderation.warnDM", { server: ctx.server.name, reason: reason }),
+    ),
   );
   if (!delivered)
     await interaction.followUp({
-      content: "⚠️ I could not DM the member (DMs closed?).",
+      content: ctx.i18n.t("dm.failed"),
       ephemeral: true,
     });
 
   const rule = ctx.config.escalation.find((r) => r.warnings === count);
   if (!rule) return;
-  const why = `${count} active warnings`;
+  const why = ctx.i18n.t("moderation.count", { count: count });
   try {
     await sanction(ctx, member, rule.action, why, null, { minutes: rule.durationMinutes });
     await interaction.followUp({
-      content: `Automatic ${rule.action} after ${why}.`,
+      content: ctx.i18n.t("moderation.escalated", { action: rule.action, reason: why }),
       ephemeral: true,
     });
   } catch (error) {
@@ -921,7 +981,7 @@ async function warnMember(
       error: String(error),
     });
     await interaction.followUp({
-      content: `The automatic ${rule.action} failed.`,
+      content: ctx.i18n.t("moderation.escalationFailed", { action: rule.action }),
       ephemeral: true,
     });
   }

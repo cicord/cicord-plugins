@@ -2,6 +2,8 @@ import { expect, test } from "vite-plus/test";
 import { callRoute, createTestContext } from "@cicord/sdk/testing";
 import type { InteropCall, Json } from "@cicord/sdk";
 import plugin from "../src/index.ts";
+import en from "../locales/en.json" with { type: "json" };
+import fr from "../locales/fr.json" with { type: "json" };
 import schema from "../config.schema.json" with { type: "json" };
 import { quarantine, release, trackQuarantine } from "../src/quarantine.ts";
 import { indexCase, type Case } from "../src/moderation.ts";
@@ -16,6 +18,7 @@ const caller: InteropCall["caller"] = {
 };
 function setup() {
   return createTestContext({
+    locales: { en, fr },
     schema,
     features: ["appeals", "quarantine", "lock"],
     config: {
