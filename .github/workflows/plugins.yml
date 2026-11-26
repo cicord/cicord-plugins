@@ -21,8 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       plugins: ${{ steps.list.outputs.plugins }}
-      core-ref: ${{ (github.ref_name == 'feature/0.2.0' || github.base_ref == 'feature/0.2.0' || (github.head_ref == 'feature/0.2.0' && github.event.pull_request.head.repo.full_name == github.repository)) && '8c2f477fae8b5e3ec321c744353ea130e6e4d3f6' || vars.CICORD_VERSION || 'main' }}
-      feature-build: ${{ github.ref_name == 'feature/0.2.0' || github.base_ref == 'feature/0.2.0' || (github.head_ref == 'feature/0.2.0' && github.event.pull_request.head.repo.full_name == github.repository) }}
+      core-ref: ${{ (github.ref_name == 'feature/0.2.0' || github.base_ref == 'feature/0.2.0' || (github.head_ref == 'feature/0.2.0' && github.event.pull_request.head.repo.full_name == github.repository)) && 'e1aca42c8d0d1e7cd119b5d096414bcb77f6e974' || vars.CICORD_VERSION || 'main' }}
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -45,7 +45,7 @@ jobs:
       - uses: ./.github/actions/setup-cicord
         with:
           version: ${{ needs.list.outputs.core-ref }}
-          feature-build: ${{ needs.list.outputs.feature-build }}
+
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -67,7 +67,7 @@ jobs:
       - uses: ./.github/actions/setup-cicord
         with:
           version: ${{ needs.list.outputs.core-ref }}
-          feature-build: ${{ needs.list.outputs.feature-build }}
+
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version

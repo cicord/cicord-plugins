@@ -7,10 +7,6 @@ inputs:
     description: cicord/cicord ref to build
     required: false
     default: main
-  feature-build:
-    description: Build the pinned 0.2 core snapshot for branch integration tests
-    required: false
-    default: 'false'
   token:
     description: token able to read cicord/cicord (only needed while it is private)
     required: false
@@ -30,15 +26,9 @@ runs:
         go-version-file: .cicord-src/go.mod
         cache-dependency-path: .cicord-src/go.sum
     - shell: bash
-      env:
-        FEATURE_BUILD: ${{ inputs.feature-build }}
       run: |
         mkdir -p "$RUNNER_TEMP/bin"
-        flags=()
-        if [[ "$FEATURE_BUILD" == true ]]; then
-          flags=(-ldflags "-X github.com/cicord/cicord/internal/version.Version=0.2.0-rc.1")
-        fi
-        (cd .cicord-src && go build "${flags[@]}" -o "$RUNNER_TEMP/bin/cicord" ./cmd/cicord)
+        (cd .cicord-src && go build -o "$RUNNER_TEMP/bin/cicord" ./cmd/cicord)
         rm -rf .cicord-src
         echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-        "$RUNNER_TEMP/bin/cicord" version || true
+        "$RUNNER_TEMP/bin/cicord" version
