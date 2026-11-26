@@ -1,0 +1,33 @@
+{
+  "input": {
+    "type": "object",
+    "properties": {
+      "userId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "userId"
+    ]
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "activeWarnings": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "lastCase": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "quarantined": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "activeWarnings",
+      "quarantined"
+    ]
+  }
+}

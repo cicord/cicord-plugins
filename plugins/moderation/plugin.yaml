@@ -3,7 +3,7 @@ apiVersion: cicord.dev/v1alpha1
 kind: Plugin
 metadata:
   name: moderation
-  version: 0.2.0
+  version: 0.3.0
   displayName: Moderation
   description: Staff moderation with warnings, expiring bans, reviewed message purges, case history and private notes.
   license: Apache-2.0
@@ -11,7 +11,30 @@ metadata:
 spec:
   engine: ">=0.2.0-0"
   entry: ./src/index.ts
+  delivery: at-least-once
+  privacy:
+    records:
+      - {name: cases, policy: retain, description: Redact identities and free text in closed cases., retention: "365 days", justification: "Staff need a bounded record of prior enforcement."}
+      - {name: active-sanctions, policy: retain, description: Minimum subject and expiry generation for live sanctions., retention: Until lifted or expired, justification: "A data request must not bypass a current ban or quarantine."}
+      - {name: private-notes, policy: erase, description: Erase private notes on a member request.}
+      - {name: appeals, policy: erase, description: Erase appeal statements and case access.}
+      - {name: warnings-indexes-and-statistics, policy: erase, description: Erase the subject's warning and history indexes and staff totals.}
+  optional:
+    - {feature: lock, capabilities: [server.overlays]}
+    - {feature: quarantine, capabilities: [discord.roles.assign]}
+    - {feature: appeals, capabilities: [portal.links]}
+    - {feature: appealsViaTicket, capabilities: ["plugins.call:tickets.open"]}
+  interop:
+    types: ./src/contracts.ts
+    publishes:
+      - {topic: case, scope: server, version: 1}
+      - {topic: case, scope: server, version: 2}
+      - {topic: caseUpdated, scope: server, version: 1}
+      - {topic: appeal, scope: server, version: 1}
+    provides: {queries: [standing, cases], actions: [sanction]}
+    consumes: {actions: [tickets.open]}
   capabilities:
+    - discord.auditlog.read      # bind ban release to the issuing audit entry
     - discord.messages.send      # audit log
     - discord.messages.manage    # delete flood messages
     - scheduler                  # persistent temporary-ban expiry
@@ -27,6 +50,11 @@ spec:
   # ServerMembers: join/leave/update log. ServerMessages: flood protection, which only needs
   # who posts and when, never the content (no MessageContent).
   intents: [ServerMembers, ServerMessages, ServerModeration]
+  secrets:
+    - name: WEBHOOK_URL
+      description: Discord or Slack webhook URL for moderation notices
+      required: false
+      hosts: [discord.com, hooks.slack.com]
   network:
     allow: [hooks.slack.com, discord.com]
   config:

@@ -6,7 +6,16 @@ import {
   type RouteRequest,
   type RouteResponse,
 } from "@cicord/sdk";
-import { type Case, readCase, indexCase, who, warnPrefix } from "./moderation.ts";
+import {
+  type Case,
+  caseTTL,
+  editCase,
+  normalizedCase,
+  readCase,
+  indexCase,
+  who,
+  warnPrefix,
+} from "./moderation.ts";
 
 const numberOption = {
   type: "integer",
@@ -51,7 +60,7 @@ export const caseCommand = command({
           return;
         }
         c.reason = it.options.text.slice(0, 1500);
-        await ctx.kv.set(`case:${c.number}`, c);
+        await editCase(ctx, c.number, { reason: c.reason });
         if (c.action !== "note")
           await ctx.events.publish("caseUpdated", {
             number: c.number,
@@ -77,7 +86,7 @@ export const caseCommand = command({
         if (c.status !== "void") {
           if (c.action === "warn" && c.member)
             await ctx.kv.delete(warnPrefix(c.member.id) + String(c.number).padStart(8, "0"));
-          await ctx.kv.set(`case:${c.number}`, { ...c, status: "void" });
+          await editCase(ctx, c.number, { status: "void" });
           if (c.action !== "note")
             await ctx.events.publish("caseUpdated", {
               number: c.number,
@@ -114,12 +123,12 @@ export const noteCommand = command({
       status: "active",
       source: { type: "command" },
     };
-    await ctx.kv.set(`case:${number}`, c);
+    await ctx.kv.set(`case:${number}`, c, { ttlSeconds: caseTTL(c.at) });
     await indexCase(ctx, c);
     await it.reply(`Private note #${number} recorded.`);
   },
 });
-async function history(ctx: Context, user: string, staff: boolean, limit: number) {
+export async function history(ctx: Context, user: string, staff: boolean, limit: number) {
   const page = await ctx.kv.list<number>({ prefix: `case-user:${user}:`, limit });
   const out: Case[] = [];
   for (const { value } of page.items) {
@@ -152,7 +161,33 @@ export async function memberHistory(ctx: Context, req: RouteRequest): Promise<Ro
     req.viewer?.member?.access === "moderator" || req.viewer?.member?.access === "admin";
   if (!staff && (!req.viewer || req.viewer.user.id !== user))
     return { status: 403, body: { error: "forbidden" } };
-  return { status: 200, body: { items: await history(ctx, user, staff, 50) } };
+  const cases = await history(ctx, user, staff, 50);
+  const appeals = [];
+  for (const c of cases) {
+    const a = await ctx.kv.get<{
+      case: number;
+      userId: string;
+      status: string;
+      text: string;
+      submittedAt: string;
+      resolution?: string;
+    }>(`appeal:${c.number}`);
+    if (a && a.userId === user)
+      appeals.push(
+        staff ? a : { case: a.case, status: a.status, text: a.text, submittedAt: a.submittedAt },
+      );
+  }
+  return { status: 200, body: { items: staff ? cases : cases.map(memberCase), appeals } };
+}
+export function memberCase(c: Case) {
+  return {
+    number: c.number,
+    action: c.action,
+    at: c.at,
+    reason: c.reason,
+    status: c.status ?? "active",
+    ...(c.expiresAt ? { expiresAt: c.expiresAt } : {}),
+  };
 }
 
 export async function listCases(ctx: Context, req: RouteRequest): Promise<RouteResponse> {
@@ -162,7 +197,7 @@ export async function listCases(ctx: Context, req: RouteRequest): Promise<RouteR
     ...(req.query["cursor"] ? { cursor: req.query["cursor"] } : {}),
   });
   const items = page.items
-    .map(({ value: c }) => c)
+    .map(({ value: c }) => normalizedCase(c))
     .filter(
       (c) =>
         (!req.query["status"] || (c.status ?? "active") === req.query["status"]) &&
@@ -173,27 +208,31 @@ export async function listCases(ctx: Context, req: RouteRequest): Promise<RouteR
 }
 
 export async function migrateCases(ctx: Context) {
-  if (((await ctx.kv.get<number>("meta:schema")) ?? 1) >= 2) return;
+  if (((await ctx.kv.get<number>("meta:schema")) ?? 1) >= 3) return;
   const cursor = await ctx.kv.get<string>("meta:cases-cursor");
   const page = await ctx.kv.list<Case>({
     prefix: "case:",
     limit: 25,
     ...(cursor ? { cursor } : {}),
   });
-  for (const { key, value: c } of page.items) {
-    // Preserve fields of already migrated and newly-created records.
-    if (!c.status || !c.source) {
-      c.status ??= "active";
-      c.source ??= { type: c.moderator ? "command" : "escalation" };
-      await ctx.kv.set(key, c);
-    }
-    await indexCase(ctx, c);
+  // Add retention to pre-0.3 records using the current value and version. A staff
+  // edit after the page was read always wins; read-time defaults support old rows.
+  for (const row of page.items) {
+    const entry = await ctx.kv.getEntry<Case>(row.key);
+    if (!entry) continue;
+    const ttlSeconds = caseTTL(entry.value.at),
+      tx = ctx.kv.atomic().check(row.key, entry.version);
+    if (ttlSeconds) tx.set(row.key, entry.value, { ttlSeconds });
+    else tx.delete(row.key);
+    await tx.commit();
+    const latest = await readCase(ctx, entry.value.number);
+    if (latest) await indexCase(ctx, latest);
   }
   if (page.cursor) {
     await ctx.kv.set("meta:cases-cursor", page.cursor);
     await ctx.schedule.after(100, "migrateCases");
   } else {
-    await ctx.kv.set("meta:schema", 2);
+    await ctx.kv.set("meta:schema", 3);
     await ctx.kv.delete("meta:cases-cursor");
   }
 }

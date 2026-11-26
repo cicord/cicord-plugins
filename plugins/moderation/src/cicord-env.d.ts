@@ -28,6 +28,92 @@ declare module "@cicord/sdk" {
       url: string;
       format: "slack" | "discord";
     };
+    quarantineRole?: string;
+    sanction: {
+      allowStaffTargets: {
+        bot: string;
+        instance: string;
+      }[];
+    };
+    appeals: {
+      enabled: boolean;
+      via: "portal" | "ticket";
+      cooldownDays: number;
+      channel?: string;
+    };
   }
 }
 export {};
+
+declare module "@cicord/sdk" {
+  interface EventContracts {
+    "moderation.appeal.v1": {
+      case: number;
+      status: "pending" | "accepted" | "rejected";
+      userId: string;
+    };
+    "moderation.case.v1": {
+      action: string;
+      at: string;
+      member: {
+        id: string;
+        name: string;
+      } | null;
+      moderator: {
+        id: string;
+        name: string;
+      } | null;
+      number: number;
+      reason: string;
+    };
+    "moderation.case.v2": {
+      action: string;
+      at: string;
+      expiresAt?: string;
+      member: {
+        id: string;
+        name: string;
+      } | null;
+      moderator: {
+        id: string;
+        name: string;
+      } | null;
+      number: number;
+      reason: string;
+      source: Record<string, unknown>;
+      status: string;
+    };
+    "moderation.caseUpdated.v1": {
+      by: string;
+      changes: string[];
+      number: number;
+    };
+  }
+  interface QueryContracts {
+    "moderation.cases": {input: {
+      limit?: number;
+      userId: string;
+    }; output: {
+      cases: Record<string, unknown>[];
+    }};
+    "moderation.standing": {input: {
+      userId: string;
+    }; output: {
+      activeWarnings: number;
+      lastCase?: number;
+      quarantined: boolean;
+    }};
+  }
+  interface ActionContracts {
+    "moderation.sanction": {input: {
+      action: "warn" | "timeout" | "kick" | "ban" | "quarantine" | "release";
+      durationMinutes?: number;
+      reason: string;
+      userId: string;
+    }; output: {
+      action: string;
+      number: number;
+      status: string;
+    }};
+  }
+}

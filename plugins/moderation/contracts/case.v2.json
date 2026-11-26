@@ -1,0 +1,73 @@
+{
+  "type": "object",
+  "properties": {
+    "number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "action": {
+      "type": "string"
+    },
+    "at": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "member": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ]
+    },
+    "moderator": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ]
+    },
+    "source": {
+      "type": "object"
+    },
+    "status": {
+      "type": "string"
+    },
+    "expiresAt": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "number",
+    "action",
+    "at",
+    "reason",
+    "member",
+    "moderator",
+    "status",
+    "source"
+  ]
+}

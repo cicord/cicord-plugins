@@ -581,7 +581,7 @@ describe("case access and approval", () => {
     expect(t.scheduled[0]?.task).toBe("migrateCases");
     await plugin.tasks!.migrateCases!(t.ctx, undefined);
     await plugin.onStart!(t.ctx);
-    expect(await t.ctx.kv.get("meta:schema")).toBe(2);
+    expect(await t.ctx.kv.get("meta:schema")).toBe(3);
     expect((await t.ctx.kv.list({ prefix: "case-user:2:", limit: 100 })).items).toHaveLength(30);
   });
 });

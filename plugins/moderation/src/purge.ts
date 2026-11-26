@@ -1,4 +1,11 @@
-import { command, type Context, type ComponentInteraction, type Channel } from "@cicord/sdk";
+import {
+  command,
+  type Context,
+  type ComponentInteraction,
+  type Channel,
+  type Interaction,
+  type User,
+} from "@cicord/sdk";
 import { recordCase, who } from "./moderation.ts";
 
 type Preview = { actor: string; channel: string; ids: string[]; scanned: number; skipped: number };
@@ -34,64 +41,79 @@ export const purge = command({
     after_message: { type: "string", description: "Only messages newer than this message ID" },
   },
   async run(ctx, it) {
-    const channel = it.channel;
-    if (!channel || !(await allowed(ctx, it.user.id, channel))) {
-      await it.reply("You need Manage Messages in this server.");
-      return;
-    }
-    const o = it.options;
-    if (o.count > ctx.config.purge.maxCount) {
-      await it.reply(`The purge limit is ${ctx.config.purge.maxCount} messages.`);
-      return;
-    }
-    if (o.after_message && !/^[1-9]\d{0,19}$/.test(o.after_message)) {
-      await it.reply("Enter a Discord message ID.");
-      return;
-    }
-    let ids: string[], skipped: number;
-    try {
-      ({ ids, skipped } = await channel.previewPurge({
-        limit: o.count,
-        ...(o.user ? { author: o.user.id } : {}),
-        ...(o.contains !== undefined ? { contains: o.contains } : {}),
-        ...(o.bots !== undefined ? { bots: o.bots } : {}),
-        ...(o.attachments !== undefined ? { attachments: o.attachments } : {}),
-        ...(o.after_message ? { after: o.after_message } : {}),
-      }));
-    } catch (error) {
-      if (String(error).includes("MessageContent")) {
-        await it.reply("This filter requires the Message Content intent for this instance.");
-        return;
-      }
-      throw error;
-    }
-    const scanned = ids.length + skipped;
-    if (!ids.length) {
-      await it.reply(`No messages match. Skipped ${skipped}.`);
-      return;
-    }
-    const key = String(await ctx.kv.increment("purge-seq"));
-    const preview: Preview = { actor: it.user.id, channel: channel.id, ids, scanned, skipped };
-    await ctx.kv.set(`purge:${key}`, preview, { ttlSeconds: 120 });
-    await it.reply({
-      content: `Delete ${ids.length} messages in ${channel.mention}? Scanned ${scanned}, skipped ${skipped}. This preview expires in two minutes.`,
-      components: [
-        {
-          type: "row",
-          components: [
-            {
-              type: "button",
-              style: "danger",
-              id: `purge-confirm:${key}`,
-              label: "Delete listed messages",
-            },
-            { type: "button", style: "secondary", id: `purge-cancel:${key}`, label: "Cancel" },
-          ],
-        },
-      ],
-    });
+    await previewPurge(ctx, it, it.options);
   },
 });
+
+export async function previewPurge(
+  ctx: Context,
+  it: Interaction,
+  o: {
+    count: number;
+    user?: User;
+    contains?: string;
+    bots?: boolean;
+    attachments?: boolean;
+    after_message?: string;
+  },
+) {
+  const channel = it.channel;
+  if (!channel || !(await allowed(ctx, it.user.id, channel))) {
+    await it.reply("You need Manage Messages in this server.");
+    return;
+  }
+
+  if (o.count > ctx.config.purge.maxCount) {
+    await it.reply(`The purge limit is ${ctx.config.purge.maxCount} messages.`);
+    return;
+  }
+  if (o.after_message && !/^[1-9]\d{0,19}$/.test(o.after_message)) {
+    await it.reply("Enter a Discord message ID.");
+    return;
+  }
+  let ids: string[], skipped: number;
+  try {
+    ({ ids, skipped } = await channel.previewPurge({
+      limit: o.count,
+      ...(o.user ? { author: o.user.id } : {}),
+      ...(o.contains !== undefined ? { contains: o.contains } : {}),
+      ...(o.bots !== undefined ? { bots: o.bots } : {}),
+      ...(o.attachments !== undefined ? { attachments: o.attachments } : {}),
+      ...(o.after_message ? { after: o.after_message } : {}),
+    }));
+  } catch (error) {
+    if (String(error).includes("MessageContent")) {
+      await it.reply("This filter requires the Message Content intent for this instance.");
+      return;
+    }
+    throw error;
+  }
+  const scanned = ids.length + skipped;
+  if (!ids.length) {
+    await it.reply(`No messages match. Skipped ${skipped}.`);
+    return;
+  }
+  const key = String(await ctx.kv.increment("purge-seq"));
+  const preview: Preview = { actor: it.user.id, channel: channel.id, ids, scanned, skipped };
+  await ctx.kv.set(`purge:${key}`, preview, { ttlSeconds: 120 });
+  await it.reply({
+    content: `Delete ${ids.length} messages in ${channel.mention}? Scanned ${scanned}, skipped ${skipped}. This preview expires in two minutes.`,
+    components: [
+      {
+        type: "row",
+        components: [
+          {
+            type: "button",
+            style: "danger",
+            id: `purge-confirm:${key}`,
+            label: "Delete listed messages",
+          },
+          { type: "button", style: "secondary", id: `purge-cancel:${key}`, label: "Cancel" },
+        ],
+      },
+    ],
+  });
+}
 
 export async function finishPurge(ctx: Context, it: ComponentInteraction) {
   const [action, id] = it.componentId.split(":");

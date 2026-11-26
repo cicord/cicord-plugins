@@ -10,6 +10,8 @@ type Action =
   | "tempban"
   | "unban"
   | "note"
+  | "quarantine"
+  | "release"
   | "purge"
   | "clear";
 
@@ -21,9 +23,13 @@ export type Case = {
   moderator: { id: string; name: string } | null;
   reason: string;
   durationMinutes?: number;
-  status?: "active" | "expired" | "lifted" | "void" | "superseded";
+  status?: "active" | "expired" | "lifted" | "void" | "superseded" | "appealed";
   expiresAt?: string;
-  source?: { type: "command" | "escalation" | "plugin" | "automod"; plugin?: string };
+  source?: {
+    type: "command" | "escalation" | "plugin" | "automod";
+    plugin?: string;
+    caller?: { plugin: string; bot: string; instance: string; source: string; verified: boolean };
+  };
   evidence?: string;
   evidenceChannelId?: string;
   at: string;
@@ -35,6 +41,7 @@ export interface Warning {
   reason: string;
   moderator: string | null;
   evidence?: string;
+  evidenceChannelId?: string;
   at: string;
 }
 
@@ -48,6 +55,8 @@ const COLORS: Record<Action, string> = {
   unban: "#2ecc71",
   note: "#95a5a6",
   purge: "#f39c12",
+  quarantine: "#e67e22",
+  release: "#2ecc71",
   clear: "#2ecc71",
 };
 
@@ -61,6 +70,8 @@ const TITLES: Record<Action, string> = {
   unban: "Ban lifted",
   note: "Staff note",
   purge: "Purge",
+  quarantine: "Quarantine",
+  release: "Released",
   clear: "Warnings cleared",
 };
 
@@ -97,8 +108,16 @@ function caseEmbed(c: Case): Embed {
   };
 }
 
+export function normalizedCase(c: Case): Case {
+  return {
+    ...c,
+    status: c.status ?? "active",
+    source: c.source ?? { type: c.moderator ? "command" : "escalation" },
+  };
+}
 export async function readCase(ctx: Context, number: number) {
-  return ctx.kv.get<Case>(`case:${number}`);
+  const c = await ctx.kv.get<Case>(`case:${number}`);
+  return c && caseTTL(c.at) > 0 ? normalizedCase(c) : undefined;
 }
 
 /** Retention follows the original case timestamp, including after edits or retries. */
@@ -107,8 +126,43 @@ export function caseTTL(at: string): number {
   return Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
 }
 
+/** Re-read on contention and preserve independent edits and the original retention deadline. */
+export async function editCase(ctx: Context, number: number, change: Partial<Case>) {
+  const k = "case:" + number;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const entry = await ctx.kv.getEntry<Case>(k);
+    if (!entry) return undefined;
+    const ttlSeconds = caseTTL(entry.value.at);
+    if (!ttlSeconds) return undefined;
+    const c = { ...normalizedCase(entry.value), ...change };
+    if ((await ctx.kv.atomic().check(k, entry.version).set(k, c, { ttlSeconds }).commit()).ok)
+      return c;
+  }
+  throw new Error("Case changed concurrently.");
+}
+
 /** Lexical KV pagination lists newer cases first without scanning all cases. */
 export async function indexCase(ctx: Context, c: Case) {
+  if (c.moderator && c.action !== "note") {
+    const marker = "stats-case:" + c.number,
+      counter = "moderator-total:" + c.moderator.id;
+    for (let i = 0; i < 10; i++) {
+      if (await ctx.kv.get(marker)) break;
+      const entry = await ctx.kv.getEntry<number>(counter),
+        score = (entry?.value ?? 0) + 1;
+      const result = await ctx.kv
+        .atomic()
+        .check(marker, undefined)
+        .check(counter, entry?.version)
+        .set(marker, true)
+        .set(counter, score)
+        .rankSet("moderators", c.moderator.id, score)
+        .commit();
+      if (result.ok) break;
+      if (i === 9)
+        throw new Error("Concurrent moderation statistic update. Retry indexing this case.");
+    }
+  }
   const ttlSeconds = caseTTL(c.at);
   if (c.member && ttlSeconds > 0)
     await ctx.kv.set(

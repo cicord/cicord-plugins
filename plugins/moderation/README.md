@@ -14,3 +14,73 @@ Case events use a stable delivery key per case and contract version. The staff l
 Warnings expire according to `warningDays`; the case history is persisted separately in the instance's database.
 
 The complete configuration and granted permissions are in [config.schema.json](config.schema.json) and [plugin.yaml](plugin.yaml).
+
+## Quarantine and emergency locks
+
+Grant `discord.roles.assign` to enable quarantine and configure an assignable
+`quarantineRole` with the restrictions your server requires. Give the bot a higher
+role than the quarantine role and its targets. `/quarantine user reason duration`
+accepts 1–10080 minutes and defaults to seven days. `/release user` ends a
+quarantine early. A newer quarantine supersedes its earlier expiration task.
+
+Grant `server.overlays` to suspend a holder listed in YAML. The plugin checks
+ownership before changing any roles. Cicord restores declared holders from the
+current revision. For other roles, it retains the assignments present at
+quarantine and incorporates additions and removals observed during restriction.
+Discord emits membership changes only when an assignment actually changes.
+`/lock` and `/slowmode` apply a temporary overlay to the named managed channel.
+An administrator can lift each lock independently on the server Plan page.
+
+## Appeals
+
+Configure Discord OAuth and the forkable community portal at the runtime's
+public URL. Install a portal version with the `/appeals` page and grant
+`portal.links`. A sanction DM includes a link to one case, valid for seven
+days. The recipient authenticates with Discord even after a ban. The staff
+queue is at `/appeals/staff`. The moderator's decision records whether the
+original sanction could still be lifted. A newer ban, timeout, or quarantine
+must remain active. A kick that already removed the member has no reversible
+sanction. Expired links can request a fresh DM for up to 30 days. The configured
+cooldown defaults to seven days. A recipient who blocks DMs needs a staff-assisted
+delivery channel.
+
+```yaml
+quarantineRole: quarantine
+appeals:
+  enabled: true
+  via: portal
+  channel: mod-appeals
+  cooldownDays: 7
+sanction:
+  allowStaffTargets:
+    - { bot: security, instance: anti-nuke }
+```
+
+Use `via: ticket` and grant `plugins.call:tickets.open` to open a ticket with the
+appeal statement. An unavailable ticket provider leaves the appeal pending.
+The appeal route derives its case and owner from the signed session. A
+moderator never needs to share their own staff session with the appellant.
+
+## Interoperability and privacy
+
+The `standing` query returns the active-warning count, latest public case number,
+and quarantine status. `cases` checks the original user's authority and returns
+a member-safe projection to the subject. Staff can also read private notes and
+evidence in the staff portal. `sanction` accepts warn, timeout, kick, ban,
+quarantine, and release. Callers need the individual action grant and a stable
+idempotency key. Only configured, trusted installations may act on staff targets.
+The owner and users at or above the bot's hierarchy are protected.
+
+The case event has versioned schemas in `contracts/`. `caseUpdated` describes
+changes without disclosing note text. `appeal` publishes only the case number,
+subject and status. Staff statistics are available at `GET /stats/moderators`.
+Use an instance secret binding for `WEBHOOK_URL` when forwarding notifications
+to Slack or Discord. Move existing webhook URLs out of repository configuration
+and rotate those credentials after migration.
+
+Case history is retained for one year. Privacy erasure removes private notes,
+appeals, warnings and member indexes, redacts free text and evidence, and
+pseudonymizes historical identities. A current sanction retains the minimum
+target and generation needed for safe enforcement and release. Discord's own
+audit logs and copies already received by external webhooks follow their
+operators' retention policies.

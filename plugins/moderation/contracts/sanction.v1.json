@@ -1,0 +1,55 @@
+{
+  "input": {
+    "type": "object",
+    "properties": {
+      "userId": {
+        "type": "string"
+      },
+      "action": {
+        "enum": [
+          "warn",
+          "timeout",
+          "kick",
+          "ban",
+          "quarantine",
+          "release"
+        ]
+      },
+      "reason": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512
+      },
+      "durationMinutes": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 40320
+      }
+    },
+    "required": [
+      "userId",
+      "action",
+      "reason"
+    ]
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "number": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "action": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "number",
+      "action",
+      "status"
+    ]
+  }
+}

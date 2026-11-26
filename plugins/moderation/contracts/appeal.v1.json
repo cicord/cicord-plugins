@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "properties": {
+    "case": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "userId": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "pending",
+        "accepted",
+        "rejected"
+      ]
+    }
+  },
+  "required": [
+    "case",
+    "userId",
+    "status"
+  ]
+}

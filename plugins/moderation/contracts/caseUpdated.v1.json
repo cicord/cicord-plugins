@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "properties": {
+    "number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "by": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "number",
+    "changes",
+    "by"
+  ]
+}
