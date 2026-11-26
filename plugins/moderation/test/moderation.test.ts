@@ -1,4 +1,4 @@
-import type { Json, Embed, Message, MessagePayload } from "@cicord/sdk";
+import type { AuditLogEntry, Json, Embed, Message, MessagePayload } from "@cicord/sdk";
 import {
   callRoute,
   createTestContext,
@@ -9,6 +9,8 @@ import {
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import schema from "../config.schema.json" with { type: "json" };
 import plugin from "../src/index.ts";
+import { liftBanIfCurrent } from "../src/bans.ts";
+import { deliverCase, saveNewCase, type Case } from "../src/moderation.ts";
 
 const grants = [
   "discord.messages.send",
@@ -18,6 +20,7 @@ const grants = [
   "discord.channels.read",
   "discord.members.read",
   "discord.members.moderate",
+  "discord.auditlog.read",
   "discord.dm.send",
   "storage.kv",
   "http.fetch",
@@ -30,8 +33,10 @@ function setup(
   fetch?: TestContextOptions["fetch"],
   server: TestContextOptions["server"] = { ownerId: "100" },
 ) {
-  return createTestContext({
+  const audit: AuditLogEntry[] = [];
+  const t = createTestContext({
     schema,
+    auditEntries: audit,
     config: { logChannel: "mod-log", ...config },
     grants,
     plugin: { name: "moderation" },
@@ -60,6 +65,40 @@ function setup(
     ],
     ...(fetch ? { fetch } : {}),
   });
+  // Discord issues immutable snowflake IDs independently of the plugin's case numbers.
+  let seq = 1000;
+  const addEvidence = (action: string, targetId: string, reason?: string) => {
+    audit.unshift({
+      id: String(++seq),
+      at: new Date(),
+      action,
+      targetId,
+      actorId: t.ctx.bot.user.id,
+      reason,
+      mergeable: false,
+      changes: [],
+      attribution: {
+        kind: "cicord",
+        certainty: "confirmed",
+        plugin: {
+          bot: t.ctx.bot.key,
+          instance: t.ctx.plugin.instance,
+          plugin: t.ctx.plugin.name,
+        },
+      },
+    });
+  };
+  const ban = t.ctx.server.ban.bind(t.ctx.server),
+    unban = t.ctx.server.unban.bind(t.ctx.server);
+  vi.spyOn(t.ctx.server, "ban").mockImplementation(async (id, options) => {
+    await ban(id, options);
+    addEvidence("member.ban", id, options?.reason);
+  });
+  vi.spyOn(t.ctx.server, "unban").mockImplementation(async (id, reason) => {
+    await unban(id, reason);
+    addEvidence("member.unban", id, reason);
+  });
+  return { ...t, audit };
 }
 
 type Harness = ReturnType<typeof setup>;
@@ -94,9 +133,10 @@ describe("/warn", () => {
     expect(dms(t, "2")).toEqual(["⚠️ You received a warning on **Showcase**: spam"]);
     expect(logs(t)[0]).toMatchObject({
       title: "Case #1 · Warning",
-      image: { url: "https://cdn.test/proof.png" },
       fields: expect.arrayContaining([{ name: "Reason", value: "spam" }]),
     });
+    expect(JSON.stringify(logs(t))).not.toContain(evidence.url);
+    expect(JSON.stringify(t.published)).not.toContain(evidence.url);
     expect((await callRoute(plugin, t, "GET /warnings/2", { viewer: "1" })).body).toMatchObject({
       items: [{ case: 1, reason: "spam", moderator: "1", evidence: "https://cdn.test/proof.png" }],
     });
@@ -263,7 +303,12 @@ describe("sanctions", () => {
     expect(t.moderation).toEqual([
       { member: "2", action: "timeout", durationMs: 600_000, reason: "mia: calm down" },
       { member: "2", action: "timeout", durationMs: 0, reason: "mia: no reason" },
-      { member: "2", action: "ban", reason: "mia: raid", deleteMessagesSeconds: 86_400 },
+      {
+        member: "2",
+        action: "ban",
+        reason: "[cicord ban #3] mia: raid",
+        deleteMessagesSeconds: 86_400,
+      },
     ]);
     expect(dms(t, "2")).toEqual([]);
     expect(logs(t).map((e) => e.title)).toEqual([
@@ -346,7 +391,7 @@ describe("webhook and routes", () => {
     const t = setup(
       { webhook: { url: "https://discord.com/api/webhooks/1/x", format: "discord" } },
       (url, init) => {
-        calls.push({ url, body: JSON.parse(init?.body ?? "null") });
+        calls.push({ url, body: init?.json ?? JSON.parse(init?.body ?? "null") });
         return { status: 204 };
       },
     );
@@ -365,6 +410,30 @@ describe("webhook and routes", () => {
     ]);
   });
 
+  test("a bound webhook secret takes precedence over the legacy URL", async () => {
+    const t = setup({
+      webhook: { url: "https://discord.com/api/webhooks/legacy", format: "discord" },
+    });
+    vi.spyOn(t.ctx.secrets, "has").mockImplementation((name) => name === "WEBHOOK_URL");
+    vi.spyOn(t.ctx.secrets, "ref").mockReturnValue(
+      "opaque-reference" as ReturnType<typeof t.ctx.secrets.ref>,
+    );
+    const http = vi.spyOn(t.ctx.http, "fetch").mockResolvedValue({
+      status: 204,
+      headers: {},
+      text: async () => "",
+      json: async <T>() => undefined as T,
+    });
+    await runCommand(plugin, t, "warn", {
+      user: "1",
+      options: { member: user(t, "2"), reason: "test" },
+    });
+    expect(http).toHaveBeenCalledTimes(1);
+    expect(http.mock.calls[0]).toMatchObject([
+      "opaque-reference",
+      { method: "POST", json: { allowed_mentions: { parse: [] } } },
+    ]);
+  });
   test("a failing webhook does not break the command", async () => {
     const t = setup({ webhook: { url: "https://hooks.slack.com/services/x" } }, () => {
       throw new Error("network down");
@@ -419,7 +488,7 @@ describe("durable bans", () => {
       options: { member: target, reason: "replacement" },
     });
     await plugin.tasks!.expireBan!(t.ctx, expiry.payload);
-    expect((await t.ctx.server.bans())[0]?.reason).toBe("mia: replacement");
+    expect((await t.ctx.server.bans())[0]?.reason).toBe("[cicord ban #2] mia: replacement");
     expect(await t.ctx.kv.get("case:1")).toMatchObject({ status: "superseded" });
   });
   test("redelivery after Discord unbanned the member completes the reserved resolution", async () => {
@@ -442,7 +511,7 @@ describe("durable bans", () => {
         reason: "expired",
       },
     });
-    await t.ctx.server.unban("2");
+    await t.ctx.server.unban("2", `[cicord unban #${resolution}] expired`);
     await plugin.tasks!.expireBan!(t.ctx, task.payload);
     await plugin.tasks!.expireBan!(t.ctx, task.payload);
     expect(await t.ctx.kv.get("cases")).toBe(2);
@@ -514,5 +583,199 @@ describe("case access and approval", () => {
     await plugin.onStart!(t.ctx);
     expect(await t.ctx.kv.get("meta:schema")).toBe(2);
     expect((await t.ctx.kv.list({ prefix: "case-user:2:", limit: 100 })).items).toHaveLength(30);
+  });
+});
+
+describe("ownership and delivery recovery", () => {
+  test("a channel deny blocks both the preview and a confirmation issued before revocation", async () => {
+    const t = createTestContext({
+      schema,
+      config: { logChannel: "log" },
+      grants: [...grants, "discord.channels.manage"],
+      server: { everyonePermissions: ["ViewChannel", "ReadMessageHistory"] },
+      roles: { staff: { name: "Staff", permissions: ["ManageMessages"] } },
+      members: [{ id: "12", roles: ["staff"] }],
+      channels: { log: { name: "Log" } },
+    });
+    const ch = await t.ctx.server.createChannel({
+      name: "test",
+      overwrites: { staff: { deny: ["ManageMessages"] } },
+    });
+    const msg = await ch.send("match");
+    const call = () =>
+      runCommand(plugin, t, "purge", { user: "12", channel: ch.id, options: { count: 10 } });
+    await call();
+    expect(await t.ctx.kv.get("purge:1")).toBeUndefined();
+    await t.ctx.server.editChannel(
+      { id: ch.id },
+      { overwrites: { staff: { clear: ["ManageMessages"] } } },
+    );
+    await call();
+    expect(await t.ctx.kv.get("purge:1")).toBeDefined();
+    await t.ctx.server.editChannel(
+      { id: ch.id },
+      { overwrites: { staff: { deny: ["ManageMessages"] } } },
+    );
+    await runComponent(plugin, t, "purge-confirm:1", { user: "12", channel: ch.id });
+    expect(await ch.message(msg.id)).toBeDefined();
+  });
+  test("a replacement with the same reason cannot be released by either expiry or appeal", async () => {
+    const t = setup();
+    await runCommand(plugin, t, "ban", {
+      user: "1",
+      options: { member: user(t, "2"), duration: 60 },
+    });
+    const original = t.audit[0]!;
+    await t.ctx.server.unban("2");
+    await t.ctx.server.ban("2", { reason: original.reason! });
+    Object.assign(t.audit[0]!, {
+      actorId: "9",
+      attribution: { kind: "human", certainty: "confirmed" },
+    });
+    expect(await liftBanIfCurrent(t.ctx, "2", 1, { id: "1", name: "staff" }, "review")).toBe(false);
+    await plugin.tasks!.expireBan!(t.ctx, { number: 1, user: "2" });
+    expect(await t.ctx.server.bans()).toHaveLength(1);
+    expect(await t.ctx.kv.get("case:1")).toMatchObject({ status: "superseded" });
+    expect(await t.ctx.kv.get("cases")).toBe(1);
+  });
+
+  test("a human unban during a reserved release is never recorded as an automatic unban", async () => {
+    const t = setup();
+    await runCommand(plugin, t, "ban", {
+      user: "1",
+      options: { member: user(t, "2"), duration: 60 },
+    });
+    const remove = vi.mocked(t.ctx.server.unban).getMockImplementation()!;
+    vi.spyOn(t.ctx.server, "unban").mockImplementation(async (id, reason) => {
+      await remove(id, reason);
+      Object.assign(t.audit[0]!, {
+        actorId: "6",
+        attribution: { kind: "human", certainty: "confirmed" },
+      });
+    });
+    await plugin.tasks!.expireBan!(t.ctx, { number: 1, user: "2" });
+    expect(await t.ctx.kv.get("case:2")).toBeUndefined();
+    expect(await t.ctx.kv.get("case:1")).toMatchObject({ status: "lifted" });
+  });
+
+  test("an outage longer than the retained audit window keeps the ban in force", async () => {
+    const t = setup();
+    await runCommand(plugin, t, "ban", {
+      user: "1",
+      options: { member: user(t, "2"), duration: 100_000 },
+    });
+    vi.advanceTimersByTime(45 * 86_400_000);
+    await expect(plugin.tasks!.expireBan!(t.ctx, { number: 1, user: "2" })).rejects.toThrow(
+      "unconfirmed",
+    );
+    expect(await t.ctx.server.bans()).toHaveLength(1);
+  });
+
+  test("delayed proof uses a durable task; probable or another installation's evidence cannot lift", async () => {
+    const t = setup();
+    const list = t.ctx.server.auditLog.bind(t.ctx.server);
+    let late = true;
+    vi.spyOn(t.ctx.server, "auditLog").mockImplementation((query) =>
+      late ? Promise.resolve([]) : list(query),
+    );
+    await runCommand(plugin, t, "ban", {
+      user: "1",
+      options: { member: user(t, "2"), duration: 60 },
+    });
+    const task = t.scheduled.find((x) => x.task === "bindBanEvidence")!;
+    expect(await t.ctx.kv.get("ban-expiry:1")).not.toHaveProperty("proof");
+    await expect(plugin.tasks!.expireBan!(t.ctx, { number: 1, user: "2" })).rejects.toThrow(
+      "unconfirmed",
+    );
+    late = false;
+    const entry = t.audit[0]!;
+    entry.attribution.certainty = "probable";
+    await expect(plugin.tasks!.expireBan!(t.ctx, { number: 1, user: "2" })).rejects.toThrow(
+      "unconfirmed",
+    );
+    entry.attribution.certainty = "confirmed";
+    const origin = entry.attribution.plugin!;
+    origin.instance = "another";
+    await expect(
+      liftBanIfCurrent(t.ctx, "2", 1, { id: "1", name: "staff" }, "review"),
+    ).rejects.toThrow("unconfirmed");
+    origin.instance = t.ctx.plugin.instance;
+    await plugin.tasks!.bindBanEvidence!(t.ctx, task.payload);
+    expect(await t.ctx.kv.get("ban-expiry:1")).toHaveProperty("proof.entryId", entry.id);
+    await plugin.tasks!.expireBan!(t.ctx, { number: 1, user: "2" });
+    expect(await t.ctx.server.bans()).toHaveLength(0);
+  });
+
+  test("a new attempt never reposts an uncertain staff message after its history window", async () => {
+    const t = setup();
+    const c: Case = {
+      number: 21,
+      action: "warn",
+      member: { id: "2", name: "member" },
+      moderator: { id: "1", name: "staff" },
+      reason: "rule",
+      at: new Date().toISOString(),
+    };
+    const remove = t.ctx.kv.delete.bind(t.ctx.kv);
+    vi.spyOn(t.ctx.kv, "delete")
+      .mockImplementationOnce(async () => {
+        throw new Error("lost acknowledgment");
+      })
+      .mockImplementation(remove);
+    await saveNewCase(t.ctx, c);
+    vi.advanceTimersByTime(301_000);
+    const channel = t.ctx.server.channel("mod-log");
+    for (let i = 0; i < 100; i++) await channel.send("later");
+    await expect(deliverCase(t.ctx, { number: 21 })).rejects.toThrow(
+      "Staff log delivery is uncertain",
+    );
+    expect(logs(t)).toHaveLength(1);
+    expect(await t.ctx.kv.get("case-delivery:21")).toBeDefined();
+  });
+
+  test("delivery retries an interrupted event and reconciles a staff message after losing its acknowledgment", async () => {
+    const t = setup();
+    const c: Case = {
+      number: 22,
+      action: "warn",
+      member: { id: "2", name: "member" },
+      moderator: { id: "1", name: "staff" },
+      reason: "rule",
+      at: new Date().toISOString(),
+      evidence: "https://private.test/evidence",
+    };
+    const send = t.ctx.events.publish.bind(t.ctx.events);
+    const emitted: string[] = [];
+    let interrupt = true;
+    vi.spyOn(t.ctx.events, "publish").mockImplementation(async (topic, payload, opts) => {
+      if (opts?.version === 2 && interrupt) {
+        interrupt = false;
+        throw new Error("interrupted");
+      }
+      emitted.push(opts!.idempotencyKey!);
+      return send(topic, payload, opts);
+    });
+    await saveNewCase(t.ctx, c);
+    expect(emitted).toEqual(["case:22:v1"]);
+    expect(await t.ctx.kv.get("case-delivery:22")).toHaveProperty("event1", true);
+    const remove = t.ctx.kv.delete.bind(t.ctx.kv);
+    let loseAck = true;
+    vi.spyOn(t.ctx.kv, "delete").mockImplementation(async (key) => {
+      if (key === "case-delivery:22" && loseAck) {
+        loseAck = false;
+        throw new Error("lost acknowledgment");
+      }
+      return remove(key);
+    });
+    await expect(deliverCase(t.ctx, { number: 22 })).rejects.toThrow("lost acknowledgment");
+    vi.advanceTimersByTime(300_000);
+    await deliverCase(t.ctx, { number: 22 });
+    await saveNewCase(t.ctx, c);
+    expect(logs(t)).toHaveLength(1);
+    expect(emitted).toEqual(["case:22:v1", "case:22:v2"]);
+    expect(JSON.stringify(t.published)).not.toContain(c.evidence);
+    expect(await t.ctx.kv.get("case-delivery:22")).toBeUndefined();
+    await saveNewCase(t.ctx, { ...c, number: 23, action: "note", reason: "staff only" });
+    expect(JSON.stringify([...t.sent, ...t.published])).not.toContain("staff only");
   });
 });

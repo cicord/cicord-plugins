@@ -25,6 +25,7 @@ export type Case = {
   expiresAt?: string;
   source?: { type: "command" | "escalation" | "plugin" | "automod"; plugin?: string };
   evidence?: string;
+  evidenceChannelId?: string;
   at: string;
 };
 
@@ -100,12 +101,20 @@ export async function readCase(ctx: Context, number: number) {
   return ctx.kv.get<Case>(`case:${number}`);
 }
 
+/** Retention follows the original case timestamp, including after edits or retries. */
+export function caseTTL(at: string): number {
+  const seconds = Math.ceil((Date.parse(at) + 365 * 86_400_000 - Date.now()) / 1000);
+  return Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+}
+
 /** Lexical KV pagination lists newer cases first without scanning all cases. */
 export async function indexCase(ctx: Context, c: Case) {
-  if (c.member)
+  const ttlSeconds = caseTTL(c.at);
+  if (c.member && ttlSeconds > 0)
     await ctx.kv.set(
       `case-user:${c.member.id}:${String(Number.MAX_SAFE_INTEGER - c.number).padStart(16, "0")}`,
       c.number,
+      { ttlSeconds },
     );
 }
 
@@ -119,28 +128,183 @@ export async function recordCase(ctx: Context, c: Omit<Case, "number" | "at">): 
   return saveNewCase(ctx, full);
 }
 
+type Delivery = {
+  taskId: string;
+  channelId: string;
+  event1?: boolean;
+  event2?: boolean;
+  webhookAttempted?: boolean;
+  staffAttemptedAt?: number;
+};
+
+const deliveryKey = (number: number) => `case-delivery:${number}`;
+const sending = new Map<number, Promise<void>>();
+
+/** Fence overlapping handlers from different runtime processes. The KV version
+ * prevents a late handler from releasing its successor's lock after a restart. */
+export async function withModerationLock<T>(
+  ctx: Context,
+  key: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  const owner = await ctx.kv.increment("moderation-lock-sequence");
+  const acquired = await ctx.kv
+    .atomic()
+    .check(key, null)
+    .set(key, owner, { ttlSeconds: 30 })
+    .commit();
+  if (!acquired.ok) throw new Error("Another moderation handler is running; retry shortly");
+  try {
+    return await work();
+  } finally {
+    const held = await ctx.kv.getEntry<number>(key);
+    if (held?.value === owner) await ctx.kv.atomic().check(key, held.version).delete(key).commit();
+  }
+}
+
+/** The case and its outbox are created together. Already stored legacy cases
+ * have no outbox and must not suddenly be announced after an upgrade. */
 export async function saveNewCase(ctx: Context, full: Case): Promise<Case> {
   const key = `case:${full.number}`;
-  const already = await ctx.kv.get<Case>(key);
-  if (already) {
-    await indexCase(ctx, already);
-    return already;
+  const ttlSeconds = caseTTL(full.at);
+  if (ttlSeconds === 0) return full;
+  let entry = await ctx.kv.get<Case>(key);
+  if (!entry) {
+    full.source ??= { type: full.moderator ? "command" : "escalation" };
+    full.status ??= "active";
+    if (full.action === "note") {
+      await ctx.kv.atomic().check(key, null).set(key, full, { ttlSeconds }).commit();
+    } else {
+      const channelId = ctx.server.channel(ctx.config.logChannel).id;
+      // Arm recovery before materializing the case. A crash before the transaction
+      // leaves a harmless task; one after it always leaves a worker for its outbox.
+      const task = await ctx.schedule.after(120_000, "deliverCase", { number: full.number });
+      const delivery: Delivery = { taskId: task.id, channelId };
+      const created = await ctx.kv
+        .atomic()
+        .check(key, null)
+        .set(key, full, { ttlSeconds })
+        .set(deliveryKey(full.number), delivery, { ttlSeconds })
+        .commit();
+      if (!created.ok) await ctx.schedule.cancel(task.id);
+    }
+    entry = await ctx.kv.get<Case>(key);
+    if (!entry) throw new Error("Case could not be recorded");
   }
-  full.source ??= { type: full.moderator ? "command" : "escalation" };
-  full.status ??= "active";
-  await ctx.kv.set(key, full as unknown as Json);
-  await indexCase(ctx, full);
-  await ctx.server.channel(ctx.config.logChannel).send({
-    embeds: [caseEmbed(full)],
-    allowedMentions: { users: false, roles: false, everyone: false },
-  });
-  await notifyWebhook(
-    ctx,
-    `Case #${full.number} · ${TITLES[full.action]}: ${full.member?.name ?? "channel"} — ${full.reason || "no reason"}${full.moderator ? ` (by ${full.moderator.name})` : ""}`,
+  await indexCase(ctx, entry);
+  if (entry.action !== "note") {
+    try {
+      await deliverCase(ctx, { number: entry.number });
+    } catch {
+      // The sanction or warning may already be effective. Durable recovery
+      // handles notification failures without repeating the moderation command.
+      ctx.log.warn("Case notification pending recovery", { number: entry.number });
+    }
+  }
+  return entry;
+}
+
+export async function deliverCase(ctx: Context, payload?: Json): Promise<void> {
+  const number = (payload as { number?: number } | undefined)?.number;
+  if (!number || !Number.isSafeInteger(number)) throw new Error("Invalid case delivery task");
+  const current = sending.get(number);
+  if (current) return current;
+  const attempt = withModerationLock(ctx, `case-delivery-lock:${number}`, () =>
+    deliver(ctx, number),
   );
-  // moderation.case: other plugins (audit-log) can record sanctions.
-  await ctx.events.publish("case", full as unknown as Json);
-  return full;
+  sending.set(number, attempt);
+  try {
+    await attempt;
+  } finally {
+    sending.delete(number);
+  }
+}
+
+async function deliver(ctx: Context, number: number) {
+  const key = deliveryKey(number);
+  const d = await ctx.kv.get<Delivery>(key);
+  if (!d) return;
+  const c = await readCase(ctx, number);
+  const ttlSeconds = c ? caseTTL(c.at) : 0;
+  if (!c || c.action === "note" || !ttlSeconds) {
+    await ctx.kv.delete(key);
+    return;
+  }
+  await indexCase(ctx, c);
+  // Only explicitly public contract fields leave moderation. Staff evidence is
+  // never shared with event subscribers, including in the legacy projection.
+  const v1 = {
+    number: c.number,
+    at: c.at,
+    action: c.action,
+    member: c.member,
+    moderator: c.moderator,
+    reason: c.reason,
+    ...(c.durationMinutes !== undefined ? { durationMinutes: c.durationMinutes } : {}),
+  };
+  if (!d.event1) {
+    await ctx.events.publish("case", v1, { version: 1, idempotencyKey: `case:${number}:v1` });
+    d.event1 = true;
+    await ctx.kv.set(key, d, { ttlSeconds });
+  }
+  if (!d.event2) {
+    const v2 = {
+      ...v1,
+      ...(c.source ? { source: c.source } : {}),
+      ...(c.status ? { status: c.status } : {}),
+      ...(c.expiresAt ? { expiresAt: c.expiresAt } : {}),
+    };
+    await ctx.events.publish("case", v2, { version: 2, idempotencyKey: `case:${number}:v2` });
+    d.event2 = true;
+    await ctx.kv.set(key, d, { ttlSeconds });
+  }
+  if (!d.webhookAttempted && (ctx.secrets.has("WEBHOOK_URL") || ctx.config.webhook?.url)) {
+    d.webhookAttempted = true;
+    await ctx.kv.set(key, d, { ttlSeconds });
+    await notifyWebhook(
+      ctx,
+      `Case #${number} · ${TITLES[c.action]}: ${c.member?.name ?? "channel"} — ${c.reason || "no reason"}${c.moderator ? ` (by ${c.moderator.name})` : ""}`,
+    );
+  }
+  const channel = ctx.server.channel({ id: d.channelId });
+  const nonce = d.taskId.slice(0, 25);
+  const footer = `Case delivery ${nonce}`;
+  let found = false;
+  if (d.staffAttemptedAt !== undefined) {
+    const recent = await channel.messages({ limit: 100 });
+    found = recent.some(
+      (m) => m.author.id === ctx.bot.user.id && m.embeds.some((e) => e.footer?.text === footer),
+    );
+    // Discord only remembers an enforced nonce for a few minutes. When a busy
+    // channel has moved beyond the recorded attempt we cannot prove absence.
+    if (
+      !found &&
+      Date.now() - d.staffAttemptedAt > 120_000 &&
+      recent.length === 100 &&
+      recent.every((m) => m.createdAt.getTime() >= d.staffAttemptedAt!)
+    )
+      throw new Error(
+        "Staff log delivery is uncertain after 100 newer messages; staff review required",
+      );
+  } else {
+    d.staffAttemptedAt = Date.now();
+    await ctx.kv.set(key, d, { ttlSeconds });
+  }
+  if (!found) {
+    let evidence: string | undefined;
+    if (c.evidence && c.evidenceChannelId) {
+      const relation = ctx.server.compareAudience({ id: c.evidenceChannelId }, channel);
+      if (relation === "same" || relation === "narrower") evidence = c.evidence;
+    }
+    await channel.send({
+      embeds: [{ ...caseEmbed({ ...c, evidence }), footer: { text: footer } }],
+      nonce,
+      enforceNonce: true,
+      allowedMentions: { users: false, roles: false, everyone: false },
+    });
+  }
+  await ctx.kv.delete(key);
+  await ctx.schedule.cancel(d.taskId);
 }
 
 /** Plain audit log line (joins, leaves, updates). */
@@ -154,20 +318,16 @@ export async function logLine(ctx: Context, text: string, color = "#95a5a6"): Pr
 /** Posts to the optional webhook. Failures are logged, never thrown. */
 async function notifyWebhook(ctx: Context, text: string): Promise<void> {
   const hook = ctx.config.webhook;
-  if (!hook) return;
-  const body =
-    hook.format === "discord" ? { content: text, allowed_mentions: { parse: [] } } : { text };
+  const url = ctx.secrets.has("WEBHOOK_URL") ? ctx.secrets.ref("WEBHOOK_URL") : hook?.url;
+  if (!url) return;
+  const payload: Record<string, Json> =
+    hook?.format === "discord" ? { content: text, allowed_mentions: { parse: [] } } : { text };
   try {
-    const res = await ctx.http.fetch(hook.url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      timeoutMs: 5000,
-    });
+    const res = await ctx.http.fetch(url, { method: "POST", json: payload, timeoutMs: 5000 });
     if (res.status >= 300)
       ctx.log.warn("moderation: webhook refused the message", { status: res.status });
-  } catch (error) {
-    ctx.log.warn("moderation: webhook failed", { error: String(error) });
+  } catch {
+    ctx.log.warn("moderation: webhook failed");
   }
 }
 

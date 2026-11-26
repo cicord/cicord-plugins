@@ -1,4 +1,4 @@
-import { command, type Context, type ComponentInteraction, type Member } from "@cicord/sdk";
+import { command, type Context, type ComponentInteraction, type Channel } from "@cicord/sdk";
 import { recordCase, who } from "./moderation.ts";
 
 type Preview = { actor: string; channel: string; ids: string[]; scanned: number; skipped: number };
@@ -6,12 +6,10 @@ type Preview = { actor: string; channel: string; ids: string[]; scanned: number;
 // Stops repeated clicks before the KV read completes. KV expiry bounds abandoned previews.
 const running = new Set<string>();
 
-function allowed(ctx: Context, member: Member | undefined) {
-  return (
-    !!member &&
-    (member.id === ctx.server.ownerId ||
-      (member.permissions ?? []).some((p) => p === "ManageMessages" || p === "Administrator"))
-  );
+async function allowed(ctx: Context, user: string, channel: Channel | undefined) {
+  if (!channel || channel.type === "dm") return false;
+  const member = await ctx.server.member(user);
+  return member?.permissionsIn(channel).includes("ManageMessages") ?? false;
 }
 
 export const purge = command({
@@ -37,7 +35,7 @@ export const purge = command({
   },
   async run(ctx, it) {
     const channel = it.channel;
-    if (!channel || channel.type === "dm" || !allowed(ctx, it.member)) {
+    if (!channel || !(await allowed(ctx, it.user.id, channel))) {
       await it.reply("You need Manage Messages in this server.");
       return;
     }
@@ -109,7 +107,7 @@ export async function finishPurge(ctx: Context, it: ComponentInteraction) {
       !preview ||
       preview.actor !== it.user.id ||
       preview.channel !== it.channel?.id ||
-      !allowed(ctx, it.member)
+      !(await allowed(ctx, it.user.id, it.channel))
     ) {
       await it.reply({ content: "This preview is unavailable.", ephemeral: true });
       return;

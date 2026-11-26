@@ -10,6 +10,7 @@ import {
 import {
   activeWarnings,
   duration,
+  deliverCase,
   logLine,
   recordCase,
   warnPrefix,
@@ -17,7 +18,7 @@ import {
   type Warning,
 } from "./moderation.ts";
 
-import { applyBan, expireBan, liftBan } from "./bans.ts";
+import { applyBan, bindBanEvidence, expireBan, liftBan } from "./bans.ts";
 
 import {
   caseCommand,
@@ -431,6 +432,8 @@ export default definePlugin({
   components: { "purge-confirm": finishPurge, "purge-cancel": finishPurge },
   tasks: {
     migrateCases,
+    bindBanEvidence,
+    deliverCase,
     async expireBan(ctx, payload) {
       const data = payload as { number?: number; user?: string } | undefined;
       if (!data || !Number.isSafeInteger(data.number) || typeof data.user !== "string")

@@ -7,7 +7,7 @@ import { startSimulator } from "../../../scripts/simulator.mjs";
 test("a temporary guild ban expires through the actual task scheduler", {timeout:100_000},async t=>{
  const dir=fileURLToPath(new URL("..",import.meta.url)).replace(/\/$/,"");
  const grants=["discord.messages.send","discord.messages.manage","discord.messages.read","discord.channels.read",
-  "discord.members.read","discord.members.moderate","discord.dm.send","storage.kv","http.fetch","portal.routes","events.publish","scheduler"];
+  "discord.members.read","discord.auditlog.read","discord.members.moderate","discord.dm.send","storage.kv","http.fetch","portal.routes","events.publish","scheduler"];
  const sim=await startSimulator(t,dir,grants,{logChannel:"general"});
  const alice=sim.users.find(u=>u.username==="alice");
  await sim.join(alice);
