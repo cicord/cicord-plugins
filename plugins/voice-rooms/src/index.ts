@@ -1,3 +1,5 @@
+import { publishCreated } from "./lifecycle.ts";
+import { memberData, remember, releasePatch } from "./privacy.ts";
 import {
   command,
   definePlugin,
@@ -10,6 +12,7 @@ import {
 import {
   BOT_PERMISSIONS,
   PERMIT_PERMISSIONS,
+  patchRoom,
   deleteIfEmpty,
   deleteRoom,
   errorText,
@@ -35,8 +38,6 @@ import {
 // Members whose hub join is being handled: Discord may send several updates while the
 // room is created (and the bot's own move sends one more).
 const creating = new Set<string>();
-// When each member last got a room (cooldownSeconds).
-const lastCreated = new Map<string, number>();
 
 async function hubJoined(ctx: Context, member: Member, hub: Hub, hubId: string): Promise<void> {
   if (creating.has(member.id)) return;
@@ -62,14 +63,17 @@ async function hubJoined(ctx: Context, member: Member, hub: Hub, hubId: string):
       }
     }
     const cooldown = ctx.config.cooldownSeconds * 1000;
-    const last = lastCreated.get(member.id);
+    const last = cooldown > 0 ? await ctx.kv.get<number>("cooldown:" + member.id) : undefined;
     if (cooldown > 0 && last !== undefined && Date.now() - last < cooldown) {
       await member.disconnect(
         reason("rooms are created at most every " + ctx.config.cooldownSeconds + " s"),
       );
       return;
     }
-    lastCreated.set(member.id, Date.now());
+    if (cooldown > 0)
+      await ctx.kv.set("cooldown:" + member.id, Date.now(), {
+        ttlSeconds: ctx.config.cooldownSeconds,
+      });
     await createRoom(ctx, member, hub, hubId, nextNumber(rooms, hubId));
   } finally {
     creating.delete(member.id);
@@ -88,19 +92,32 @@ async function createRoom(
   // Created without overwrites, a channel in a category gets the category's: a room of a
   // private category stays private. The owner's and the bot's are added next.
   const channel = await ctx.server.createChannel({
-    name: roomName(hub.name, member, n),
+    name: roomName(
+      hub.name === "🔊 {member}'s channel"
+        ? ctx.i18n.t("defaultName", { member: "{member}" })
+        : hub.name,
+      member,
+      n,
+    ),
     type: "voice",
     ...(category ? { category } : {}),
     ...(hub.userLimit > 0 ? { userLimit: hub.userLimit } : {}),
     ...(hub.bitrate !== undefined ? { bitrate: hub.bitrate } : {}),
   });
   await saveRoom(ctx, channel.id, {
+    opened: "moving",
+    peak: 1,
+    guests: {},
+    ...(/\{member\}|\{username\}/.test(hub.name)
+      ? { name: channel.name, nameOwner: member.id }
+      : {}),
     hub: hubId,
     owner: member.id,
     n,
     createdAt: new Date().toISOString(),
   });
   try {
+    await remember(ctx, channel.id, member.id, { allow: [...hub.ownerPermissions] });
     await ctx.server.editChannel(channel, {
       overwrites: {
         [`member:${member.id}`]: { allow: [...hub.ownerPermissions] },
@@ -126,10 +143,15 @@ async function createRoom(
     await deleteIfEmpty(ctx, channel.id, "owner left before joining");
     return;
   }
+  const room = await patchRoom(ctx, channel.id, (r) => {
+    r.opened = ctx.features.enabled("roomEvents") ? "pending" : "sent";
+  });
+  if (room) await publishCreated(ctx, channel.id, room);
   ctx.log.info("voice room created", { channel: channel.id, owner: member.id, hub: hubId });
 }
 
 async function voiceStateUpdate(ctx: Context, u: VoiceStateUpdate): Promise<void> {
+  if (ctx.config.enabled === false) return;
   const now = u.channel?.id;
   const before = u.previous?.id;
   if (now === before) return; // mute, deafen, stream, camera
@@ -139,7 +161,25 @@ async function voiceStateUpdate(ctx: Context, u: VoiceStateUpdate): Promise<void
   }
   if (!now || u.user.bot) return;
   const hub = hubOf(ctx, now);
-  if (!hub) return;
+  if (!hub) {
+    const room = await getRoom(ctx, now);
+    if (room) {
+      if (room.cleanup) {
+        await ctx.schedule.cancel(room.cleanup);
+        await patchRoom(ctx, now, (r) => {
+          delete r.cleanup;
+          delete r.cleanupDue;
+          delete r.cleanupToken;
+        });
+      }
+      const peak = (await humansIn(ctx, now)).length;
+      if (peak > (room.peak ?? 1))
+        await patchRoom(ctx, now, (r) => {
+          r.peak = Math.max(r.peak ?? 1, peak);
+        });
+    }
+    return;
+  }
   const member = u.member ?? (await ctx.server.member(u.user.id));
   if (member) await hubJoined(ctx, member, hub, now);
 }
@@ -153,6 +193,7 @@ type Target = { id: string; room: Room };
  * connected to, else one they own.
  */
 async function targetRoom(ctx: Context, i: CommandInteraction): Promise<Target | undefined> {
+  if (ctx.config.enabled === false) return;
   const rooms = await listRooms(ctx);
   const inChat = i.channel && rooms.find((r) => r.id === i.channel!.id);
   if (inChat) return inChat;
@@ -170,13 +211,11 @@ async function targetRoom(ctx: Context, i: CommandInteraction): Promise<Target |
 async function managed(ctx: Context, i: CommandInteraction): Promise<Target | undefined> {
   const t = await targetRoom(ctx, i);
   if (!t) {
-    await i.reply("Join your voice room first (or use this command in its chat).");
+    await i.reply(ctx.i18n.t("join"));
     return undefined;
   }
   if (t.room.owner !== i.user.id && !isStaff(ctx, i.member)) {
-    await i.reply(
-      `<#${t.id}> belongs to <@${t.room.owner}>: only they (or the staff) can change it.`,
-    );
+    await i.reply(ctx.i18n.t("ownerOnly", { room: `<#${t.id}>`, owner: `<@${t.room.owner}>` }));
     return undefined;
   }
   return t;
@@ -202,17 +241,27 @@ function mayOwn(ctx: Context, t: Target, member: Member): boolean {
 
 async function setOwner(ctx: Context, t: Target, to: Member, why: string): Promise<void> {
   const { ownerPermissions } = roomSettings(ctx, t.room);
+  if (to.id === t.room.owner) return;
+  const old = await releasePatch(ctx, t.id, t.room, t.room.owner);
+  await remember(ctx, t.id, to.id, { allow: [...ownerPermissions] });
   await ctx.server.editChannel(
     { id: t.id },
     {
       overwrites: {
-        [`member:${t.room.owner}`]: null,
         [`member:${to.id}`]: { allow: [...ownerPermissions] },
+        ...(old === undefined ? {} : { [`member:${t.room.owner}`]: old }),
       },
       reason: reason(why),
     },
   );
-  await saveRoom(ctx, t.id, { ...t.room, owner: to.id });
+  await patchRoom(ctx, t.id, (r) => {
+    r.owner = to.id;
+    if (r.acl) delete r.acl[t.room.owner];
+    if (r.guests) {
+      delete r.guests[to.id];
+      delete r.guests[t.room.owner];
+    }
+  });
 }
 
 const memberOption = (description: string) =>
@@ -238,7 +287,7 @@ const voice = command({
         if (!t) return;
         const recent = (renames.get(t.id) ?? []).filter((at) => Date.now() - at < RENAME_WINDOW);
         if (recent.length >= 2) {
-          await i.reply("Discord allows two renames per 10 minutes: try again later.");
+          await i.reply(ctx.i18n.t("rate"));
           return;
         }
         renames.set(t.id, [...recent, Date.now()]);
@@ -246,7 +295,11 @@ const voice = command({
           { id: t.id },
           { name: i.options.name, reason: reason("renamed by " + i.user.id) },
         );
-        await i.reply(`Renamed to **${i.options.name}**.`);
+        await patchRoom(ctx, t.id, (r) => {
+          r.name = i.options.name;
+          r.nameOwner = i.user.id;
+        });
+        await i.reply(ctx.i18n.t("renamed", { name: i.options.name }));
       },
     }),
     limit: subcommand({
@@ -262,7 +315,9 @@ const voice = command({
           { userLimit: i.options.count, reason: reason("limit") },
         );
         await i.reply(
-          i.options.count === 0 ? "No limit any more." : `Limit set to ${i.options.count}.`,
+          i.options.count === 0
+            ? ctx.i18n.t("unlimited")
+            : ctx.i18n.t("limit", { count: i.options.count }),
         );
       },
     }),
@@ -272,7 +327,7 @@ const voice = command({
         const t = await managed(ctx, i);
         if (!t) return;
         await setConnect(ctx, t, "deny");
-        await i.reply("Locked: members you permit (`/voice permit`) can still join.");
+        await i.reply(ctx.i18n.t("locked"));
       },
     }),
     unlock: subcommand({
@@ -281,7 +336,7 @@ const voice = command({
         const t = await managed(ctx, i);
         if (!t) return;
         await setConnect(ctx, t, "clear");
-        await i.reply("Unlocked.");
+        await i.reply(ctx.i18n.t("unlocked"));
       },
     }),
     permit: subcommand({
@@ -290,6 +345,10 @@ const voice = command({
       async run(ctx, i) {
         const t = await managed(ctx, i);
         if (!t) return;
+        await remember(ctx, t.id, i.options.member.id, { allow: [...PERMIT_PERMISSIONS] });
+        await patchRoom(ctx, t.id, (r) => {
+          (r.guests ??= {})[i.options.member.id] = "permit";
+        });
         await ctx.server.editChannel(
           { id: t.id },
           {
@@ -297,7 +356,9 @@ const voice = command({
             reason: reason("permit"),
           },
         );
-        await i.reply(`${i.options.member.mention} can join <#${t.id}>.`);
+        await i.reply(
+          ctx.i18n.t("permitted", { member: i.options.member.mention, room: `<#${t.id}>` }),
+        );
       },
     }),
     kick: subcommand({
@@ -312,9 +373,13 @@ const voice = command({
           target.id === ctx.bot.user.id ||
           target.id === t.room.owner
         ) {
-          await i.reply("You cannot kick yourself, the bot or the owner of the room.");
+          await i.reply(ctx.i18n.t("protected"));
           return;
         }
+        await remember(ctx, t.id, target.id, { deny: ["Connect"] });
+        await patchRoom(ctx, t.id, (r) => {
+          (r.guests ??= {})[target.id] = "kick";
+        });
         await ctx.server.editChannel(
           { id: t.id },
           {
@@ -324,9 +389,7 @@ const voice = command({
         );
         const inRoom = (await humansIn(ctx, t.id).catch(() => [])).find((m) => m.id === target.id);
         if (inRoom) await inRoom.disconnect(reason("kicked from the room"));
-        await i.reply(
-          `${target.mention} is out of <#${t.id}> (\`/voice permit\` lets them back in).`,
-        );
+        await i.reply(ctx.i18n.t("kicked", { member: target.mention, room: `<#${t.id}>` }));
       },
     }),
     transfer: subcommand({
@@ -337,15 +400,17 @@ const voice = command({
         if (!t) return;
         const to = (await humansIn(ctx, t.id)).find((m) => m.id === i.options.member.id);
         if (!to) {
-          await i.reply(`${i.options.member.mention} must be in <#${t.id}> to receive it.`);
+          await i.reply(
+            ctx.i18n.t("mustJoin", { member: i.options.member.mention, room: `<#${t.id}>` }),
+          );
           return;
         }
         if (!mayOwn(ctx, t, to)) {
-          await i.reply(`${to.mention} cannot own <#${t.id}>: it is for the roles of its hub.`);
+          await i.reply(ctx.i18n.t("wrongRole", { member: to.mention, room: `<#${t.id}>` }));
           return;
         }
         await setOwner(ctx, t, to, "transferred");
-        await i.reply(`<#${t.id}> now belongs to ${to.mention}.`);
+        await i.reply(ctx.i18n.t("transferred", { member: to.mention, room: `<#${t.id}>` }));
       },
     }),
     claim: subcommand({
@@ -355,25 +420,23 @@ const voice = command({
         const humans = t ? await humansIn(ctx, t.id) : [];
         const me = humans.find((m) => m.id === i.user.id);
         if (!t || !me) {
-          await i.reply("Join the voice room you want to claim first.");
+          await i.reply(ctx.i18n.t("claimJoin"));
           return;
         }
         if (t.room.owner === i.user.id) {
-          await i.reply("This room is already yours.");
+          await i.reply(ctx.i18n.t("already"));
           return;
         }
         if (humans.some((m) => m.id === t.room.owner) && !isStaff(ctx, i.member)) {
-          await i.reply(
-            `<@${t.room.owner}> is still in <#${t.id}>: ask them for \`/voice transfer\`.`,
-          );
+          await i.reply(ctx.i18n.t("present", { owner: `<@${t.room.owner}>`, room: `<#${t.id}>` }));
           return;
         }
         if (!mayOwn(ctx, t, me)) {
-          await i.reply(`You cannot own <#${t.id}>: it is for the roles of its hub.`);
+          await i.reply(ctx.i18n.t("cannotClaim", { room: `<#${t.id}>` }));
           return;
         }
         await setOwner(ctx, t, me, "claimed");
-        await i.reply(`<#${t.id}> is yours now.`);
+        await i.reply(ctx.i18n.t("claimed", { room: `<#${t.id}>` }));
       },
     }),
   },
@@ -396,24 +459,49 @@ async function setConnect(ctx: Context, t: Target, how: "deny" | "clear"): Promi
 
 /** Checks every room: deletes the empty ones (and forgets those deleted by hand). */
 async function sweep(ctx: Context): Promise<void> {
-  for (const { id } of await listRooms(ctx)) {
-    await deleteIfEmpty(ctx, id, "empty");
+  if (ctx.config.enabled === false) return;
+  await sweepPage(ctx, undefined, false);
+}
+async function sweepPage(ctx: Context, cursor: string | undefined, reset: boolean) {
+  const page = await ctx.kv.list({ prefix: "room:", limit: 25, cursor });
+  for (const item of page.items) {
+    const id = item.key.slice(5),
+      room = item.value as unknown as Room;
+    if (room.opened === undefined && !room.legacy)
+      await patchRoom(ctx, id, (r) => {
+        r.legacy = true;
+        r.peak ??= 1;
+      });
+    if (reset) {
+      await deleteRoom(ctx, id, "plugin restarted");
+      continue;
+    }
+    await publishCreated(ctx, id, room);
+    if (!room.cleanupDue || room.cleanupDue <= Date.now()) await deleteIfEmpty(ctx, id, "empty");
   }
+  if (page.cursor) await ctx.schedule.after(100, "sweep", { cursor: page.cursor, reset });
+  else await ctx.kv.set("meta:schema", 2);
 }
 
 export default definePlugin({
   async onStart(ctx) {
-    const rooms = await listRooms(ctx);
-    if (rooms.length === 0) return;
+    if (ctx.config.enabled === false) return;
     if (ctx.config.onRestart === "delete") {
-      for (const { id } of rooms) await deleteRoom(ctx, id, "plugin restarted");
+      await sweepPage(ctx, undefined, true);
       return;
     }
-    // Adopted: checked once the gateway has sent the voice states (they are not known
-    // during the start that follows a connection).
-    await ctx.schedule.after(15_000, "sweep");
+    if ((await ctx.kv.list({ prefix: "room:", limit: 1 })).items.length)
+      await ctx.schedule.after(15_000, "sweep");
+    else await ctx.kv.set("meta:schema", 2);
   },
-
+  privacy: {
+    async export(ctx, id) {
+      return (await memberData(ctx, id, false)).records;
+    },
+    async erase(ctx, id) {
+      return { erased: (await memberData(ctx, id, true)).erased };
+    },
+  },
   events: { voiceStateUpdate },
 
   commands: { voice },
@@ -424,12 +512,26 @@ export default definePlugin({
       if (!id) return;
       const room = await getRoom(ctx, id);
       if (!room) return;
-      const { cleanup: _, ...rest } = room;
-      await saveRoom(ctx, id, rest);
+      const due = (payload as { due?: number }).due;
+      if (
+        due !== undefined &&
+        (due !== room.cleanupDue ||
+          (payload as { token?: string }).token !== room.cleanupToken ||
+          Date.now() < due)
+      )
+        return;
+      if (!room.cleanup || (due === undefined && room.cleanupDue !== undefined)) return;
+      await patchRoom(ctx, id, (r) => {
+        delete r.cleanup;
+        delete r.cleanupDue;
+        delete r.cleanupToken;
+      });
       await deleteIfEmpty(ctx, id, "empty");
     },
-    async sweep(ctx) {
-      await sweep(ctx);
+    async sweep(ctx, payload) {
+      if (ctx.config.enabled === false) return;
+      const p = payload as { cursor?: string; reset?: boolean } | undefined;
+      await sweepPage(ctx, p?.cursor, p?.reset === true);
     },
   },
 

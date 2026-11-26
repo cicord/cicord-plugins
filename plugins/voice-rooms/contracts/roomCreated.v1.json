@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "required": [
+    "channelId",
+    "ownerId"
+  ],
+  "properties": {
+    "channelId": {
+      "type": "string"
+    },
+    "ownerId": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

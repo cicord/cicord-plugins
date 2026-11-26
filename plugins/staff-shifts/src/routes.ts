@@ -8,6 +8,7 @@ export interface Plan {
   shifts: Shift[];
 }
 export interface StaffOverview {
+  zones: string[];
   plan?: Plan;
   duty?: { start: number; end: number };
   duration?: number;

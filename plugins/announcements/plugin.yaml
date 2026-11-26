@@ -18,6 +18,8 @@ spec:
     - discord.messages.send # post configured messages
     - portal.routes # serve access-controlled forms
   optional:
+    - feature: crosspost
+      capabilities: [discord.messages.send] # report Discord publication failures in instance health
     - feature: recoverPosts
       capabilities: [discord.messages.read]
     - feature: stickies

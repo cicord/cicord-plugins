@@ -2,14 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Voice rooms plugin config",
   "type": "object",
-  "required": ["hubs"],
   "properties": {
     "hubs": {
       "description": "Voice channels that create a room: a member who joins one gets a voice channel of their own and is moved into it.",
       "type": "array",
       "minItems": 1,
       "maxItems": 10,
-      "items": { "$ref": "#/$defs/hub" }
+      "items": {
+        "$ref": "#/$defs/hub"
+      }
     },
     "emptyDelaySeconds": {
       "description": "How long an empty room is kept before it is deleted (a member who reconnects in time keeps it). 0 deletes it as soon as the last member leaves.",
@@ -28,24 +29,44 @@
     "onRestart": {
       "description": "Rooms that exist when the plugin starts (bot restart, new configuration): adopt keeps them and deletes them once empty; delete deletes them all at once, disconnecting whoever is in them.",
       "type": "string",
-      "enum": ["adopt", "delete"],
+      "enum": [
+        "adopt",
+        "delete"
+      ],
       "default": "adopt"
     },
     "staffRoles": {
       "description": "Roles that may use the /voice commands on any room, like its owner (Cicord moderators and admins, and the server owner, may too).",
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "uniqueItems": true,
       "maxItems": 10,
       "default": [],
       "x-cicord-ref": "role"
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Enable this instance.",
+      "default": true
+    },
+    "locale": {
+      "type": "string",
+      "enum": [
+        "en",
+        "fr"
+      ],
+      "description": "Override the server or interaction language."
     }
   },
   "additionalProperties": false,
   "$defs": {
     "hub": {
       "type": "object",
-      "required": ["channel"],
+      "required": [
+        "channel"
+      ],
       "properties": {
         "channel": {
           "description": "The hub: a voice channel, e.g. \"➕ Create a channel\".",
@@ -80,7 +101,9 @@
         "allowedRoles": {
           "description": "Only members with one of these roles may use the hub (others are disconnected from it). Empty: whoever can join the hub. /voice lock also denies Connect to these roles.",
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "uniqueItems": true,
           "maxItems": 10,
           "default": [],
@@ -92,16 +115,52 @@
           "items": {
             "type": "string",
             "enum": [
-              "ViewChannel", "Connect", "Speak", "Stream", "UseVAD", "PrioritySpeaker", "MuteMembers",
-              "DeafenMembers", "MoveMembers", "ManageChannels", "SendMessages", "ReadMessageHistory",
-              "UseSoundboard", "UseEmbeddedActivities"
+              "ViewChannel",
+              "Connect",
+              "Speak",
+              "Stream",
+              "UseVAD",
+              "PrioritySpeaker",
+              "MuteMembers",
+              "DeafenMembers",
+              "MoveMembers",
+              "ManageChannels",
+              "SendMessages",
+              "ReadMessageHistory",
+              "UseSoundboard",
+              "UseEmbeddedActivities"
             ]
           },
           "uniqueItems": true,
-          "default": ["ViewChannel", "Connect", "Speak", "Stream", "MoveMembers"]
+          "default": [
+            "ViewChannel",
+            "Connect",
+            "Speak",
+            "Stream",
+            "MoveMembers"
+          ]
         }
       },
       "additionalProperties": false
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "const": false
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "hubs"
+        ]
+      }
+    }
+  ]
 }

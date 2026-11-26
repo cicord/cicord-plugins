@@ -228,7 +228,10 @@ describe("/announce", () => {
       channel: channel("announcements"),
       mention: { id: "100", name: "Events", mention: "<@&100>" },
     });
-    expect(command.modal?.fields.map((f) => "id" in f?f.id:f.component.id)).toEqual(["title", "message"]);
+    expect(command.modal?.fields.map((f) => ("id" in f ? f.id : f.component.id))).toEqual([
+      "title",
+      "message",
+    ]);
     expect(submit!.replies).toEqual([
       { content: "Posted in <#channel-announcements>.", ephemeral: true },
     ]);

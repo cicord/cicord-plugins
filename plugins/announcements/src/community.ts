@@ -30,12 +30,16 @@ type Sticky = { count: number; last: number; message?: string; pending?: number 
 export async function send(ctx: Context, channel: TextChannel, message: MessagePayload) {
   const posted = await channel.send(message);
   if (ctx.config.crosspost && channel.type === "announcement") {
-    if (typeof posted.crosspost !== "function")
+    if (await ctx.kv.get("crosspost:" + channel.id)) return posted;
+    if (typeof posted.crosspost !== "function") {
+      ctx.features.report?.("crosspost", false, "SDK-14 message.crosspost unavailable");
       ctx.log.warn("Crosspost disabled: SDK-14 is unavailable");
-    else
+    } else
       try {
         await posted.crosspost();
+        ctx.features.report?.("crosspost", true);
       } catch (e) {
+        ctx.features.report?.("crosspost", false, "Discord refused publication in " + channel.id);
         ctx.log.warn("Crosspost refused; announcement retained", {
           channel: channel.id,
           error: String(e),
@@ -207,6 +211,10 @@ export async function sticky(ctx: Context, raw: Json | undefined) {
     c = ctx.server.channel({ id: channel }),
     k = "sticky:" + channel,
     s = await ctx.kv.get<Sticky>(k);
+  if (typeof c.pins !== "function") {
+    ctx.features.report?.("stickies", false, "SDK-14 channel.pins unavailable");
+    return;
+  }
   if (!s || s.pending !== pending || !ctx.config.enabled || !ctx.features.enabled("stickies"))
     return;
   const rule = ctx.config.stickies.find((r) => c.id === r.channel || c.key === r.channel);

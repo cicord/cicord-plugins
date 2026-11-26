@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "required": [
+    "channelId",
+    "ownerId"
+  ],
+  "properties": {
+    "channelId": {
+      "type": "string"
+    },
+    "ownerId": {
+      "type": "string"
+    },
+    "durationMinutes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "peak": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}

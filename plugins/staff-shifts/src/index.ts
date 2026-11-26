@@ -7,6 +7,7 @@ import {
   type Json,
   type Member,
 } from "@cicord/sdk";
+import { ZONES } from "./tz.ts";
 import { coverage, occurrences, validPlan, type Plan } from "./planning.ts";
 
 type Duty = { start: number; end: number; task: string; role: string; owned: boolean };
@@ -269,6 +270,7 @@ export default definePlugin({
         return {
           ...(schedule ? { plan: { zone: schedule.zone, shifts: schedule.shifts } } : {}),
           ...(d ? { duty: { start: d.start, end: d.end } } : {}),
+          zones: Object.keys(ZONES),
           duration: duration ?? 0,
           ticket: tickets ?? 0,
           case: cases ?? 0,

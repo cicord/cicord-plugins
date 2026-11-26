@@ -3,13 +3,13 @@ apiVersion: cicord.dev/v1alpha1
 kind: Plugin
 metadata:
   name: voice-rooms
-  version: 0.1.1
+  version: 0.2.0
   displayName: Voice rooms
   description: 'Voice channels on demand. Joining a hub such as "➕ Create a channel" gives the member a voice channel of their own, deleted once empty. Several hubs (name, category, limit, allowed roles). Owners manage their room with /voice (rename, limit, lock, permit, kick, transfer, claim).'
   license: Apache-2.0
   keywords: [voice, channels, rooms, join-to-create]
 spec:
-  engine: ">=0.1.10"
+  engine: ">=0.2.0-0"
   entry: ./src/index.ts
   capabilities:
     - discord.channels.read     # resolve the hubs
@@ -22,3 +22,24 @@ spec:
   intents: [ServerVoiceStates]
   config:
     schema: ./config.schema.json
+  locales: ./locales
+  delivery: at-least-once
+  optional:
+    - feature: roomEvents
+      capabilities: [events.publish] # server-wide room lifecycle events
+  interop:
+    types: ./src/contracts.ts
+    publishes:
+      - {topic: roomCreated, version: 1, scope: server}
+      - {topic: roomClosed, version: 1, scope: server}
+  privacy:
+    records:
+      - name: roomOwnership
+        description: Owner, guest permissions and cooldowns for live rooms.
+        policy: erase
+        retention: Room lifetime; at most one hour for a creation cooldown.
+      - name: legacyDiscordOverwrite
+        description: Unattributed member-specific Discord overwrite on an adopted 0.1 room.
+        policy: retain
+        retention: Until removal by a moderator or deletion of the temporary room.
+        justification: The old version did not record guest changes. Removing a possible staff restriction can widen access.

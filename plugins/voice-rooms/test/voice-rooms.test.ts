@@ -1,7 +1,9 @@
 import type { ReplyInput, VoiceStateUpdate } from "@cicord/sdk";
 import { createTestContext, runCommand, type TestHarness } from "@cicord/sdk/testing";
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect, test, vi } from "vite-plus/test";
 import schema from "../config.schema.json" with { type: "json" };
+import en from "../locales/en.json" with { type: "json" };
+import fr from "../locales/fr.json" with { type: "json" };
 import plugin from "../src/index.ts";
 
 const grants = [
@@ -16,8 +18,9 @@ const grants = [
 // 1 alice, 2 bob, 3 carl (guild member): members. 4 sam: staff role. 9 olga: server owner.
 // 50 a music bot.
 function setup(config: Record<string, unknown> = {}) {
-  return createTestContext({
+  const t = createTestContext({
     schema,
+    locales: { en, fr },
     config: {
       hubs: [
         { channel: "create" },
@@ -61,6 +64,8 @@ function setup(config: Record<string, unknown> = {}) {
       { id: "50", username: "music", bot: true },
     ],
   });
+  Object.assign(t.ctx, { features: { enabled: () => false } });
+  return t;
 }
 
 const voice = (t: TestHarness, u: VoiceStateUpdate) => plugin.events!.voiceStateUpdate!(t.ctx, u);
@@ -197,17 +202,24 @@ describe("empty rooms", () => {
     const room = await joinHub(t, "1");
     await voice(t, t.setVoice("1", null));
     expect(t.deletedChannels).toEqual([]);
-    expect(t.scheduled).toEqual([
-      { id: "task-1", delayMs: 30_000, task: "cleanup", payload: { room: room.id } },
-    ]);
-    // Back in time: kept.
+    const first = t.scheduled[0]!;
+    expect(first).toMatchObject({ delayMs: 30000, task: "cleanup", payload: { room: room.id } });
     await voice(t, t.setVoice("1", room.id));
-    await plugin.tasks!.cleanup!(t.ctx, { room: room.id });
+    await plugin.tasks!.cleanup!(t.ctx, first.payload);
     expect(t.deletedChannels).toEqual([]);
-    // Left again: a new task, which deletes it.
     await voice(t, t.setVoice("1", null));
-    expect(t.scheduled.map((s) => s.task)).toEqual(["cleanup", "cleanup"]);
-    await plugin.tasks!.cleanup!(t.ctx, { room: room.id });
+    const second = t.scheduled[0]!;
+    expect(second.id).not.toBe(first.id);
+    const due = (second.payload as { due: number }).due;
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(due);
+      await plugin.tasks!.cleanup!(t.ctx, first.payload);
+      expect(t.deletedChannels).toEqual([]);
+      await plugin.tasks!.cleanup!(t.ctx, second.payload);
+    } finally {
+      vi.useRealTimers();
+    }
     expect(t.deletedChannels.map((d) => d.id)).toEqual([room.id]);
   });
 
@@ -383,4 +395,97 @@ describe("/voice", () => {
     r = await runCommand(plugin, t, "voice claim", { user: "3" });
     expect(text(r.replies[0])).toBe("Join the voice room you want to claim first.");
   });
+});
+
+describe("0.2 room lifecycle", () => {
+  test("owner and guest erasure preserves the shared room and subsequent staff decisions", async () => {
+    const t = setup(),
+      room = await joinHub(t, "1");
+    const opt = (id: string) => ({ member: t.member(id)!.user });
+    await voice(t, t.setVoice("2", room.id));
+    await voice(t, t.setVoice("3", room.id));
+    await runCommand(plugin, t, "voice permit", { user: "1", options: opt("2") });
+    await runCommand(plugin, t, "voice permit", { user: "1", options: opt("3") });
+    await t.ctx.server.editChannel(room, { overwrites: { "member:2": { deny: ["Connect"] } } });
+    const record = await plugin.privacy!.export(t.ctx, "2");
+    expect(JSON.stringify(record)).toContain('"access":"permit"');
+    expect(JSON.stringify(record)).not.toContain('"owner":"1"');
+    await plugin.privacy!.erase(t.ctx, "2");
+    expect(t.overwrites(room.id)["member:2"]).toEqual({ allow: [], deny: ["Connect"] });
+    expect(t.overwrites(room.id)["member:3"]?.allow).toContain("Connect");
+    await plugin.privacy!.erase(t.ctx, "1");
+    expect(t.deletedChannels).toEqual([]);
+    expect(t.overwrites(room.id)["member:1"]).toBeUndefined();
+    expect(t.voiceChannel("3")).toBe(room.id);
+    expect(await plugin.privacy!.export(t.ctx, "1")).toEqual([]);
+    await runCommand(plugin, t, "voice claim", { user: "3", channel: room.id });
+    expect(t.kv.get("room:" + room.id)).toMatchObject({ owner: "3" });
+    expect(t.overwrites(room.id)["member:bot"]?.allow).toContain("MoveMembers");
+  });
+  test("server events have stable keys, the observed human peak and elapsed minutes", async () => {
+    const t = setup({ locale: "fr" });
+    Object.assign(t.ctx, { features: { enabled: () => true } });
+    const published = vi.fn().mockResolvedValue(undefined);
+    Object.assign(t.ctx, { events: { publish: published } });
+    vi.useFakeTimers();
+    try {
+      const room = await joinHub(t, "1");
+      expect(room.name).toBe("🔊 Salon de Sadiwii");
+      await voice(t, t.setVoice("2", room.id));
+      await voice(t, t.setVoice("50", room.id));
+      vi.setSystemTime(Date.now() + 185000);
+      await voice(t, t.setVoice("1", null));
+      await voice(t, t.setVoice("2", null));
+      await plugin.tasks!.cleanup!(t.ctx, { room: room.id });
+      expect(published.mock.calls).toEqual([
+        [
+          "roomCreated",
+          { channelId: room.id, ownerId: "1" },
+          { version: 1, idempotencyKey: "create:" + room.id },
+        ],
+        [
+          "roomClosed",
+          { channelId: room.id, ownerId: "1", peak: 2, durationMinutes: 3 },
+          { version: 1, idempotencyKey: "close:" + room.id },
+        ],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  test("legacy ownership is exported and revoked without lifting unattributed guest restrictions", async () => {
+    const t = setup(),
+      room = await joinHub(t, "1");
+    await t.ctx.kv.set("room:" + room.id, {
+      hub: "500",
+      owner: "1",
+      createdAt: new Date().toISOString(),
+      n: 1,
+    });
+    await t.ctx.server.editChannel(room, { overwrites: { "member:2": { deny: ["Connect"] } } });
+    await plugin.tasks!.sweep!(t.ctx, {});
+    expect(await plugin.privacy!.export(t.ctx, "2")).toMatchObject([
+      { legacyDiscordOverride: true, policy: "retain" },
+    ]);
+    await plugin.privacy!.erase(t.ctx, "2");
+    expect(t.overwrites(room.id)["member:2"]?.deny).toContain("Connect");
+    await plugin.privacy!.erase(t.ctx, "1");
+    expect(t.overwrites(room.id)["member:1"]).toBeUndefined();
+  });
+});
+
+test("erasing a former owner removes the member-derived name after a transfer", async () => {
+  const t = setup(),
+    room = await joinHub(t, "1");
+  await voice(t, t.setVoice("2", room.id));
+  await runCommand(plugin, t, "voice transfer", {
+    user: "1",
+    options: { member: t.member("2")!.user },
+  });
+  expect(await plugin.privacy!.export(t.ctx, "1")).toMatchObject([
+    { owns: false, name: "🔊 Sadiwii's channel" },
+  ]);
+  await plugin.privacy!.erase(t.ctx, "1");
+  expect(t.channel(room.id)!.name).toBe("Voice room 1");
+  expect(t.kv.get("room:" + room.id)).toMatchObject({ owner: "2" });
 });
