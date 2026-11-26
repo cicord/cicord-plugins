@@ -28,5 +28,6 @@
   "message.lateAuditEvidenceReceivedManualReview": "Preuve d’audit tardive reçue. Examen manuel requis.",
   "message.incidentRecordErased": "Enregistrement effacé.",
   "status.monitor": "Surveillance active.",
-  "status.staffOnly": "Réservé à l’équipe."
+  "status.staffOnly": "Réservé à l’équipe.",
+  "status.notificationDelivery": "Un incident a été enregistré dans le portail. Une notification externe a échoué."
 }

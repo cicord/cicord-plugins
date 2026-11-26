@@ -1,0 +1,3 @@
+syncPolicy:
+  selfHeal: true
+  deletionProtection: true

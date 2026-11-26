@@ -14,7 +14,7 @@ async function diagnostics(ctx: Context) {
   if (!bot?.permissions?.includes("ViewAuditLog"))
     warnings.push(tr(ctx, "message.auditLogPermissionMissingOrUnavailable"));
   const protection = await ctx.server.protection?.();
-  if (protection) {
+  if (protection?.known) {
     if (!protection.selfHeal) warnings.push(tr(ctx, "message.automaticRestorationIsDisabled"));
     if (!protection.deletionProtection)
       warnings.push(tr(ctx, "message.deletionProtectionIsDisabled"));

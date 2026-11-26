@@ -97,3 +97,36 @@ declare module "@cicord/sdk" {
   }
 }
 export {};
+
+declare module "@cicord/sdk" {
+  interface PublishedEvents {
+    "raid.v1": {
+      joinsPerMinute: number;
+      measures: string[];
+      state: "started" | "ended";
+    };
+    "violation.v1": {
+      action: string;
+      channelId: string;
+      messageId?: string;
+      requestedAction?: string;
+      rule: string;
+      userId: string;
+    };
+  }
+  interface EventContracts {
+    "guard.raid.v1": {
+      joinsPerMinute: number;
+      measures: string[];
+      state: "started" | "ended";
+    };
+    "guard.violation.v1": {
+      action: string;
+      channelId: string;
+      messageId?: string;
+      requestedAction?: string;
+      rule: string;
+      userId: string;
+    };
+  }
+}

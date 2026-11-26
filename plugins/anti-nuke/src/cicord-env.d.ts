@@ -30,3 +30,26 @@ declare module "@cicord/sdk" {
   }
 }
 export {};
+
+declare module "@cicord/sdk" {
+  interface PublishedEvents {
+    "triggered.v1": {
+      actorId?: string;
+      actorType: "human" | "bot" | "unknown" | "cicord";
+      certainty: "confirmed" | "unknown" | "probable";
+      count: number;
+      responses: string[];
+      trigger: string;
+    };
+  }
+  interface EventContracts {
+    "anti-nuke.triggered.v1": {
+      actorId?: string;
+      actorType: "human" | "bot" | "unknown" | "cicord";
+      certainty: "confirmed" | "unknown" | "probable";
+      count: number;
+      responses: string[];
+      trigger: string;
+    };
+  }
+}

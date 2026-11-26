@@ -79,6 +79,11 @@
       "type": "string",
       "maxLength": 256,
       "description": "Public hCaptcha site key loaded by the portal widget."
+    },
+    "returnInvite": {
+      "type": "string",
+      "pattern": "^https://discord\\.gg/[A-Za-z0-9_-]+$",
+      "description": "Optional server invitation shown only to its verified recovery-link subject after the allowed return time."
     }
   },
   "additionalProperties": false

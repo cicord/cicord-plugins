@@ -1,5 +1,5 @@
 import type { Context, Member, Message, PluginConfig } from "@cicord/sdk";
-import { staff } from "./data.ts";
+import { staff, tr } from "./data.ts";
 
 export type Rule = "links" | "duplicates" | "mentions" | "newAccounts" | "images" | "automod";
 export type Action = PluginConfig["links"]["action"];
@@ -61,7 +61,12 @@ async function badLink(ctx: Context, links: ReturnType<typeof linksIn>) {
     if (invite && config.blockInvites) {
       if (!config.allowOwnInvites) return true;
       if (ctx.features.enabled("invites")) {
-        invites ??= new Set((await ctx.server.invites()).map((x) => x.code));
+        try {
+          invites ??= new Set((await ctx.server.invites()).map((x) => x.code));
+        } catch {
+          ctx.status.set("invites", tr(ctx, "status.inviteLookup"));
+          continue;
+        }
         if (!invites.has(invite)) return true;
         continue;
       }
@@ -124,8 +129,13 @@ export async function inspect(
     if (candidates.length + 1 >= cfg.duplicates.count) {
       const found = [ref];
       for (const old of candidates.slice(-20)) {
-        const item = await ctx.server.channel({ id: old.channel }).message(old.id);
-        if (item?.author.id === member.id && normalize(item.content) === text) found.push(old);
+        try {
+          const item = await ctx.server.channel({ id: old.channel }).message(old.id);
+          if (item?.author.id === member.id && normalize(item.content) === text) found.push(old);
+        } catch {
+          // Channel permissions and message visibility may have changed since recording the ID.
+          continue;
+        }
       }
       if (found.length >= cfg.duplicates.count) return { rule: "duplicates", refs: found };
     }
@@ -140,7 +150,14 @@ export async function inspect(
     const hashes = [...cfg.images.hashes, ...((await ctx.kv.get<string[]>("hashes")) ?? [])];
     if (hashes.length)
       for (const a of message.attachments.filter((a) => a.contentType?.startsWith("image/"))) {
-        const fingerprint = await ctx.media.hash(a, { algo: "phash" });
+        if (a.size > 8 * 1024 * 1024) continue;
+        let fingerprint: string;
+        try {
+          fingerprint = await ctx.media.hash(a, { algo: "phash" });
+        } catch {
+          ctx.log.debug(tr(ctx, "status.imageRead"));
+          continue;
+        }
         if (hashes.some((h) => ctx.media.distance(fingerprint, h) <= cfg.images.threshold))
           return { rule: "images", refs: [ref] };
       }

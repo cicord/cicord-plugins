@@ -2,7 +2,7 @@ import type { Context, Json, Member } from "@cicord/sdk";
 import { tr } from "./data.ts";
 
 export type Method = "button" | "visual" | "turnstile" | "hcaptcha";
-type Challenge = { id: string; method: Method; answer: number };
+type Challenge = { id: string; method: Method; answer?: number };
 const providers = {
   turnstile: {
     url: "https://challenges.cloudflare.com/turnstile/v0/siteverify",
@@ -45,9 +45,9 @@ export async function begin(ctx: Context, member: Member): Promise<Json> {
   // Identity comes from the signed member session. This nonce separates attempts and
   // rotations; it is never an authentication credential.
   const id = crypto.randomUUID();
-  const answer = 1 + (crypto.getRandomValues(new Uint8Array(1))[0]! % 5);
-  await ctx.kv.set("challenge:" + member.id, { id, method, answer }, { ttlSeconds: 180 });
   if (method === "visual") {
+    const answer = 1 + (crypto.getRandomValues(new Uint8Array(1))[0]! % 5);
+    await ctx.kv.set("challenge:" + member.id, { id, method, answer }, { ttlSeconds: 180 });
     const layers = Array.from({ length: answer }, (_, i) => ({
       type: "rect" as const,
       x: 15 + i * 38,
@@ -65,6 +65,7 @@ export async function begin(ctx: Context, member: Member): Promise<Json> {
       prompt: tr(ctx, "message.howManySquaresAreInThe"),
     };
   }
+  await ctx.kv.set("challenge:" + member.id, { id, method }, { ttlSeconds: 180 });
   if (method === "turnstile" || method === "hcaptcha")
     return { id, method, siteKey: siteKey(ctx, method)! };
   return { id, method };

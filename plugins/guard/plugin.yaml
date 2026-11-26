@@ -14,6 +14,7 @@ spec:
   intents: [ServerMessages, MessageContent, ServerMembers, AutoModerationExecution]
   optional:
     - feature: duplicates
+      when: /duplicates/enabled
       capabilities: [discord.messages.read]
     - feature: removeMessages
       capabilities: [discord.messages.manage]

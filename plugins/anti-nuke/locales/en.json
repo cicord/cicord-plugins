@@ -28,5 +28,6 @@
   "message.lateAuditEvidenceReceivedManualReview": "Late audit evidence received; manual review required.",
   "message.incidentRecordErased": "Incident record erased.",
   "status.monitor": "Monitoring is active.",
-  "status.staffOnly": "Staff only."
+  "status.staffOnly": "Staff only.",
+  "status.notificationDelivery": "An incident was saved in the staff portal. External notification delivery failed."
 }

@@ -106,6 +106,7 @@ async function status(
     ? { verified: true, method: result.method, at: result.at }
     : { verified: true };
 }
+type Recovery = { caseId: string; retryAt: number };
 async function kick(ctx: Context, member: Member, reason: string) {
   if (
     !member.access ||
@@ -120,17 +121,19 @@ async function kick(ctx: Context, member: Member, reason: string) {
   if (!ctx.features.enabled(delegated ? "sanctions" : "directKick"))
     throw new Error("verification kick requires the configured sanction grant");
   const caseId = member.id + "-" + member.joinedAt.getTime();
-  const earlier = await ctx.kv.get<string>("recovery:" + member.id);
-  if (earlier && earlier !== caseId) await ctx.portal.revoke({ kind: "case", id: earlier });
-  const url = await ctx.portal.link(portalPath(ctx, "return/" + caseId), {
-    user: member.user,
-    scope: { kind: "case", id: caseId },
-    expiresInSeconds: 86400,
-  });
+  const earlier = await ctx.kv.get<Recovery>("recovery:" + member.id);
+  if (earlier && earlier.caseId !== caseId)
+    await ctx.portal.revoke({ kind: "case", id: earlier.caseId });
   const retryAt = Math.max(
     Date.now(),
     (age(member) || Date.now()) + ctx.config.minAccountAgeDays * 86400000,
   );
+  const ttl = Math.min(604800, Math.ceil((retryAt - Date.now()) / 1000) + 86400);
+  const url = await ctx.portal.link(portalPath(ctx, "return/" + caseId), {
+    user: member.user,
+    scope: { kind: "case", id: caseId },
+    expiresInSeconds: ttl,
+  });
   await member.send({
     content: tr(ctx, "message.youCanRejoinAfter") + new Date(retryAt).toISOString() + "\n" + url,
   });
@@ -142,7 +145,7 @@ async function kick(ctx: Context, member: Member, reason: string) {
       { idempotencyKey: "verification:" + member.id + ":" + member.joinedAt.getTime() },
     );
   else await member.kick(reason);
-  await ctx.kv.set("recovery:" + member.id, caseId, { ttlSeconds: 86400 });
+  await ctx.kv.set("recovery:" + member.id, { caseId, retryAt }, { ttlSeconds: ttl });
   await publish(ctx, member.id, { result: "kicked", method: reason, at: date() });
 }
 async function submit(
@@ -364,15 +367,15 @@ export default definePlugin({
     "GET /return/:id": {
       access: "scoped",
       async handler(ctx, r): Promise<RouteResponse> {
-        if (
-          r.scope?.kind !== "case" ||
-          r.scope.id !== r.params.id ||
-          !r.viewer ||
-          (await ctx.kv.get("recovery:" + r.viewer.user.id)) !== r.scope.id
-        )
-          return DENIED;
+        if (r.scope?.kind !== "case" || r.scope.id !== r.params.id || !r.viewer) return DENIED;
+        const recovery = await ctx.kv.get<Recovery>("recovery:" + r.viewer.user.id);
+        if (recovery?.caseId !== r.scope.id) return DENIED;
         const record = await ctx.kv.get<Result>("result:" + r.viewer.user.id);
         return {
+          retryAt: recovery.retryAt,
+          ...(ctx.config.returnInvite && Date.now() >= recovery.retryAt
+            ? { invite: ctx.config.returnInvite }
+            : {}),
           result: record?.result ?? "expired",
           method: record?.method ?? null,
           at: record?.at ?? null,
@@ -453,13 +456,14 @@ export default definePlugin({
       const record: Record<string, Json> = {};
       for (const p of prefixes) {
         const v = await ctx.kv.get(p + id);
-        if (v !== undefined) record[p.slice(0, -1)] = p === "challenge:" ? { active: true } : v;
+        if (v !== undefined)
+          record[p.slice(0, -1)] = p === "challenge:" || p === "lock:" ? { active: true } : v;
       }
       return record;
     },
     async erase(ctx, id) {
-      const recovery = await ctx.kv.get<string>("recovery:" + id);
-      if (recovery) await ctx.portal.revoke({ kind: "case", id: recovery });
+      const recovery = await ctx.kv.get<Recovery>("recovery:" + id);
+      if (recovery) await ctx.portal.revoke({ kind: "case", id: recovery.caseId });
       let erased = 0;
       for (const p of prefixes) {
         if ((await ctx.kv.get(p + id)) !== undefined) {

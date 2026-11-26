@@ -1,12 +1,17 @@
 import type { Context, Message } from "@cicord/sdk";
-import { createTestContext, callRoute } from "@cicord/sdk/testing";
+import { createTestContext, callRoute, type TestContextOptions } from "@cicord/sdk/testing";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 import schema from "../config.schema.json" with { type: "json" };
 import plugin from "../src/index.ts";
 import { open, quiet } from "../src/raid.ts";
 import { linksIn } from "../src/rules.ts";
-const setup = (config = {}, features: string[] = []) =>
+const setup = (
+  config = {},
+  features: string[] = [],
+  media: Pick<TestContextOptions, "hashImage"> = {},
+) =>
   createTestContext({
+    ...media,
     schema,
     config,
     features,
@@ -31,7 +36,8 @@ test("duplicates span channels; compare actual messages and remove exactly the t
   for (const [index, key] of ["a", "b", "c"].entries()) {
     const channel = t.channel(key)!;
     const ch = { ...channel, message: async (id: string) => messages.get(id) };
-    const msg = {
+    const msg: Message = {
+      ...(await channel.send("fixture")),
       id: String(index + 1),
       author: m.user,
       member: m,
@@ -41,7 +47,7 @@ test("duplicates span channels; compare actual messages and remove exactly the t
       delete: async () => {
         removed.push(String(index + 1));
       },
-    } as unknown as Message;
+    };
     messages.set(msg.id, msg);
   }
   const channels = [...messages.values()].map((m) => m.channel);
@@ -62,13 +68,14 @@ test("monitor detects without writes to Discord, filters protected members, rest
   for (const id of ["user", "other", "staff"]) {
     const m = t.member(id)!;
     await plugin.events!.messageCreate!(t.ctx, {
+      ...(await t.channel("a")!.send("fixture")),
       author: m.user,
       member: m,
-      channel: t.channel("a"),
+      channel: t.channel("a")!,
       id,
       content: "https://sub.unsafe.example",
       attachments: [],
-    } as Message);
+    });
   }
   expect(t.published).toHaveLength(2);
   expect(t.deletedMessages).toEqual([]);
@@ -137,44 +144,31 @@ test("the re-encoded SDK media fixture triggers an image violation through the m
   // The SDK media test hashes the 320px PNG and a 144px JPEG at quality 70.
   const original = "82673f3e3c60c327",
     jpeg = "82673f3e3c40c367";
-  const t = setup({ images: { hashes: [original], threshold: 2 } }, ["images"]);
-  const member = t.member("user")!;
   const observed: string[] = [];
-  const ctx: Context = {
-    ...t.ctx,
-    media: {
-      hash: async (source) => {
-        observed.push(typeof source === "string" ? source : source.id);
-        return jpeg;
-      },
-      distance: (a, b) => {
-        let value = BigInt("0x" + a) ^ BigInt("0x" + b),
-          bits = 0;
-        while (value) {
-          value &= value - 1n;
-          bits++;
-        }
-        return bits;
-      },
+  const t = setup({ images: { hashes: [original], threshold: 2 } }, ["images"], {
+    hashImage: async (source) => {
+      observed.push(typeof source === "string" ? source : source.id);
+      return jpeg;
     },
-  };
-  const attachment = {
-    id: "file-1",
-    filename: "sample.jpg",
+  });
+  const member = t.member("user")!,
+    channel = t.channel("a")!;
+  const attachment = t.attachment({
+    name: "sample.jpg",
+    data: new Uint8Array([0xff, 0xd8]),
     contentType: "image/jpeg",
-    url: "https://cdn.discordapp.com/attachments/1/2/sample.jpg",
-    size: 1000,
-  };
-  const msg = {
+  });
+  const msg: Message = {
+    ...(await channel.send("fixture")),
     id: "image",
     author: member.user,
     member,
-    channel: t.channel("a"),
+    channel,
     content: "",
     attachments: [attachment],
-  } as unknown as Message;
-  await plugin.events!.messageCreate!(ctx, msg);
-  expect(observed).toEqual(["file-1"]);
+  };
+  await plugin.events!.messageCreate!(t.ctx, msg);
+  expect(observed).toEqual([attachment.id]);
   expect(t.published[0]?.payload).toMatchObject({ rule: "images", action: "monitor" });
 });
 
@@ -196,14 +190,15 @@ test("an uncertain provider response records the violation without a direct time
     },
   };
   const member = t.member("user")!;
-  const msg = {
+  const msg: Message = {
+    ...(await t.channel("a")!.send("fixture")),
     id: "lost",
     author: member.user,
     member,
-    channel: t.channel("a"),
+    channel: t.channel("a")!,
     content: "https://blocked.example",
     attachments: [],
-  } as Message;
+  };
   await plugin.events!.messageCreate!(ctx, msg);
   await plugin.events!.messageCreate!(ctx, msg);
   expect(calls).toEqual(["guard:links:lost"]);

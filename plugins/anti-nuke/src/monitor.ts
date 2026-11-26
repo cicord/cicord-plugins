@@ -84,47 +84,6 @@ const notice = (ctx: Context, a: Alert) =>
   tr(ctx, "message.staffReviewRecommendedRestoredChannelsReceive");
 async function alert(ctx: Context, key: string, a: Alert) {
   const old = await ctx.kv.get<Alert>(key);
-  if (old?.staffMessage) {
-    const copy = await ctx.server
-      .channel({ id: old.staffMessage.channel })
-      .message(old.staffMessage.id);
-    if (copy) {
-      await copy.edit({
-        content: notice(ctx, a),
-        allowedMentions: { users: false, roles: false, everyone: false },
-      });
-      a.staffMessage = old.staffMessage;
-    }
-  }
-  if (!a.staffMessage && ctx.config.staffChannel) {
-    const channel = ctx.server.channel(ctx.config.staffChannel);
-    const msg = await channel.send({
-      content: notice(ctx, a),
-      allowedMentions: { users: false, roles: false, everyone: false },
-    });
-    a.staffMessage = { channel: channel.id, id: msg.id };
-    if (a.actorId) await ctx.schedule.after(MONTH * 1000, "redact", a.staffMessage);
-  }
-  if (!old && ctx.config.notifyOwner && ctx.features.enabled("ownerDM") && ctx.server.ownerId) {
-    const owner = await ctx.server.member(ctx.server.ownerId);
-    await owner?.send(tr(ctx, "message.antiNukeDetectedAnIncidentReview"));
-  }
-  if (
-    !old &&
-    ctx.config.notifyWebhook &&
-    ctx.features.enabled("webhook") &&
-    ctx.secrets.has("WEBHOOK_URL")
-  ) {
-    const response = await ctx.http.fetch(ctx.secrets.ref("WEBHOOK_URL"), {
-      method: "POST",
-      json: {
-        content: tr(ctx, "message.antiNukeStaffReviewRequested") + " " + a.trigger + " ×" + a.count,
-      },
-      timeoutMs: 2000,
-    });
-    if (response.status < 200 || response.status >= 300)
-      ctx.log.warn("anti-nuke webhook unavailable");
-  }
   await ctx.kv.set(key, a, { ttlSeconds: MONTH });
   await ctx.events.publish(
     "triggered",
@@ -138,6 +97,54 @@ async function alert(ctx: Context, key: string, a: Alert) {
     },
     { idempotencyKey: key + (old ? ":updated" : ":new") },
   );
+  try {
+    if (old?.staffMessage) {
+      const copy = await ctx.server
+        .channel({ id: old.staffMessage.channel })
+        .message(old.staffMessage.id);
+      if (copy) {
+        await copy.edit({
+          content: notice(ctx, a),
+          allowedMentions: { users: false, roles: false, everyone: false },
+        });
+        a.staffMessage = old.staffMessage;
+      }
+    }
+    if (!a.staffMessage && ctx.config.staffChannel) {
+      const channel = ctx.server.channel(ctx.config.staffChannel);
+      const msg = await channel.send({
+        content: notice(ctx, a),
+        allowedMentions: { users: false, roles: false, everyone: false },
+      });
+      a.staffMessage = { channel: channel.id, id: msg.id };
+      await ctx.kv.set(key, a, { ttlSeconds: MONTH });
+      if (a.actorId) await ctx.schedule.after(MONTH * 1000, "redact", a.staffMessage);
+    }
+    if (!old && ctx.config.notifyOwner && ctx.features.enabled("ownerDM") && ctx.server.ownerId) {
+      const owner = await ctx.server.member(ctx.server.ownerId);
+      await owner?.send(tr(ctx, "message.antiNukeDetectedAnIncidentReview"));
+    }
+    if (
+      !old &&
+      ctx.config.notifyWebhook &&
+      ctx.features.enabled("webhook") &&
+      ctx.secrets.has("WEBHOOK_URL")
+    ) {
+      const response = await ctx.http.fetch(ctx.secrets.ref("WEBHOOK_URL"), {
+        method: "POST",
+        json: {
+          content:
+            tr(ctx, "message.antiNukeStaffReviewRequested") + " " + a.trigger + " ×" + a.count,
+        },
+        timeoutMs: 2000,
+      });
+      if (response.status < 200 || response.status >= 300)
+        ctx.log.warn("anti-nuke webhook unavailable");
+    }
+    if (a.staffMessage) await ctx.kv.set(key, a, { ttlSeconds: MONTH });
+  } catch {
+    ctx.status.set("notifications", tr(ctx, "status.notificationDelivery"));
+  }
 }
 async function trusted(ctx: Context, e: Evidence) {
   if (

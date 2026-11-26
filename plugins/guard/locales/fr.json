@@ -21,5 +21,7 @@
   "message.confirmTheBanOfTheseAccounts": "Confirmez le bannissement de ces comptes : ",
   "message.confirmBans": "Confirmer les bannissements",
   "message.noActiveConfirmation": "Aucune confirmation active.",
-  "message.reviewCompleted": "Examen terminé."
+  "message.reviewCompleted": "Examen terminé.",
+  "status.inviteLookup": "Les invitations du serveur sont illisibles. Vérifiez Gérer le serveur.",
+  "status.imageRead": "Une pièce jointe n’a pas pu être analysée."
 }

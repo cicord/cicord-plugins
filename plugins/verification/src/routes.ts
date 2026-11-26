@@ -14,5 +14,13 @@ export interface Routes {
     response: { items: { userId: string; joined: number }[]; cursor: string | null };
   };
   "POST /queue/:id": { body: { decision: "approve" | "deny" }; response: { verified: boolean } };
-  "GET /return/:id": { response: { result: string; method: string | null; at: string | null } };
+  "GET /return/:id": {
+    response: {
+      result: string;
+      method: string | null;
+      at: string | null;
+      retryAt: number;
+      invite?: string;
+    };
+  };
 }

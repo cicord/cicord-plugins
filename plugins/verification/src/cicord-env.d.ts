@@ -12,6 +12,43 @@ declare module "@cicord/sdk" {
     dmOnJoin: boolean;
     turnstileSiteKey?: string;
     hcaptchaSiteKey?: string;
+    returnInvite?: string;
   }
 }
 export {};
+
+declare module "@cicord/sdk" {
+  interface PublishedEvents {
+    "failed.v1": {
+      method: string;
+      reason?: string;
+      userId: string;
+    };
+    "passed.v1": {
+      method: string;
+      reason?: string;
+      userId: string;
+    };
+  }
+  interface EventContracts {
+    "verification.failed.v1": {
+      method: string;
+      reason?: string;
+      userId: string;
+    };
+    "verification.passed.v1": {
+      method: string;
+      reason?: string;
+      userId: string;
+    };
+  }
+  interface QueryContracts {
+    "verification.status": {input: {
+      userId: string;
+    }; output: {
+      at?: string;
+      method?: string;
+      verified: boolean;
+    }};
+  }
+}
