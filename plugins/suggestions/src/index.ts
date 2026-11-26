@@ -124,7 +124,7 @@ async function create(ctx: Context, id: string, uid: string, channel: TextChanne
     }
   }
   if (ctx.config.retainText && ctx.features.enabled("duplicateSearch"))
-    await ctx.index("suggestions").upsert(id, { text: body });
+    await ctx.index("suggestions").upsert(id, { text: body, tags: ["member-" + uid] });
   await ctx.events.publish(
     "created",
     { id, authorId: uid, status: "open", score: 0 },
@@ -291,7 +291,42 @@ async function audit(ctx: Context, cursor?: string) {
     if (s.archiveId) await ctx.schedule.after(1, "refresh", { id: s.id });
   if (page.cursor) await ctx.schedule.after(1, "audit", { cursor: page.cursor });
 }
+async function refreshIndex(ctx: Context, cursor?: string) {
+  if (!ctx.config.enabled) return;
+  const page = await ctx.kv.list<Suggestion>({ prefix: "suggestion:", limit: 100, cursor });
+  for (const { value: s } of page.items) {
+    if (ctx.config.retainText && !s.withdrawing && s.body) {
+      if (ctx.features.enabled("duplicateSearch"))
+        await ctx
+          .index("suggestions")
+          .upsert(s.id, { text: s.body, tags: ["member-" + s.authorId] });
+    } else {
+      if (ctx.features.enabled("duplicateSearch")) await ctx.index("suggestions").remove(s.id);
+      if (!ctx.config.retainText && s.body) {
+        for (;;) {
+          const row = await ctx.kv.getEntry<Suggestion>(key(s.id));
+          if (!row?.value.body) break;
+          const { body: _, ...withoutText } = row.value;
+          if (
+            (
+              await ctx.kv
+                .atomic()
+                .check(key(s.id), row.version)
+                .set(key(s.id), withoutText)
+                .commit()
+            ).ok
+          )
+            break;
+        }
+      }
+    }
+  }
+  if (page.cursor) await ctx.schedule.after(1, "index-page", { cursor: page.cursor });
+}
 export default definePlugin({
+  async onStart(ctx) {
+    if (ctx.config.enabled) await ctx.schedule.after(1, "index-page");
+  },
   commands: {
     suggest: command({
       description: "Submit a community suggestion",
@@ -375,6 +410,9 @@ export default definePlugin({
     ]),
   ),
   tasks: {
+    async "index-page"(ctx, p) {
+      await refreshIndex(ctx, (p as { cursor?: string } | undefined)?.cursor);
+    },
     async refresh(ctx, p) {
       const s = await ctx.kv.get<Suggestion>(key((p as { id: string }).id));
       if (s) await refresh(ctx, s);
