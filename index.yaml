@@ -6,7 +6,7 @@
 # (`cicord registry sign`): never edit it by hand.
 plugins:
   welcome:
-    commit: bc3f6471beed6176282c838723e8812e4a78b107
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
     description: Greets new members, gives them a default role and sends an onboarding link.
     displayName: Welcome
     keywords:
@@ -16,9 +16,9 @@ plugins:
     publisher: Cicord
     verified: true
     repo: https://github.com/cicord/cicord-plugins
-    version: 0.1.1
+    version: 0.2.0
   onboarding:
-    commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
     description: Step-by-step role picking on the community portal (games, platforms, notifications…), with a /onboarding command that links to it.
     displayName: Onboarding
     keywords:
@@ -29,10 +29,10 @@ plugins:
     publisher: Cicord
     verified: true
     repo: https://github.com/cicord/cicord-plugins
-    version: 0.1.0
+    version: 0.2.0
   tickets:
-    commit: bc3f6471beed6176282c838723e8812e4a78b107
-    description: Support tickets in private channels, opened from a panel button or the community portal. Members follow theirs on the portal; staff manage the queue there (assignee, priority, labels, replies) and read ticket channels (MessageContent). Closing posts a summary to the staff log.
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: Private support queues with per-type forms and staff, portal replies and notes, retained transcripts and member-selected modmail.
     displayName: Tickets
     keywords:
       - tickets
@@ -43,9 +43,9 @@ plugins:
     publisher: Cicord
     verified: true
     repo: https://github.com/cicord/cicord-plugins
-    version: 0.2.1
+    version: 0.4.0
   polls:
-    commit: 448db6cdc70f6763aea8de644b74334ceb458d2d
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
     description: Quick polls with buttons or a select menu, live results, automatic closing and an optional discussion thread. Publishes polls.closed for other plugins.
     displayName: Polls
     keywords:
@@ -57,9 +57,9 @@ plugins:
     publisher: Cicord
     verified: true
     repo: https://github.com/cicord/cicord-plugins
-    version: 0.1.1
+    version: 0.2.0
   levels:
-    commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
     description: XP and levels for chatting, receiving reactions and voting in polls. Level-up announcements, role rewards, /rank, /top, a daily recap and a public leaderboard on the community portal.
     displayName: Levels
     keywords:
@@ -72,10 +72,10 @@ plugins:
     publisher: Cicord
     verified: true
     repo: https://github.com/cicord/cicord-plugins
-    version: 0.1.0
+    version: 0.2.0
   moderation:
-    commit: 448db6cdc70f6763aea8de644b74334ceb458d2d
-    description: /warn, /timeout, /kick and /ban with an audit log, expiring warnings, automatic escalation, flood protection, member DMs and an optional Slack or Discord webhook.
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: Staff moderation with warnings, expiring bans, reviewed message purges, case history and private notes.
     displayName: Moderation
     keywords:
       - moderation
@@ -86,9 +86,9 @@ plugins:
     publisher: Cicord
     verified: true
     repo: https://github.com/cicord/cicord-plugins
-    version: 0.1.1
+    version: 0.3.0
   reaction-roles:
-    commit: bc3f6471beed6176282c838723e8812e4a78b107
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
     description: Self-assignable roles from panels defined in the config, with buttons, a select menu or emoji reactions. Single or multiple choice, an optional required role, and panel messages kept up to date in place.
     displayName: Reaction roles
     keywords:
@@ -101,10 +101,10 @@ plugins:
     publisher: Cicord
     verified: true
     repo: https://github.com/cicord/cicord-plugins
-    version: 0.1.1
+    version: 0.2.0
   audit-log:
-    commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
-    description: Posts server events to a staff log channel in compact batched embeds. Joins and leaves, role and nickname changes, message edits and deletions, moderation cases and closed polls from the other plugins. Each category can be turned off or sent to its own channel.
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: Staff-only audit observations with evidence-based attribution and thirty-day search. Optional MessageContent access caches message text for up to seven days.
     displayName: Audit log
     keywords:
       - audit
@@ -116,9 +116,9 @@ plugins:
     publisher: Cicord
     verified: true
     repo: https://github.com/cicord/cicord-plugins
-    version: 0.1.0
+    version: 0.2.0
   announcements:
-    commit: 5287d31b787c56f4aff6d7c6dd1e782935c29c1a
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
     description: Recurring or one-off announcements from the config (cron, interval or date, in your time zone), and /announce for moderators to schedule, list and cancel their own. Mentions ping only who you say.
     displayName: Scheduled announcements
     keywords:
@@ -131,9 +131,9 @@ plugins:
     publisher: Cicord
     verified: true
     repo: https://github.com/cicord/cicord-plugins
-    version: 0.1.0
+    version: 0.2.0
   github-releases:
-    commit: 1095d841b81073cfd08725d56f50154b3f5a02a8
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
     description: Announces the releases of public GitHub repositories in your channels, with the release notes, an optional role ping and pre-releases on request. /changelog shows the latest release of a repository or checks now.
     displayName: GitHub releases
     keywords:
@@ -145,9 +145,9 @@ plugins:
     publisher: Cicord
     verified: true
     repo: https://github.com/cicord/cicord-plugins
-    version: 0.1.0
+    version: 0.2.0
   voice-rooms:
-    commit: 6ee54eb689ff15d487ed8398b3948f31036d0093
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
     description: Voice channels on demand. Joining a hub such as "➕ Create a channel" gives the member a voice channel of their own, deleted once empty. Several hubs (name, category, limit, allowed roles). Owners manage their room with /voice (rename, limit, lock, permit, kick, transfer, claim).
     displayName: Voice rooms
     keywords:
@@ -157,5 +157,172 @@ plugins:
       - join-to-create
     path: plugins/voice-rooms
     publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins.git
+    version: 0.2.0
+  ai-assistant:
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: 'Experimental, opt-in: answers questions from reviewed knowledge with citations and an operator-set daily token budget.'
+    displayName: Knowledge assistant
+    path: plugins/ai-assistant
+    publisher: Cicord
+    verified: true
     repo: https://github.com/cicord/cicord-plugins.git
     version: 0.1.0
+  anti-nuke:
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: Monitor administrative changes using audit evidence. Staff can inspect uncertain, delayed and confirmed observations.
+    displayName: Anti-nuke
+    path: plugins/anti-nuke
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins.git
+    version: 0.2.0
+  birthdays:
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: Opt-in birthday greetings and 24-hour roles using each member’s local date.
+    displayName: Birthdays
+    path: plugins/birthdays
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins.git
+    version: 0.1.0
+  channel-automations:
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: Per-channel thread, reaction, publication, media and cleanup rules.
+    displayName: Channel automations
+    path: plugins/channel-automations
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins.git
+    version: 0.1.0
+  community-events:
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: Recurring Discord events, attendance and opt-in reminders with a public calendar feed.
+    displayName: Community events
+    path: plugins/community-events
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins.git
+    version: 0.1.0
+  economy:
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: 'Experimental, opt-in: server points, daily claims, transfers and a community rewards shop.'
+    displayName: Economy
+    path: plugins/economy
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins.git
+    version: 0.1.0
+  feeds:
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: Announces new RSS, Atom and JSON Feed entries in configured channels.
+    displayName: Feeds
+    path: plugins/feeds
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins.git
+    version: 0.1.0
+  giveaways:
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: 'Experimental, opt-in: auditable weighted community giveaways with scheduled draws and claims.'
+    displayName: Giveaways
+    path: plugins/giveaways
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins.git
+    version: 0.1.0
+  guard:
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: Detect unsafe links, repeated messages and join surges. Message content is inspected transiently. Monitoring is the default.
+    displayName: Guard
+    path: plugins/guard
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins.git
+    version: 0.2.0
+  invite-tracker:
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: Track server invitations, attribute joins and rank valid invitations.
+    displayName: Invite tracker
+    path: plugins/invite-tracker
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins.git
+    version: 0.1.0
+  member-roles:
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: Timed grants, sticky roles, membership milestones and booster benefits.
+    displayName: Member roles
+    keywords:
+      - roles
+      - membership
+      - boosts
+    path: plugins/member-roles
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins.git
+    version: 0.1.0
+  reminders:
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: Private and channel reminders with local dates, repeat intervals and snooze.
+    displayName: Reminders
+    path: plugins/reminders
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins.git
+    version: 0.1.0
+  staff-shifts:
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: Staff duty roles, weekly shifts, timezone-aware coverage and moderation statistics.
+    displayName: Staff shifts
+    path: plugins/staff-shifts
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins.git
+    version: 0.1.0
+  starboard:
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: Highlight starred messages within their original audience.
+    displayName: Starboard
+    path: plugins/starboard
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins.git
+    version: 0.1.0
+  stats-reports:
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: Weekly and monthly aggregate activity reports, short-stay counts and voice channel counters.
+    displayName: Statistics reports
+    path: plugins/stats-reports
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins.git
+    version: 0.1.0
+  suggestions:
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: Member proposals, changeable votes and a moderated decision board.
+    displayName: Suggestions
+    path: plugins/suggestions
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins.git
+    version: 0.1.0
+  tags:
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: Find and share reviewed Markdown replies and staff-managed answers.
+    displayName: Tags
+    path: plugins/tags
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins.git
+    version: 0.1.0
+  verification:
+    commit: 31266d539edfb9e65a7c355ba168f4e5e58be528
+    description: Member-bound challenges, age checks and a staff approval queue. Role assignment uses the existing server permission policy.
+    displayName: Verification
+    path: plugins/verification
+    publisher: Cicord
+    verified: true
+    repo: https://github.com/cicord/cicord-plugins.git
+    version: 0.2.0
