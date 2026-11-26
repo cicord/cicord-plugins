@@ -26,6 +26,7 @@ spec:
             staffRoles: [support]
             category: helpdesk
             logChannel: support-log
+            retainSourceForTranscript: true
             defaultLabels: [question]
             fields:
               - {label: What happened?, required: true}
@@ -40,7 +41,7 @@ The English and French catalogs cover commands, forms, replies and transcripts. 
 
 Use the role, category and channel keys from the server declaration. Configure the bot's Server Members and Message Content intents in the Discord Developer Portal. Members shared by multiple eligible servers choose a server before their first DM reaches a ticket. The bot remembers their choice for 24 hours and checks membership again before delivery.
 
-At close, the portal offers chronological HTML and Markdown downloads. The configured log receives both files only when its audience is equal to or narrower than the ticket channel. Staff need the role for that ticket type and read access. The portal checks authorization on every request, including downloads.
+At close, the portal offers chronological HTML and Markdown downloads. Typed queues retain the original channel read-only until transcript expiry by default. Set `retainSourceForTranscript: false` to delete it at close and keep a content-free portal link. The legacy general queue also deletes the channel at close. Once the original policy is gone, the portal denies transcript downloads. While its original read policy remains verifiable and the log audience is equal or narrower, the bot attaches both files. Startup, gateway availability, permission changes and periodic reconciliation recheck both channels. If either policy becomes unverifiable, the bot removes the file-bearing message and keeps a portal link. Staff need the role for that ticket type and read access. The portal checks authorization on every request, including downloads.
 
 Transcript retention is 1–365 days. Ticket records, notes and indexes expire after the longer of transcript and record retention. Privacy export includes the requesting member's data. Erasure anonymizes authored records and transcript lines, removes member indexes and retracts tracked bot copies. Ticket ratings are collected by DM or through the member portal.
 

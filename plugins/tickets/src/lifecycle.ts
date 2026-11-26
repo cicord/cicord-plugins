@@ -13,87 +13,96 @@ import {
   activityKey,
   type Ticket,
 } from "./tickets.ts";
-import { purgeArchive, removeLogCopy } from "./transcript.ts";
+import { purgeArchive, reconcileCopy } from "./transcript.ts";
 
 export async function maintenance(ctx: Context) {
   for (const t of await allTickets(ctx)) {
-    if (t.status === "closed") {
-      if (t.pendingClose) await finishClose(ctx, t);
-      if (t.withdrawLog) {
-        await removeLogCopy(ctx, t);
-        delete t.withdrawLog;
-        await saveTicket(ctx, t);
+    try {
+      if (t.status === "closed") {
+        if (t.pendingClose) await finishClose(ctx, t);
+        if (t.logCopy || t.logDelivery) await reconcileCopy(ctx, t);
+        if (t.expiresAt && Date.now() >= t.expiresAt) {
+          for (const c of t.directCopies ?? []) await ctx.server.retractDM(c.messageId);
+          delete t.directCopies;
+          delete t.copies;
+          delete t.notices;
+          await purgeArchive(ctx, t);
+          await saveTicket(ctx, t);
+        }
+        if (
+          t.closedAt &&
+          Date.now() - Date.parse(t.closedAt) >=
+            Math.max(ctx.config.recordRetentionDays, ctx.config.transcriptRetentionDays) * 86400000
+        ) {
+          await ctx.kv.delete(authorKey(t.author.id, t.number));
+          await ctx.kv.delete(lastActivityKey(t.number));
+          await ctx.kv.delete(activityKey(t.number));
+          await ctx.kv.delete(ticketKey(t.number));
+        }
+        continue;
       }
-      if (t.expiresAt && Date.now() >= t.expiresAt) {
-        for (const c of t.directCopies ?? []) await ctx.server.retractDM(c.messageId);
-        delete t.directCopies;
-        delete t.copies;
-        delete t.notices;
-        await purgeArchive(ctx, t);
-        await saveTicket(ctx, t);
-      }
+      const last = (await ctx.kv.get<string>(lastActivityKey(t.number))) ?? t.createdAt;
+      const channel = ticketChannel(ctx, t);
+      if (!channel) continue;
+      const type = ticketType(ctx, t.type);
       if (
-        t.closedAt &&
-        Date.now() - Date.parse(t.closedAt) >=
-          Math.max(ctx.config.recordRetentionDays, ctx.config.transcriptRetentionDays) * 86400000
+        !t.reminded &&
+        !t.firstResponseAt &&
+        ctx.config.firstResponseMinutes > 0 &&
+        Date.now() - Date.parse(t.createdAt) >= ctx.config.firstResponseMinutes * 60000
       ) {
-        await ctx.kv.delete(authorKey(t.author.id, t.number));
-        await ctx.kv.delete(lastActivityKey(t.number));
-        await ctx.kv.delete(activityKey(t.number));
-        await ctx.kv.delete(ticketKey(t.number));
+        const roles = type?.staffRoles.map((k) => ctx.server.role(k)) ?? [];
+        const marker = "⏱ " + t.createdAt;
+        if (!(await sentNotice(ctx, channel, marker)))
+          await channel.send({
+            embeds: [{ footer: { text: marker }, description: ctx.i18n.t("responseRequested") }],
+            content: ctx.i18n.t("responseOverdue", {
+              staff: roles.map((r) => r.mention).join(" "),
+            }),
+            allowedMentions: { roles: roles.map((r) => r.id), users: false, everyone: false },
+          });
+        t.reminded = true;
+        await saveTicket(ctx, t);
       }
-      continue;
-    }
-    const last = (await ctx.kv.get<string>(lastActivityKey(t.number))) ?? t.createdAt;
-    const channel = ticketChannel(ctx, t);
-    if (!channel) continue;
-    const type = ticketType(ctx, t.type);
-    if (
-      !t.reminded &&
-      !t.firstResponseAt &&
-      ctx.config.firstResponseMinutes > 0 &&
-      Date.now() - Date.parse(t.createdAt) >= ctx.config.firstResponseMinutes * 60000
-    ) {
-      const roles = type?.staffRoles.map((k) => ctx.server.role(k)) ?? [];
-      const marker = "⏱ " + t.createdAt;
-      if (!(await sentNotice(ctx, channel, marker)))
-        await channel.send({
-          embeds: [{ footer: { text: marker }, description: ctx.i18n.t("responseRequested") }],
-          content: ctx.i18n.t("responseOverdue", { staff: roles.map((r) => r.mention).join(" ") }),
-          allowedMentions: { roles: roles.map((r) => r.id), users: false, everyone: false },
-        });
-      t.reminded = true;
-      await saveTicket(ctx, t);
-    }
-    if (ctx.config.inactivityHours <= 0) continue;
-    const due = Date.parse(last) + ctx.config.inactivityHours * 3600000;
-    if (!t.warningAt && Date.now() >= due - 3600000) {
-      const marker = "⏳ " + last;
-      const warning =
-        (await sentNotice(ctx, channel, marker)) ??
-        (await channel.send({
-          content: ctx.i18n.t("warning"),
-          embeds: [{ footer: { text: marker }, description: ctx.i18n.t("warningTitle") }],
-        }));
-      t.warningAt = warning.createdAt.getTime();
-      await saveTicket(ctx, t);
-    } else if (t.warningAt && Date.now() >= Math.max(due, t.warningAt + 3600000)) {
-      const current = await getTicket(ctx, t.number);
-      if (current?.status === "open" && current.warningAt === t.warningAt)
-        await closeTicket(
-          ctx,
-          current,
-          { id: ctx.bot.user.id, displayName: ctx.bot.user.displayName },
-          ctx.i18n.t("inactivity"),
-        );
+      if (ctx.config.inactivityHours <= 0) continue;
+      const due = Date.parse(last) + ctx.config.inactivityHours * 3600000;
+      if (!t.warningAt && Date.now() >= due - 3600000) {
+        const marker = "⏳ " + last;
+        const warning =
+          (await sentNotice(ctx, channel, marker)) ??
+          (await channel.send({
+            content: ctx.i18n.t("warning"),
+            embeds: [{ footer: { text: marker }, description: ctx.i18n.t("warningTitle") }],
+          }));
+        t.warningAt = warning.createdAt.getTime();
+        await saveTicket(ctx, t);
+      } else if (t.warningAt && Date.now() >= Math.max(due, t.warningAt + 3600000)) {
+        const current = await getTicket(ctx, t.number);
+        if (current?.status === "open" && current.warningAt === t.warningAt)
+          await closeTicket(
+            ctx,
+            current,
+            { id: ctx.bot.user.id, displayName: ctx.bot.user.displayName },
+            ctx.i18n.t("inactivity"),
+          );
+      }
+    } catch (error) {
+      ctx.log.warn("Ticket maintenance deferred", { ticket: t.id, error: String(error) });
     }
   }
 }
 
-export async function receivedReply(ctx: Context, t: Ticket, at: Date, staff: boolean) {
+export async function receivedReply(
+  ctx: Context,
+  t: Ticket,
+  at: Date,
+  staff: boolean,
+  relay = false,
+) {
+  const changed = relay || t.warningAt !== undefined || (staff && !t.firstResponseAt);
   if (staff) t.firstResponseAt ??= at.toISOString();
   delete t.warningAt;
-  await saveTicket(ctx, t);
+  if (changed) await saveTicket(ctx, t);
   await ctx.kv.set(lastActivityKey(t.number), at.toISOString());
 }
 

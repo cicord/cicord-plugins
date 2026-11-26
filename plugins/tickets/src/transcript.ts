@@ -6,6 +6,7 @@ import {
   saveTicket,
   ticketChannel,
   ticketType,
+  verifyReaders,
   type Ticket,
 } from "./tickets.ts";
 import type { Person } from "./routes.ts";
@@ -133,70 +134,178 @@ export async function renderTranscript(ctx: Context, t: Ticket, format: "html" |
   );
 }
 
+const mentions = { everyone: false, users: false, roles: false } as const;
+
+/** Only attachment edits can expose private content. Always know which message to delete
+ * before attempting the edit. A lost acknowledgement leaves a durable "attaching" receipt. */
 export async function removeLogCopy(ctx: Context, t: Ticket) {
-  if (!t.logCopy) return;
-  const channel = ctx.server.channel({ id: t.logCopy.channelId });
-  const message = await channel.message(t.logCopy.messageId);
-  if (message) await message.delete("Ticket transcript retention or privacy request");
-  delete t.logCopy;
+  const receipt = t.logDelivery;
+  if (
+    receipt &&
+    (receipt.phase === "attached" || receipt.phase === "attaching") &&
+    receipt.messageId
+  ) {
+    const m = await ctx.server.channel({ id: receipt.channelId }).message(receipt.messageId);
+    if (m) await m.delete("Ticket transcript withdrawn");
+    delete receipt.messageId;
+    receipt.phase = "pending";
+  }
+  if (t.logCopy) {
+    const m = await ctx.server.channel({ id: t.logCopy.channelId }).message(t.logCopy.messageId);
+    if (m) await m.delete("Ticket transcript withdrawn");
+    delete t.logCopy;
+  }
 }
 
 export async function purgeArchive(ctx: Context, t: Ticket) {
   await removeLogCopy(ctx, t);
+  if (t.archivePolicy) {
+    await ctx.server.deleteChannel({ id: t.channelId }, "Ticket transcript retention");
+    t.channelRemoved = true;
+    delete t.archivePolicy;
+    delete t.archiveRoles;
+  }
   for (let p = 0; p < (t.transcriptPages ?? 0); p++) await ctx.kv.delete(pageKey(t, p));
+  delete t.logDelivery;
   delete t.transcriptPages;
   delete t.expiresAt;
 }
 
-export async function postArchive(ctx: Context, t: Ticket) {
-  const key = ticketType(ctx, t.type)?.logChannel;
-  if (!key) return;
-  const channel = ctx.server.channel(key);
-  const audience = ctx.server.compareAudience({ id: t.channelId }, channel);
-  let link = "";
+async function copyAllowed(ctx: Context, t: Ticket) {
+  const dest = t.logDelivery;
+  const type = ticketType(ctx, t.type);
+  if (
+    !dest ||
+    !type ||
+    !("retainSourceForTranscript" in type) ||
+    !type.retainSourceForTranscript ||
+    !type.logChannel ||
+    !t.archivePolicy ||
+    !t.expiresAt ||
+    Date.now() >= t.expiresAt ||
+    t.channelRemoved
+  )
+    return false;
+  if (JSON.stringify([...type.staffRoles].sort()) !== JSON.stringify(t.archiveRoles)) return false;
   try {
-    link = await ctx.portal.link("/tickets?ticket=" + t.number);
+    if (ctx.server.channel(type.logChannel).id !== dest.channelId) return false;
+    const checked = await verifyReaders(ctx, t, { destination: dest.channelId });
+    return (
+      !!checked?.known &&
+      checked.confined &&
+      checked.fingerprint === t.archivePolicy &&
+      (checked.destination === "same" || checked.destination === "narrower")
+    );
   } catch {
-    ctx.log.warn("Portal link unavailable", { ticket: t.number });
-  }
-  const files = [];
-  if (audience === "same" || audience === "narrower") {
-    for (const format of ["html", "markdown"] as const) {
-      const content = await renderTranscript(ctx, t, format);
-      if (content !== undefined)
-        files.push({
-          name: `ticket-${t.id}.${format === "html" ? "html" : "md"}`,
-          contentType: format === "html" ? "text/html" : "text/markdown",
-          data: new TextEncoder().encode(content),
-        });
-    }
-  }
-  const log = await channel.send({
-    content: ctx.i18n.t("summary", { number: t.number, link }),
-    ...(files.length ? { files } : {}),
-    allowedMentions: { everyone: false, roles: false, users: false },
-  });
-  if (files.length) {
-    t.logCopy = { channelId: channel.id, messageId: log.id };
-    await saveTicket(ctx, t);
+    return false;
   }
 }
 
-/** Discord attachment URLs can remain readable to the current audience of their log
- * message. Withdraw the message when its permission context changes after closing. */
-export async function withdrawCopies(ctx: Context, channelId?: string) {
-  for (const t of await allTickets(ctx)) {
-    if (!t.logCopy) continue;
-    if (
-      channelId &&
-      t.logCopy.channelId !== channelId &&
-      ctx.server.channel({ id: t.logCopy.channelId }).categoryId !== channelId
-    )
-      continue;
-    t.withdrawLog = true;
-    await saveTicket(ctx, t);
+async function files(ctx: Context, t: Ticket) {
+  const result = [];
+  for (const f of ["html", "markdown"] as const) {
+    const content = await renderTranscript(ctx, t, f);
+    if (content === undefined) return [];
+    result.push({
+      name: `ticket-${t.id}.${f === "html" ? "html" : "md"}`,
+      contentType: f === "html" ? "text/html" : "text/markdown",
+      data: new TextEncoder().encode(content),
+    });
+  }
+  return result;
+}
+
+export async function reconcileCopy(ctx: Context, t: Ticket) {
+  // Pre-ledger Discord copies cannot be authorized once their source has disappeared.
+  if (t.logCopy) {
     await removeLogCopy(ctx, t);
-    delete t.withdrawLog;
     await saveTicket(ctx, t);
+  }
+  const delivery = t.logDelivery;
+  if (!delivery) return;
+  const destination = ctx.server.channel({ id: delivery.channelId });
+  if (
+    (delivery.phase === "attached" || delivery.phase === "attaching") &&
+    !(await copyAllowed(ctx, t))
+  ) {
+    await removeLogCopy(ctx, t);
+    await saveTicket(ctx, t);
+  }
+  const footer = { text: delivery.marker };
+  const summary = { content: delivery.content, embeds: [{ footer }], allowedMentions: mentions };
+  let target = delivery.messageId ? await destination.message(delivery.messageId) : undefined;
+  if (!target) {
+    // The only send without a stored Discord ID is a content-free shell. Recover its
+    // deterministic receipt before any upload. Extra shells can never contain files.
+    let before: string | undefined;
+    do {
+      const page = await destination.messages({ limit: 100, ...(before ? { before } : {}) });
+      target = page.find(
+        (m) =>
+          m.author.id === ctx.bot.user.id && m.embeds.some((e) => e.footer?.text === footer.text),
+      );
+      if (
+        target ||
+        page.length < 100 ||
+        page[page.length - 1]!.createdAt.getTime() < Date.parse(t.closedAt ?? t.createdAt)
+      )
+        break;
+      const next = page[page.length - 1]!.id;
+      if (next === before) throw new Error("Log history cursor did not advance");
+      before = next;
+    } while (true);
+    target ??= await destination.send(summary);
+    delivery.messageId = target.id;
+    delivery.phase = "summary";
+    await saveTicket(ctx, t);
+  }
+  if (!(await copyAllowed(ctx, t)) || delivery.phase === "attached") return;
+  const uploads = await files(ctx, t);
+  if (!uploads.length || !(await copyAllowed(ctx, t))) return;
+  delivery.phase = "attaching";
+  await saveTicket(ctx, t);
+  if (!(await copyAllowed(ctx, t))) return;
+  await target.edit({ ...summary, files: uploads });
+  if (!(await copyAllowed(ctx, t))) {
+    await removeLogCopy(ctx, t);
+  } else {
+    delivery.phase = "attached";
+  }
+  await saveTicket(ctx, t);
+}
+
+export async function postArchive(ctx: Context, t: Ticket) {
+  const key = ticketType(ctx, t.type)?.logChannel;
+  if (!t.logDelivery && !key) return;
+  if (!t.logDelivery && key) {
+    let link = "";
+    try {
+      link = (await ctx.portal.link("/tickets?ticket=" + t.number)).replace(
+        /([?&])cicord_token=[^&#]+(&?)/g,
+        (_match, sep: string, next: string) => (next ? sep : ""),
+      );
+    } catch {
+      ctx.log.warn("Portal link unavailable", { ticket: t.number });
+    }
+    const marker = [ctx.bot.key, ctx.plugin.instance, ctx.server.id, t.id, t.closedAt].join("/");
+    t.logDelivery = {
+      channelId: ctx.server.channel(key).id,
+      marker,
+      content: ctx.i18n.t("summary", { number: t.number, link }),
+      phase: "pending",
+    };
+    await saveTicket(ctx, t);
+  }
+  await reconcileCopy(ctx, t);
+}
+
+export async function withdrawCopies(ctx: Context, _channelId?: string) {
+  for (const t of await allTickets(ctx)) {
+    if (!t.logDelivery && !t.logCopy) continue;
+    try {
+      await reconcileCopy(ctx, t);
+    } catch (error) {
+      ctx.log.warn("Transcript reconciliation deferred", { ticket: t.id, error: String(error) });
+    }
   }
 }

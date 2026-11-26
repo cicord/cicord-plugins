@@ -67,6 +67,11 @@
                 }
               }
             }
+          },
+          "retainSourceForTranscript": {
+            "type": "boolean",
+            "default": true,
+            "description": "Keep the original private channel read-only until transcript expiry. Enables Discord file copies while both channel policies can be verified."
           }
         }
       }

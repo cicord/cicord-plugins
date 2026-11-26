@@ -62,5 +62,7 @@
   "summary": "Ticket #{number} closed. {link}",
   "language": "en",
   "deletedMember": "Deleted member",
-  "deletedSubject": "Deleted ticket subject"
+  "deletedSubject": "Deleted ticket subject",
+  "confirmRetain": "Close ticket #{number}? Its channel will be archived.",
+  "relayDenied": "Your private message could not be delivered. Contact staff to check the ticket permissions."
 }

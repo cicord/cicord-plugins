@@ -222,7 +222,8 @@ describe("closing", () => {
     expect(log?.message).toMatchObject({
       content: expect.stringContaining("Ticket #1 closed."),
     });
-    expect(log?.message).not.toHaveProperty("embeds");
+    expect(log?.message).not.toHaveProperty("files");
+    expect(JSON.stringify(log?.message)).not.toContain("Since yesterday");
     expect(t.kv.get("ticket:00000001")).toMatchObject({
       status: "closed",
       closedBy: { id: "2", displayName: "sam" },
@@ -573,17 +574,9 @@ describe("staff routes", () => {
     expect(JSON.stringify([...t.kv.values()])).not.toContain("Still offline");
     // a closed ticket has no channel any more
     await route(t, "POST /tickets/1/close", { viewer: "2", body: { reason: "Fixed" } });
-    const closed = (await route(t, "GET /tickets/1", { viewer: "2" }))
-      .body as unknown as StaffTicketDetail;
-    expect(closed).toMatchObject({
-      status: "closed",
-      channelId: channel.id,
-      channelUrl: null,
-      closeReason: "Fixed",
-      closedBy: { id: "2" },
-      messages: null,
-      events: [{ type: "opened" }, { type: "closed", detail: "Fixed" }],
-    });
+    // A deleted source cannot authorize access to its captured participants or messages.
+    expect((await route(t,"GET /tickets/1",{viewer:"2"})).status).toBe(404);
+
   });
 
   test("GET /staff lists the staff roles' members, the owner and the viewer", async () => {
@@ -1038,6 +1031,7 @@ describe("ticket types and modmail", () => {
           name: "Help",
           staffRoles: ["support"],
           logChannel: "private-log",
+          retainSourceForTranscript: true,
           fields: [{ label: "Order number", required: true }],
           defaultLabels: ["question"],
         },
@@ -1098,7 +1092,7 @@ describe("ticket types and modmail", () => {
     expect((await route(t, "GET /tickets/1", { viewer: "2" })).status).toBe(403);
     expect((await route(t, "GET /tickets/1/transcript", { viewer: "4" })).status).toBe(200);
     const narrow = t.sent.find((s) => s.to === "private-log");
-    expect(narrow?.message).toMatchObject({
+    expect(t.edits.find((e) => e.id === narrow?.id)?.message).toMatchObject({
       files: [{ name: "ticket-1.html" }, { name: "ticket-1.md" }],
     });
     const wide = t.sent.find((s) => s.to === "ticket-log");
@@ -1354,4 +1348,241 @@ test("optional interop uses only on-duty staff of the current type and filters m
     cases: [{ number: 7, action: "warn", status: "active", reason: "Reminder", at: "2026-01-01" }],
   });
   expect(calls).toEqual(["staff-shifts.onDuty", "moderation.cases"]);
+});
+
+test("a stale staff update cannot restore erased ticket data from another invocation realm", async () => {
+  const t = setup();
+  await portalOpen(t, "1");
+  const { getTicket, saveTicket } = await import("../src/tickets.ts");
+  const stale = (await getTicket(t.ctx, 1))!;
+  stale.notes.push({
+    by: { id: "2", displayName: "Sam" },
+    at: new Date().toISOString(),
+    content: "Postponed staff edit",
+  });
+  let resume!: () => void;
+  const suspended = new Promise<void>((r) => {
+    resume = r;
+  }).then(() => saveTicket(t.ctx, stale));
+  const ctx = {
+    ...t.ctx,
+    privacy: { ...t.ctx.privacy, pseudonym: async () => "deleted-user-0000000000000001" },
+  };
+  await plugin.privacy!.erase(ctx, "1");
+  resume();
+  await expect(suspended).rejects.toThrow("Ticket changed");
+  const persisted = (await getTicket(t.ctx, 1))!;
+  expect(persisted.author.id).toBe("deleted-user-0000000000000001");
+  expect(persisted.description).toBe("");
+  expect(persisted.notes).toHaveLength(0);
+});
+
+test("lost acknowledgements leave a durable receipt; widened offline log ACLs withdraw files and a safe log recovers", async () => {
+  const t = setup({
+    types: [
+      {
+        key: "help",
+        name: "Help",
+        staffRoles: ["support"],
+        logChannel: "private-log",
+        retainSourceForTranscript: true,
+      },
+    ],
+  });
+  await portalOpen(t, "1", { type: "help" });
+  const { getTicket, closeTicket } = await import("../src/tickets.ts");
+  const { reconcileCopy } = await import("../src/transcript.ts");
+  const original = t.ctx.server;
+  let failShell = true,
+    failEdit = true,
+    wide = false;
+  const log = original.channel("private-log");
+  const server = {
+    ...original,
+    verifyReaders: async (
+      ref: Parameters<typeof original.verifyReaders>[0],
+      options: Parameters<typeof original.verifyReaders>[1],
+    ) => {
+      const report = await original.verifyReaders(ref, options);
+      return wide ? { ...report, destination: "wider" as const } : report;
+    },
+    compareAudience: (
+      src: Parameters<typeof original.compareAudience>[0],
+      dest: Parameters<typeof original.compareAudience>[1],
+    ) => (wide ? ("wider" as const) : original.compareAudience(src, dest)),
+    channel: (ref: Parameters<typeof original.channel>[0]) => {
+      const ch = original.channel(ref);
+      if (ch.id !== log.id) return ch;
+      return {
+        ...ch,
+        send: async (input: Parameters<typeof ch.send>[0]) => {
+          const saved = await ch.send(input);
+          if (failShell) {
+            failShell = false;
+            throw Error("Lost shell acknowledgement");
+          }
+          return saved;
+        },
+        message: async (id: string) => {
+          const saved = await ch.message(id);
+          if (!saved) return saved;
+          return {
+            ...saved,
+            edit: async (input: Parameters<typeof saved.edit>[0]) => {
+              const updated = await saved.edit(input);
+              const receipt = (await getTicket(t.ctx, 1))!.logDelivery;
+              expect(receipt).toMatchObject({ messageId: id, phase: "attaching" });
+              if (failEdit) {
+                failEdit = false;
+                throw Error("Lost attachment acknowledgement");
+              }
+              return updated;
+            },
+          };
+        },
+      };
+    },
+  };
+  const ctx = { ...t.ctx, server };
+  await expect(
+    closeTicket(ctx, (await getTicket(ctx, 1))!, { id: "2", displayName: "Sam" }),
+  ).rejects.toThrow("Lost shell");
+  const shells = () => t.sent.filter((s) => s.to === "private-log");
+  expect(shells()).toHaveLength(1);
+  expect(shells()[0]?.message).not.toHaveProperty("files");
+  const first = shells()[0]!.id;
+  // Recover the message even if Discord accepted the send before its ID reached KV.
+  const pending = (await getTicket(ctx, 1))!;
+  expect(pending.logDelivery).toMatchObject({ phase: "pending" });
+  // Use the gated message lookup after the first shell is recovered.
+  const actualEdit = t.message(first)!.edit;
+  Object.assign(t.message(first)!, {
+    edit: async (input: Parameters<typeof actualEdit>[0]) => {
+      const edited = await actualEdit(input);
+      const receipt = (await getTicket(ctx, 1))!.logDelivery;
+      expect(receipt).toMatchObject({ phase: "attaching", messageId: first });
+      if (failEdit) {
+        failEdit = false;
+        throw Error("Lost attachment acknowledgement");
+      }
+      return edited;
+    },
+  });
+  await expect(reconcileCopy(ctx, pending)).rejects.toThrow("Lost attachment");
+  expect(shells()).toHaveLength(1);
+  expect(t.edits.find((e) => e.id === first)?.message).toHaveProperty("files");
+  wide = true;
+  await plugin.onStart!(ctx);
+  expect(t.deletedMessages).toContainEqual(expect.objectContaining({ id: first }));
+  const fallback = (await getTicket(ctx, 1))!.logDelivery!;
+  expect(fallback.phase).toBe("summary");
+  expect(shells()).toHaveLength(2);
+  expect(shells()[1]?.message).not.toHaveProperty("files");
+  wide = false;
+  await plugin.events!.serverAvailable!(ctx);
+  expect((await getTicket(ctx, 1))!.logDelivery?.phase).toBe("attached");
+  expect(t.edits.some((e) => e.id === fallback.messageId)).toBe(true);
+  // Change the source ACL while offline. A now-readable destination cannot legitimize it.
+  await ctx.server.editChannel(
+    { id: t.createdChannels[0]!.channel.id },
+    { overwrites: { "@everyone": { allow: ["ViewChannel", "ReadMessageHistory"] } } },
+  );
+  await plugin.schedules!.maintenance!.run(ctx);
+  expect((await getTicket(ctx, 1))!.logDelivery?.phase).toBe("summary");
+});
+
+test("unverifiable or deleted sources never receive a file-bearing log post", async () => {
+  const t = setup({
+    types: [
+      {
+        key: "help",
+        name: "Help",
+        staffRoles: ["support"],
+        logChannel: "private-log",
+        retainSourceForTranscript: false,
+      },
+    ],
+  });
+  await portalOpen(t);
+  await route(t, "POST /tickets/1/close", { viewer: "2" });
+  const log = t.sent.find((s) => s.to === "private-log")!;
+  expect(log.message).not.toHaveProperty("files");
+  expect(t.edits.some((e) => e.id === log.id)).toBe(false);
+});
+
+test("combined role overrides, NSFW and deleted channels cannot be authorized by a stored reader summary", async () => {
+  const t = setup({
+    types: [
+      { key: "help", name: "Help", staffRoles: ["support"], retainSourceForTranscript: true },
+    ],
+  });
+  await portalOpen(t);
+  const ch = t.createdChannels[0]!.channel;
+  await t.ctx.server.editChannel(ch, {
+    overwrites: {
+      support: { clear: ["ReadMessageHistory"] },
+      mods: { deny: ["ReadMessageHistory"] },
+    },
+  });
+  await route(t, "POST /tickets/1/close", { viewer: "2" });
+  const routeKey = "GET /tickets/1/transcript";
+  expect((await route(t, routeKey, { viewer: "2" })).status).toBe(200);
+  await t.member("2")!.addRole("mods");
+  expect((await route(t, routeKey, { viewer: "2" })).status).toBe(404);
+  await t.ctx.server.deleteChannel(ch);
+  expect((await route(t, routeKey, { viewer: "4" })).status).toBe(404);
+
+  const gated = createTestContext({
+    locales: { en, fr },
+    schema,
+    config: { panelChannel: "gated", staffRoles: ["support"] },
+    server: { id: "100", ownerId: "9", everyonePermissions: ["ViewChannel", "ReadMessageHistory"] },
+    roles: { support: { name: "Support" } },
+    members: [{ id: "9", username: "owner" }],
+    channels: {
+      gated: {
+        name: "gated",
+        nsfw: true,
+        overwrites: {
+          "@everyone": { deny: ["ViewChannel"] },
+          "member:9": { allow: ["ViewChannel", "ReadMessageHistory"] },
+        },
+      },
+    },
+  });
+  const { mayReadTranscript, getTicket } = await import("../src/tickets.ts");
+  const ticket = (await getTicket(t.ctx, 1))!;
+  const source = gated.channel("gated")!;
+  const historical = {
+    ...ticket,
+    type: "default",
+    author: { id: "9", displayName: "owner" },
+    channelRemoved: false,
+    channelId: source.id,
+    archivePolicy: gated.ctx.server.audience(source).fingerprint,
+  };
+  expect(await mayReadTranscript(gated.ctx, historical, gated.member("9"))).toBe(false);
+});
+
+test("incoming DM text and attachments are withheld after an extra member gains access", async () => {
+  const t = setup({ types: [{ key: "help", name: "Help", staffRoles: ["support"] }] });
+  const member = t.member("1")!;
+  const original = { ...messageIn(t, t.channel("help-desk")!, "1"), content: "Original" };
+  await plugin.events!.directMessage!(t.ctx, original);
+  const ch = t.createdChannels[0]!.channel;
+  await t.ctx.server.editChannel(ch, {
+    overwrites: { "member:3": { allow: ["ViewChannel", "ReadMessageHistory"] } },
+  });
+  expect(t.member("3")!.canView(ch)).toBe(true);
+  const sensitive = "https://cdn.discordapp.com/attachments/private/file.png";
+  await plugin.events!.directMessage!(t.ctx, {
+    ...original,
+    content: "Private follow-up",
+    member,
+    attachments: [{ filename: "private.png", url: sensitive }] as unknown as Message["attachments"],
+  });
+  const posts = t.sent.filter((s) => s.to === ch.id);
+  expect(JSON.stringify(posts)).not.toContain("Private follow-up");
+  expect(JSON.stringify(posts)).not.toContain(sensitive);
+  expect(t.sent.at(-1)).toMatchObject({ to: "dm:1", message: en.relayDenied });
 });

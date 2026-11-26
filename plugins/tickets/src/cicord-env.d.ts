@@ -12,6 +12,7 @@ declare module "@cicord/sdk" {
         label: string;
         required: boolean;
       }[];
+      retainSourceForTranscript: boolean;
     }[];
     transcriptRetentionDays: number;
     firstResponseMinutes: number;

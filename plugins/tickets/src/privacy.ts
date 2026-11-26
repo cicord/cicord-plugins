@@ -1,5 +1,12 @@
 import type { Context, Json } from "@cicord/sdk";
-import { allTickets, authorKey, openKey, ticketChannel, saveTicket } from "./tickets.ts";
+import {
+  verifyReaders,
+  allTickets,
+  authorKey,
+  openKey,
+  ticketChannel,
+  saveTicket,
+} from "./tickets.ts";
 import { readPage, writePage, removeLogCopy } from "./transcript.ts";
 
 export const privacy = {
@@ -72,6 +79,7 @@ export const privacy = {
         ...(t.summary?.participants ?? []),
       ])
         if (p?.id === userId) names.add(p.displayName);
+    await ctx.kv.delete("admission:" + userId);
     let erased = 0;
     for (const t of tickets) {
       let changed = false;
@@ -92,6 +100,9 @@ export const privacy = {
         a.denied = a.denied.filter((id) => id !== userId);
       }
       if (own) {
+        const previous = t.archivePolicy
+          ? await verifyReaders(ctx, t, { withoutMember: userId })
+          : undefined;
         delete t.appeal;
         delete t.request;
         if (live && t.welcomeId)
@@ -105,6 +116,15 @@ export const privacy = {
         await ctx.kv.delete(authorKey(userId, t.number));
         await ctx.kv.delete(openKey(userId, t.number));
         t.author = anonymous;
+        if (previous?.known && previous.fingerprint === t.archivePolicy) {
+          const next = await verifyReaders(ctx, t);
+          if (
+            next?.known &&
+            next.confined &&
+            next.fingerprint === previous.withoutMemberFingerprint
+          )
+            t.archivePolicy = next.fingerprint;
+        }
         t.subject = ctx.i18n.t("deletedSubject");
         t.description = "";
         delete t.rating;
@@ -189,7 +209,11 @@ export const privacy = {
         let before: string | undefined;
         for (;;) {
           const batch = await live.messages({ limit: 100, ...(before ? { before } : {}) });
-          for (const m of batch) if (m.author.id === userId) hidden.add(m.id);
+          for (const m of batch)
+            if (m.author.id === userId) {
+              hidden.add(m.id);
+              if (t.archivePolicy) await m.delete("Member privacy request");
+            }
           if (batch.length < 100) break;
           const next = batch[batch.length - 1]!.id;
           if (before === next) throw new Error("Discord message cursor did not advance");
@@ -202,9 +226,10 @@ export const privacy = {
       }
       if (changed) {
         await removeLogCopy(ctx, t);
-        await saveTicket(ctx, t);
         erased++;
       }
+      // Invalidate retained snapshots even if this ticket did not yet mention the subject.
+      await saveTicket(ctx, t);
     }
     return { erased };
   },

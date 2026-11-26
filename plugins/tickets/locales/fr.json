@@ -62,5 +62,7 @@
   "summary": "Ticket nº {number} fermé. {link}",
   "language": "fr",
   "deletedMember": "Membre supprimé",
-  "deletedSubject": "Objet du ticket effacé"
+  "deletedSubject": "Objet du ticket effacé",
+  "confirmRetain": "Fermer le ticket nº {number} et archiver son salon ?",
+  "relayDenied": "Votre message privé n’a pas été transmis. Contactez l’équipe pour vérifier les accès au ticket."
 }

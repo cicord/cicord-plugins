@@ -26,7 +26,19 @@ const secondID = "100000000000000099";
 async function prepare({repo}) {
   const bot = join(repo, "bots/bot/bot.yaml"),
     server = join(repo, "servers/acceptance.yaml");
-  const yaml = await readFile(server, "utf8");
+  const yaml = (await readFile(server, "utf8")).replace(
+    "  channels:\n",
+    `  channels:
+    private-log:
+      name: private-log
+      type: text
+      category: community
+      overwrites:
+        "@everyone": {deny: [ViewChannel]}
+        moderator: {allow: [ViewChannel,ReadMessageHistory]}
+`,
+  );
+  await writeFile(server, yaml);
   await writeFile(
     join(repo, "servers/secondary.yaml"),
     yaml
@@ -40,13 +52,13 @@ async function prepare({repo}) {
       "servers: [acceptance]",
       "servers: [acceptance, secondary]\n  directMessages: {instance: tickets}",
     ) +
-      "\n    - name: fixtures\n      source: ../../plugins/fixtures\n      grants: [discord.members.read, discord.roles.assign, discord.dm.send]\n",
+      "\n    - name: fixtures\n      source: ../../plugins/fixtures\n      grants: [discord.members.read, discord.roles.assign, discord.dm.send, discord.channels.read, discord.messages.read]\n",
   );
   const root = join(repo, "plugins/fixtures");
   await mkdir(join(root, "src"), { recursive: true });
   await writeFile(
     join(root, "plugin.yaml"),
-    "apiVersion: cicord.dev/v1alpha1\nkind: Plugin\nmetadata: {name: fixtures, version: 0.1.0}\nspec: {entry: ./src/index.ts, engine: '>=0.2.0-0', capabilities: [discord.members.read, discord.roles.assign, discord.dm.send]}\n",
+    "apiVersion: cicord.dev/v1alpha1\nkind: Plugin\nmetadata: {name: fixtures, version: 0.1.0}\nspec: {entry: ./src/index.ts, engine: '>=0.2.0-0', intents: [MessageContent], capabilities: [discord.members.read, discord.roles.assign, discord.dm.send, discord.channels.read, discord.messages.read]}\n",
   );
   // Drive real Discord role changes from a disposable operator command. Opening the
   // initial DM supplies its bot/user channel ID to the simulator's POST /sim/messages.
@@ -59,6 +71,10 @@ async function prepare({repo}) {
           role:{type:"string",required:true,description:"Role key"},
           remove:{type:"boolean",description:"Remove the role"}},
         async run(ctx,i){const m=await ctx.server.member(i.options.user.id);if(i.options.remove)await m.removeRole(i.options.role);else await m.addRole(i.options.role);await i.reply("ok");}}),
+      "fixture-files":command({description:"Inspect a simulated transcript upload",permissions:["ManageRoles"],async run(ctx,i){
+        const rows=await ctx.server.channel("private-log").messages({limit:50});
+        await i.reply(JSON.stringify(rows.flatMap(m=>m.attachments.map(a=>a.filename))));
+      }}),
       "fixture-dm":command({description:"Open the simulator DM channel",async run(ctx,i){const m=await i.member.send("Simulator DM channel ready");await i.reply(m.channel.id);}})
     }});`,
   );
@@ -93,7 +109,13 @@ test(
       locale: "fr",
       modmailType: "help",
       types: [
-        { key: "help", name: "Help", staffRoles: ["moderator"], logChannel: "general" },
+        {
+          key: "help",
+          name: "Help",
+          staffRoles: ["moderator"],
+          logChannel: "private-log",
+          retainSourceForTranscript: true,
+        },
         { key: "appeal", name: "Appeals", staffRoles: ["member"] },
       ],
     };
@@ -142,7 +164,14 @@ test(
         type,
         description: "Private details for " + subject,
       });
-    const a = await create(alice, "help", "Access problem");
+    const attempts = await Promise.allSettled([
+      create(alice, "help", "Access problem"),
+      create(alice, "help", "Access problem"),
+    ]);
+    const openedOnce = attempts.filter((r) => r.status === "fulfilled");
+    assert.equal(openedOnce.length, 1, "simultaneous creates respect member quota");
+    assert.match(String(attempts.find((r) => r.status === "rejected")?.reason), /409/);
+    const a = openedOnce[0].value;
     const b = await create(sim.owner, "appeal", "Account appeal");
     const opened = await tickets("acceptance", bob, "/" + a.id);
     const welcome = (await sim.api("/api/v1/sim/channels/" + opened.channelId + "/messages"))
@@ -165,6 +194,12 @@ test(
     await say(bob, opened.channelId, "A scoped answer");
     for (let i = 1; i < 500; i++) await say(bob, opened.channelId, "Archive line " + i);
     await tickets("acceptance", bob, "/" + a.id + "/close", {});
+    await assert.rejects(say(bob, opened.channelId, "Archived channel is read-only"), /403/);
+    const upload = await command(first, sim.owner, "fixture-files", {});
+    assert.deepEqual(JSON.parse(upload.response.content).sort(), [
+      "ticket-" + a.id + ".html",
+      "ticket-" + a.id + ".md",
+    ]);
     for (const format of ["html", "markdown"]) {
       const transcript = await tickets(
         "acceptance",
@@ -228,5 +263,31 @@ test(
       2000,
     );
     assert.ok(Date.now() - outbound < 2000);
+    // Discord ACL drift while the member conversation is active. Wait for the
+    // withheld-delivery response before asserting the selected guild got no copy.
+    await sim.api("/api/v1/sim/channels/" + mail.channelId + "/permissions", {
+      overwrites: [
+        {
+          type: "role",
+          id: second.id,
+          allow: ["ViewChannel", "ReadMessageHistory", "SendMessages"],
+        },
+      ],
+    });
+    await say(alice, dm, "Confidential attachment description");
+    await until("member notified of withheld modmail", async () =>
+      (await dms()).items.some((m) => m.content.includes("message privé n’a pas été transmis")),
+    );
+    assert.ok(
+      !(await messages()).items.some((m) => m.content === "Confidential attachment description"),
+    );
+    const logChannel = first.channels.find((c) => c.name === "private-log");
+    await sim.api("/api/v1/sim/channels/" + logChannel.id + "/permissions", {
+      overwrites: [{ type: "role", id: first.id, allow: ["ViewChannel", "ReadMessageHistory"] }],
+    });
+    await until("widening the log retracts its native files", async () => {
+      const result = await command(first, sim.owner, "fixture-files", {});
+      return JSON.parse(result.response.content).length === 0;
+    });
   },
 );

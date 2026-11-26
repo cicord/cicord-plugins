@@ -23,6 +23,8 @@ import {
   types,
   ticketType,
   mayRead,
+  mayReadTranscript,
+  relayAllowed,
   publish,
   allTickets,
   ticketChannel,
@@ -42,6 +44,7 @@ import {
   notice,
   numberOf,
   openTicket,
+  OpenLimit,
   openTickets,
   panelMessage,
   person,
@@ -319,7 +322,8 @@ export default definePlugin({
         },
       }
     : {}),
-  onStart(ctx) {
+  async onStart(ctx) {
+    await withdrawCopies(ctx);
     ctx.features.report?.(
       "messageContextMenu",
       Boolean(sdk.sdkFeatures?.contextMenus),
@@ -440,7 +444,12 @@ export default definePlugin({
       if (!ticket) return;
       await interaction.reply({
         ephemeral: true,
-        content: ctx.i18n.t("confirmClose", { number: ticket.number }),
+        content: ctx.i18n.t(
+          ticketType(ctx, ticket.type)?.retainSourceForTranscript
+            ? "confirmRetain"
+            : "confirmClose",
+          { number: ticket.number },
+        ),
         components: [
           {
             type: "row",
@@ -511,6 +520,12 @@ export default definePlugin({
   },
 
   events: {
+    serverAvailable: ordered(async (ctx) => {
+      await withdrawCopies(ctx);
+    }),
+    serverJoin: ordered(async (ctx) => {
+      await withdrawCopies(ctx);
+    }),
     channelUpdate: ordered(async (ctx, e) => {
       await withdrawCopies(ctx, e.channel.id);
     }),
@@ -532,12 +547,17 @@ export default definePlugin({
         if (t?.source !== "modmail" || t.status !== "open" || t.author.id !== member.id) continue;
         const channel = ticketChannel(ctx, t);
         if (!channel) return;
+        if (!(await relayAllowed(ctx, t, member))) {
+          ctx.log.warn("Modmail withheld after a permission change", { ticket: t.id });
+          await member.send(ctx.i18n.t("relayDenied"));
+          return;
+        }
         const copy = await channel.send({
           content: (text || ctx.i18n.t("attachment")).slice(0, 2000),
           allowedMentions: { users: false, roles: false, everyone: false },
         });
         t.copies = [...(t.copies ?? []), { userId: member.id, messageId: copy.id }];
-        await receivedReply(ctx, t, m.createdAt, false);
+        await receivedReply(ctx, t, m.createdAt, false, true);
         await ctx.kv.increment(activityKey(id));
         return;
       }
@@ -584,7 +604,7 @@ export default definePlugin({
           ];
         }
       }
-      await receivedReply(ctx, t, message.createdAt, staff);
+      await receivedReply(ctx, t, message.createdAt, staff, t.source === "modmail" && staff);
     }),
   },
 
@@ -617,7 +637,7 @@ export default definePlugin({
       access: "member",
       async handler(ctx, req) {
         const t = await ticketById(ctx, req.params.id);
-        if (failed(t) || !mayRead(ctx, t, req.viewer?.member, true))
+        if (failed(t) || !(await mayReadTranscript(ctx, t, req.viewer?.member)))
           return fail(404, "not_found", "No transcript");
         const format = req.query.format ?? "html";
         if (format !== "html" && format !== "markdown")
@@ -733,16 +753,21 @@ export default definePlugin({
         const open = await openTickets(ctx, viewer.user.id);
         if (open.length >= ctx.config.maxOpenPerMember)
           return fail(409, "limit", `you already have ${open.length} open ticket(s)`);
-        const { ticket } = await openTicket(ctx, {
-          user: viewer.user,
-          member: viewer.member,
-          subject,
-          description,
-          label,
-          source: "portal",
-          type,
-        });
-        return { status: 201, body: await myView(ctx, ticket) };
+        try {
+          const { ticket } = await openTicket(ctx, {
+            user: viewer.user,
+            member: viewer.member,
+            subject,
+            description,
+            label,
+            source: "portal",
+            type,
+          });
+          return { status: 201, body: await myView(ctx, ticket) };
+        } catch (error) {
+          if (error instanceof OpenLimit) return fail(409, "limit", error.message);
+          throw error;
+        }
       }),
     },
 
@@ -789,6 +814,12 @@ export default definePlugin({
         if (failed(reader)) return reader;
         const ticket = await staffTicket(ctx, request.params.id, request.viewer);
         if (failed(ticket)) return ticket;
+        if (
+          ticket.status === "closed" &&
+          ticket.expiresAt &&
+          !(await mayReadTranscript(ctx, ticket, request.viewer?.member))
+        )
+          return fail(404, "not_found", "No verified transcript source");
         return staffDetail(ctx, ticket);
       },
     },
