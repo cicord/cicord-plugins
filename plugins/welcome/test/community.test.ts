@@ -1,3 +1,4 @@
+import type { PluginDefinition } from "@cicord/sdk";
 import { expect, test, vi, afterEach, beforeEach } from "vite-plus/test";
 import { createTestContext } from "@cicord/sdk/testing";
 import schema from "../config.schema.json" with { type: "json" };
@@ -43,8 +44,9 @@ test("verified trigger waits, replay greets once, and privacy isolates two membe
   };
   await plugin.events!.memberJoin!(t.ctx, t.member("1")!);
   expect(t.sent).toHaveLength(0);
+  const subscriptions: NonNullable<PluginDefinition["subscriptions"]> = plugin.subscriptions!;
   const passed = (userId: string) =>
-    plugin.subscriptions!["verification.passed"]!(t.ctx, { userId, method: "code" }, meta);
+    subscriptions["verification.passed"]!(t.ctx, { userId, method: "code" }, meta);
   await passed("1");
   await passed("1");
   expect(t.sent).toHaveLength(1);
