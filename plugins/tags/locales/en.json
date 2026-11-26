@@ -5,5 +5,6 @@
   "commands.tag.name": "tag",
   "commands.tag.description": "Share a saved answer",
   "commands.tag.options.name.description": "Tag name or alias",
-  "commands.tag.options.user.description": "Mention a member"
+  "commands.tag.options.user.description": "Mention a member",
+  "contextMenus.Reply with a tag.name": "Reply with a tag"
 }

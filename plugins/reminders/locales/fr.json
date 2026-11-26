@@ -33,5 +33,6 @@
   "commands.timezone.set.name": "définir",
   "commands.timezone.set.description": "Définir votre fuseau horaire",
   "commands.timezone.set.options.zone.name": "zone",
-  "commands.timezone.set.options.zone.description": "Fuseau horaire"
+  "commands.timezone.set.options.zone.description": "Fuseau horaire",
+  "contextMenus.Remind me.name": "Me le rappeler"
 }

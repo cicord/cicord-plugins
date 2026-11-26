@@ -33,5 +33,6 @@
   "commands.timezone.set.name": "set",
   "commands.timezone.set.description": "Set your time zone",
   "commands.timezone.set.options.zone.name": "zone",
-  "commands.timezone.set.options.zone.description": "Time zone"
+  "commands.timezone.set.options.zone.description": "Time zone",
+  "contextMenus.Remind me.name": "Remind me"
 }

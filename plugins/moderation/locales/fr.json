@@ -207,5 +207,7 @@
   "quarantine.managed": "Discord gère un rôle de ce membre. Utilisez une exclusion temporaire.",
   "quarantine.left": "Ce membre a quitté le serveur.",
   "quarantine.duration": "La durée doit être comprise entre 1 et 10080 minutes.",
-  "quarantine.releaseFirst": "Levez la quarantaine actuelle avant de changer le rôle."
+  "quarantine.releaseFirst": "Levez la quarantaine actuelle avant de changer le rôle.",
+  "contextMenus.Warn.name": "Avertir",
+  "contextMenus.Purge after this message.name": "Purger après ce message"
 }

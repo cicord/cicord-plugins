@@ -23,5 +23,6 @@
   "message.noActiveConfirmation": "Aucune confirmation active.",
   "message.reviewCompleted": "Examen terminé.",
   "status.inviteLookup": "Les invitations du serveur sont illisibles. Vérifiez Gérer le serveur.",
-  "status.imageRead": "Une pièce jointe n’a pas pu être analysée."
+  "status.imageRead": "Une pièce jointe n’a pas pu être analysée.",
+  "contextMenus.Block image.name": "Bloquer cette image"
 }

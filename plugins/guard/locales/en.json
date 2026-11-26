@@ -23,5 +23,6 @@
   "message.noActiveConfirmation": "No active confirmation.",
   "message.reviewCompleted": "Review completed.",
   "status.inviteLookup": "Server invitations could not be read. Check ManageServer.",
-  "status.imageRead": "An attachment could not be analyzed."
+  "status.imageRead": "An attachment could not be analyzed.",
+  "contextMenus.Block image.name": "Block image"
 }

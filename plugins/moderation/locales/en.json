@@ -207,5 +207,7 @@
   "quarantine.managed": "Discord manages a target role. Use a timeout.",
   "quarantine.left": "Member left the server.",
   "quarantine.duration": "Duration must be 1–10080 minutes.",
-  "quarantine.releaseFirst": "Release the existing quarantine before changing its role."
+  "quarantine.releaseFirst": "Release the existing quarantine before changing its role.",
+  "contextMenus.Warn.name": "Warn",
+  "contextMenus.Purge after this message.name": "Purge after this message"
 }
