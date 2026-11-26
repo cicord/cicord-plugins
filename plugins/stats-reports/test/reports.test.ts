@@ -26,7 +26,9 @@ test("20 of 100 short stays, no raw join identifiers, report and counter retry l
       config: { staffChannel: "staff", counters: ["members.total"] },
       analytics: data,
       features: ["cohorts", "counters"],
-      channels: { staff: { name: "staff" } },
+      channels: {
+        staff: { name: "staff", overwrites: { "@everyone": { deny: ["ViewChannel"] } } },
+      },
       members: Array.from({ length: 100 }, (_, i) => ({
         id: String(1000 + i),
         joinedAt: new Date(now),
@@ -59,4 +61,80 @@ test("20 of 100 short stays, no raw join identifiers, report and counter retry l
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("concurrent triggers followed by a crash and a late retry never resend a report outside the nonce window", async () => {
+  vi.useFakeTimers();
+  const at = Date.parse("2030-01-08T12:00:00Z");
+  vi.setSystemTime(at);
+  try {
+    const h = createTestContext({
+      schema,
+      locales: { en, fr },
+      analytics: data,
+      config: { staffChannel: "staff" },
+      channels: {
+        staff: { name: "staff", overwrites: { "@everyone": { deny: ["ViewChannel"] } } },
+      },
+    });
+    const set = h.ctx.kv.set.bind(h.ctx.kv);
+    let crash = true;
+    h.ctx.kv.set = async (k, v, o) => {
+      if (
+        crash &&
+        k.startsWith("report:week") &&
+        v &&
+        typeof v === "object" &&
+        "state" in v &&
+        v.state === "done"
+      ) {
+        crash = false;
+        throw new Error("lost acknowledgement");
+      }
+      await set(k, v, o);
+    };
+    const run = () => plugin.schedules!.reports!.run(h.ctx);
+    await Promise.allSettled([run(), run()]);
+    const staff = h.ctx.server.channel("staff");
+    for (let i = 0; i < 60; i++) await staff.send("other message " + i);
+    vi.setSystemTime(at + 6 * 60000);
+    await run();
+    await run();
+    const embeds = h.sent.filter(
+      (m) => typeof m.message !== "string" && m.message.embeds?.[0]?.title?.includes("week"),
+    );
+    expect(embeds).toHaveLength(1);
+    expect(await h.ctx.kv.get("report:week:2030-01-07")).toMatchObject({ state: "uncertain" });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+test("counter creation is reserved before Discord runs and remains blocked after an unknown outcome", async () => {
+  const h = createTestContext({
+    schema,
+    locales: { en, fr },
+    config: { counters: ["members.total"] },
+  });
+  const create = h.ctx.server.createChannel.bind(h.ctx.server);
+  h.ctx.server.createChannel = async (opts) => {
+    await create(opts);
+    throw new Error("response lost");
+  };
+  await Promise.allSettled([updateCounters(h.ctx, data, 0), updateCounters(h.ctx, data, 0)]);
+  await updateCounters(h.ctx, data, 600000);
+  await updateCounters(h.ctx, data, 700000);
+  expect(h.createdChannels).toHaveLength(1);
+  expect(await h.ctx.kv.get("counter:members.total")).toMatchObject({ state: "uncertain" });
+});
+test("reports are withheld from public or unknown destinations", async () => {
+  const h = createTestContext({
+    schema,
+    locales: { en, fr },
+    analytics: data,
+    server: { everyonePermissions: ["ViewChannel", "ReadMessageHistory"] },
+    config: { staffChannel: "lobby" },
+    channels: { lobby: { name: "lobby" } },
+  });
+  await plugin.schedules!.reports!.run(h.ctx);
+  expect(h.sent).toHaveLength(0);
 });

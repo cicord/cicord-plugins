@@ -14,5 +14,9 @@
   "invites.uses": "Utilisations des invitations",
   "moderation.actions": "Actions de modération",
   "members.online": "En ligne",
-  "members.boosting": "Boosts"
+  "members.boosting": "Boosts",
+  "adminConfirm": "Confirmez la vérification en tant qu’administrateur du serveur.",
+  "noUncertain": "Aucune création incertaine pour cet indicateur.",
+  "needVoice": "Choisissez un compteur vocal existant.",
+  "resolved": "Récupération du compteur enregistrée."
 }

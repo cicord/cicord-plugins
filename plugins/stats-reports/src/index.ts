@@ -1,11 +1,28 @@
 import {
   definePlugin,
+  command,
   type Context,
   type AnalyticsSummary,
   type MessagePayload,
 } from "@cicord/sdk";
 const DAY = 86400000,
   MIN = 60000;
+const REPORT_TTL = 400 * 86400,
+  LEASE = 12000;
+type ReportReceipt = {
+  state: "running" | "done" | "uncertain";
+  first: number;
+  lease: number;
+  channel: string;
+  message?: string;
+};
+type Counter = {
+  id?: string;
+  state?: "creating" | "uncertain";
+  name: string;
+  renamed: number[];
+  lease?: number;
+};
 const day = (n: number) => new Date(n).toISOString().slice(0, 10);
 const iso = (n: number) => new Date(n).toISOString();
 function range(now: number, kind: "week" | "month") {
@@ -34,14 +51,40 @@ async function publish(ctx: Context, kind: "week" | "month") {
   const { from, to } = range(Date.now(), kind),
     key = `report:${kind}:${day(to)}`,
     marker = `Activity · ${kind} · ${day(from)} to ${day(to)} UTC`;
-  if (await ctx.kv.get(key)) return;
+  const previous = await ctx.kv.getEntry<ReportReceipt | boolean>(key);
+  if (previous?.value === true) return;
+  const rec = typeof previous?.value === "object" ? previous.value : undefined;
+  if (rec && rec.state !== "running") return;
   const channel = ctx.server.channel(ctx.config.staffChannel);
-  if (
-    (await channel.messages({ limit: 50 })).some(
-      (m) => m.author.id === ctx.bot.user.id && m.embeds.some((e) => e.title === marker),
-    )
-  ) {
-    await ctx.kv.set(key, true);
+  const audience = ctx.server.audience(channel);
+  if (!audience.known || audience.public) {
+    ctx.log.warn("Report destination must be a known, private staff channel.");
+    return;
+  }
+  const now = Date.now(),
+    first = rec?.first ?? now;
+  if (rec && now < rec.lease) return;
+  if (rec && (now - first >= MIN || rec.channel !== channel.id)) {
+    // Bounded recovery. An absent marker cannot establish that Discord never accepted a send.
+    const proof =
+      rec.channel === channel.id
+        ? (await channel.messages({ limit: 50 })).find(
+            (m) =>
+              m.author.id === ctx.bot.user.id &&
+              m.embeds.some((e) => e.footer?.text === key + "/" + ctx.plugin.instance),
+          )
+        : undefined;
+    const updated = await ctx.kv
+      .atomic()
+      .check(key, previous?.version)
+      .set(
+        key,
+        { ...rec, state: proof ? "done" : "uncertain", ...(proof ? { message: proof.id } : {}) },
+        { ttlSeconds: REPORT_TTL },
+      )
+      .commit();
+    if (!proof && updated.ok)
+      ctx.log.warn("Report delivery unconfirmed. Automatic retries have stopped.", { period: key });
     return;
   }
   const s = await ctx.analytics.summary({ from: iso(from), to: iso(to), granularity: "day" });
@@ -64,7 +107,15 @@ async function publish(ctx: Context, kind: "week" | "month") {
   );
   if (best) lines.push(ctx.i18n.t("peak", { when, best }));
   const payload: MessagePayload = {
-    embeds: [{ title: marker, description: lines.join("\n") }],
+    nonce: kind[0] + day(to),
+    enforceNonce: true,
+    embeds: [
+      {
+        title: marker,
+        description: lines.join("\n"),
+        footer: { text: key + "/" + ctx.plugin.instance },
+      },
+    ],
     allowedMentions: { roles: [], users: [], everyone: false },
   };
   if (ctx.features.enabled("charts")) {
@@ -92,8 +143,24 @@ async function publish(ctx: Context, kind: "week" | "month") {
       payload.embeds![0]!.image = { url: "attachment://activity.png" };
     }
   }
-  await channel.send(payload);
-  await ctx.kv.set(key, true);
+  const latest = ctx.server.audience(channel);
+  if (!latest.known || latest.public) return;
+  const claim = await ctx.kv
+    .atomic()
+    .check(key, previous?.version)
+    .set(
+      key,
+      { state: "running", first, lease: Date.now() + LEASE, channel: channel.id },
+      { ttlSeconds: REPORT_TTL },
+    )
+    .commit();
+  if (!claim.ok) return;
+  const message = await channel.send(payload);
+  await ctx.kv.set(
+    key,
+    { state: "done", first, lease: 0, channel: channel.id, message: message.id },
+    { ttlSeconds: REPORT_TTL },
+  );
 }
 export async function updateCounters(ctx: Context, s: AnalyticsSummary, now: number) {
   for (const metric of new Set(ctx.config.counters)) {
@@ -101,21 +168,102 @@ export async function updateCounters(ctx: Context, s: AnalyticsSummary, now: num
     if (!k) continue;
     const name = `${ctx.i18n.t(metric)}: ${Math.round(k.value)}`;
     const key = "counter:" + metric,
-      rec = await ctx.kv.get<{ id: string; name: string; renamed: number[] }>(key);
+      entry = await ctx.kv.getEntry<Counter>(key),
+      rec = entry?.value;
     if (!rec) {
-      const channel = await ctx.server.createChannel({ name, type: "voice" });
-      await ctx.kv.set(key, { id: channel.id, name, renamed: [] });
+      const claimed = await ctx.kv
+        .atomic()
+        .check(key, undefined)
+        .set(key, { name, state: "creating", lease: now + LEASE, renamed: [] })
+        .commit();
+      if (!claimed.ok) continue;
+      const ch = await ctx.server.createChannel({ name, type: "voice" });
+      await ctx.kv.set(key, { id: ch.id, name, renamed: [] });
+      continue;
+    }
+    if (!rec.id) {
+      if (rec.state === "creating" && now >= (rec.lease ?? 0)) {
+        const changed = await ctx.kv
+          .atomic()
+          .check(key, entry?.version)
+          .set(key, { ...rec, state: "uncertain" })
+          .commit();
+        if (changed.ok)
+          ctx.log.warn(
+            "Counter creation outcome unknown. Inspect Discord and resolve with /stats-counter.",
+            { metric },
+          );
+      }
       continue;
     }
     const recent = rec.renamed.filter((t) => t > now - 10 * MIN);
-    if (rec.name === name || recent.length >= 2) continue;
-    // Reserve the rename slot durably before Discord is called, including failed requests.
-    await ctx.kv.set(key, { ...rec, renamed: [...recent, now] });
+    if (rec.name === name || recent.length >= 2 || now < (rec.lease ?? 0)) continue;
+    const renamed = [...recent, now],
+      claimed = await ctx.kv
+        .atomic()
+        .check(key, entry?.version)
+        .set(key, { ...rec, renamed, lease: now + LEASE })
+        .commit();
+    if (!claimed.ok) continue;
     await ctx.server.editChannel({ id: rec.id }, { name });
-    await ctx.kv.set(key, { ...rec, name, renamed: [...recent, now] });
+    await ctx.kv.set(key, { id: rec.id, name, renamed });
   }
 }
 export default definePlugin({
+  commands: {
+    "stats-counter": command({
+      description: "Resolve an uncertain counter creation after inspecting Discord",
+      permissions: ["Administrator"],
+      ephemeral: true,
+      options: {
+        metric: {
+          type: "string",
+          required: true,
+          description: "Counter metric",
+          choices: [
+            { name: "Members", value: "members.total" },
+            { name: "Online", value: "members.online" },
+            { name: "Boosts", value: "members.boosting" },
+          ],
+        },
+        checked: {
+          type: "boolean",
+          required: true,
+          description: "I verified whether Discord created the channel",
+        },
+        channel: {
+          type: "channel",
+          description: "Existing owned voice counter; omit only when no channel was created",
+        },
+      },
+      async run(ctx, it) {
+        if (it.member?.access !== "admin" || !it.options.checked) {
+          await it.reply(ctx.i18n.t("adminConfirm"));
+          return;
+        }
+        const key = "counter:" + it.options.metric,
+          entry = await ctx.kv.getEntry<Counter>(key);
+        if (entry?.value.state !== "uncertain") {
+          await it.reply(ctx.i18n.t("noUncertain"));
+          return;
+        }
+        const channel = it.options.channel;
+        if (channel) {
+          if (channel.type !== "voice") {
+            await it.reply(ctx.i18n.t("needVoice"));
+            return;
+          }
+          // Host refuses edits to channels owned by Git, Discord users or another instance.
+          await ctx.server.editChannel(channel, { name: entry.value.name });
+        }
+        const change = ctx.kv.atomic().check(key, entry.version);
+        if (channel)
+          change.set(key, { id: channel.id, name: entry.value.name, renamed: [Date.now()] });
+        else change.delete(key);
+        await it.reply(ctx.i18n.t((await change.commit()).ok ? "resolved" : "noUncertain"));
+      },
+    }),
+  },
   events: {
     async memberJoin(ctx, m) {
       if (!ctx.features.enabled("cohorts")) return;

@@ -14,5 +14,9 @@
   "invites.uses": "Invitation uses",
   "moderation.actions": "Moderation actions",
   "members.online": "Online",
-  "members.boosting": "Boosts"
+  "members.boosting": "Boosts",
+  "adminConfirm": "Confirm the inspection as a server administrator.",
+  "noUncertain": "No unresolved creation exists for this metric.",
+  "needVoice": "Choose an existing voice counter.",
+  "resolved": "Counter recovery saved."
 }
