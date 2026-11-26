@@ -11,7 +11,9 @@ export type Passage = {
   thread?: string;
 };
 export function sections(raw: string, path: string, base: string): Passage[] {
+  raw = raw.replace(/^\uFEFF/, "");
   const header = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(raw);
+  if (!header && /^\s*---(?:\s|$)/.test(raw)) return [];
   let channel: string | undefined,
     title = path.split("/").at(-1)!.replace(/\.md$/i, "");
   if (header) {
@@ -21,6 +23,7 @@ export function sections(raw: string, path: string, base: string): Passage[] {
       // An unrecognised access declaration must never make a document public.
       if (!field) return [];
       if (field[1] === "channel") {
+        if (channel !== undefined) return [];
         channel = field[2]!.trim();
         if (!/^[a-z][a-z0-9-]{0,62}$/.test(channel)) return [];
       } else title = field[2]!.trim();
@@ -81,6 +84,7 @@ export async function searchKnowledge(
   question: string,
   user: Member,
   dest?: Channel,
+  tags?: Passage[],
 ): Promise<Passage[]> {
   const hits = (
       await Promise.all([
@@ -124,12 +128,28 @@ export async function searchKnowledge(
     if (p && visible(ctx, p, user, dest)) out.push(p);
     if (out.length >= 5) break;
   }
+  out.push(
+    ...(tags ?? (await tagSources(ctx, question, user, dest))).filter((p) =>
+      visible(ctx, p, user, dest),
+    ),
+  );
+  return out.slice(0, 6);
+}
+
+export async function tagSources(
+  ctx: Context,
+  question: string,
+  user: Member,
+  dest?: Channel,
+): Promise<Passage[]> {
+  const out: Passage[] = [];
   if (ctx.features.enabled("tags") && ctx.plugins.has("tags")) {
     try {
       const response = (await ctx.plugins.query("tags", "search", {
         query: question,
         limit: 3,
       })) as { entries: { name: string; text: string; url?: string; channel?: string }[] };
+      ctx.status.set("tags", null);
       for (const t of response.entries) {
         if (!t.url || !/^https:\/\/[^\s<>]+$/.test(t.url)) continue;
         const p = {
@@ -144,5 +164,5 @@ export async function searchKnowledge(
       ctx.status.set("tags", "Tag search is unavailable");
     }
   }
-  return out.slice(0, 6);
+  return out;
 }

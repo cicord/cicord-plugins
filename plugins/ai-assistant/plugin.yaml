@@ -28,6 +28,7 @@ spec:
       description: Anthropic API credential
       required: true
       hosts: [api.anthropic.com]
+      budget: { provider: anthropic-messages, dailyLimitConfig: dailyTokenBudget }
   optional:
     - feature: tags
       capabilities: [plugins.query:tags.search]

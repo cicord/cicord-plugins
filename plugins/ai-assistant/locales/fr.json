@@ -15,5 +15,6 @@
   "commands.ask.question.options.question.description": "Votre question",
   "commands.ask.optout.name": "participation",
   "commands.ask.optout.description": "Modifier votre préférence de participation",
-  "commands.ask.optout.options.enabled.description": "Désactiver le traitement par l’assistant pour votre compte"
+  "commands.ask.optout.options.enabled.description": "Désactiver le traitement par l’assistant pour votre compte",
+  "queued": "Recherche en cours. Vous pouvez aussi contacter le support."
 }

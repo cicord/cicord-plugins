@@ -36,12 +36,10 @@ async function poll(ctx: Context, feed: Feed) {
         .trim()
         .slice(0, 2000);
       try {
-        await ctx.server
-          .channel(feed.channel)
-          .send({
-            content,
-            allowedMentions: { users: false, roles: role ? [role.id] : false, everyone: false },
-          });
+        await ctx.server.channel(feed.channel).send({
+          content,
+          allowedMentions: { users: false, roles: role ? [role.id] : false, everyone: false },
+        });
       } catch {
         ctx.status.set("delivery:" + feed.id, ctx.i18n.t("uncertain"));
         throw new Error("Feed send uncertain");

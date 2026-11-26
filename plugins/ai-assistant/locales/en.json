@@ -15,5 +15,6 @@
   "commands.ask.question.options.question.description": "Your question",
   "commands.ask.optout.name": "optout",
   "commands.ask.optout.description": "Change your participation preference",
-  "commands.ask.optout.options.enabled.description": "Disable assistant processing for your account"
+  "commands.ask.optout.options.enabled.description": "Disable assistant processing for your account",
+  "queued": "Looking up your question. You can also contact the help desk."
 }
