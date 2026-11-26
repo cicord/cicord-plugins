@@ -621,11 +621,20 @@ export default definePlugin({
         const t = await staffTicket(ctx, req.params.id, req.viewer);
         if (failed(t)) return t;
         if (!ctx.features.enabled("caseContext")) return { cases: [] };
-        return (await ctx.plugins.query("moderation", "cases", {
+        const result = (await ctx.plugins.query("moderation", "cases", {
           userId: t.author.id,
           limit: 10,
         })) as {
           cases: { number: number; action: string; status: string; reason: string; at: string }[];
+        };
+        return {
+          cases: result.cases.map(({ number, action, status, reason, at }) => ({
+            number,
+            action,
+            status,
+            reason,
+            at,
+          })),
         };
       },
     },
