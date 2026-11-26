@@ -3,7 +3,7 @@ declare module "@cicord/sdk" {
   interface PluginConfig {
     title: string;
     intro: string;
-    steps: {
+    steps?: {
       id: string;
       title: string;
       description: string;
@@ -20,6 +20,8 @@ declare module "@cicord/sdk" {
     successMessage: string;
     linkMessage: string;
     buttonLabel: string;
+    enabled: boolean;
+    locale?: "en" | "fr";
   }
 }
 export {};

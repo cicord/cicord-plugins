@@ -2,7 +2,6 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Welcome plugin config",
   "type": "object",
-  "required": ["channel"],
   "properties": {
     "channel": {
       "description": "Channel where welcome messages are posted.",
@@ -25,7 +24,82 @@
       "description": "Send a DM with a link to the onboarding page of the portal.",
       "type": "boolean",
       "default": true
+    },
+    "trigger": {
+      "type": "string",
+      "description": "When to greet a member.",
+      "enum": [
+        "join",
+        "verified",
+        "onboarded"
+      ],
+      "default": "join"
+    },
+    "variants": {
+      "type": "array",
+      "description": "Alternate greeting templates.",
+      "items": {
+        "type": "string",
+        "description": "Greeting.",
+        "minLength": 1,
+        "maxLength": 1800
+      },
+      "maxItems": 25,
+      "default": []
+    },
+    "leaveMessage": {
+      "type": "string",
+      "description": "Optional farewell template.",
+      "minLength": 1,
+      "maxLength": 1800
+    },
+    "templateFile": {
+      "type": "string",
+      "description": "Path in the instance files grant to a greeting template.",
+      "minLength": 1
+    },
+    "card": {
+      "type": "boolean",
+      "description": "Render an avatar and member-number card.",
+      "default": false
+    },
+    "showInviter": {
+      "type": "boolean",
+      "description": "Append the known inviter when available.",
+      "default": false
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Enable this plugin instance.",
+      "default": true
+    },
+    "locale": {
+      "type": "string",
+      "description": "Override the language of this instance.",
+      "enum": [
+        "en",
+        "fr"
+      ]
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": false
+          }
+        },
+        "required": [
+          "enabled"
+        ]
+      },
+      "else": {
+        "required": [
+          "channel"
+        ]
+      }
+    }
+  ]
 }

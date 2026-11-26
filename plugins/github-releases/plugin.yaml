@@ -3,7 +3,7 @@ apiVersion: cicord.dev/v1alpha1
 kind: Plugin
 metadata:
   name: github-releases
-  version: 0.1.0
+  version: 0.2.0
   displayName: GitHub releases
   description: Announces the releases of public GitHub repositories in your channels, with the release notes, an optional role ping and pre-releases on request. /changelog shows the latest release of a repository or checks now.
   license: Apache-2.0
@@ -11,7 +11,7 @@ metadata:
   homepage: https://github.com/cicord/cicord-plugins/tree/main/plugins/github-releases#readme
   keywords: [github, releases, changelog, announcements]
 spec:
-  engine: ">=0.1.0"
+  engine: ">=0.2.0-0"
   entry: ./src/index.ts
   capabilities:
     - discord.messages.send     # the release announcements
@@ -23,3 +23,5 @@ spec:
     allow: [api.github.com]
   config:
     schema: ./config.schema.json
+  delivery: at-least-once
+  locales: ./locales

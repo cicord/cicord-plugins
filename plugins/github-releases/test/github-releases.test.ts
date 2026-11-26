@@ -9,6 +9,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 import schema from "../config.schema.json" with { type: "json" };
 import { checkFeeds, feedKey, type FeedState } from "../src/feeds.ts";
 import { rateLimit } from "../src/github.ts";
+import en from "../locales/en.json" with { type: "json" };
+import fr from "../locales/fr.json" with { type: "json" };
 import plugin from "../src/index.ts";
 import { DESCRIPTION_LIMIT, trimNotes } from "../src/render.ts";
 
@@ -97,6 +99,7 @@ class FakeGitHub {
 
 function setup(config: Record<string, unknown> = {}, gh = new FakeGitHub()) {
   const t = createTestContext({
+    locales: { en, fr },
     schema,
     config: { feeds: [{ repo: "cicord/cicord", channel: "changelog" }], ...config },
     grants,
@@ -387,6 +390,7 @@ describe("polling", () => {
     const feeds = ["a", "b", "c"].map((n) => ({ repo: `cicord/${n}`, channel: "changelog" }));
     for (const f of feeds) gh.set(f.repo, []);
     const t = createTestContext({
+      locales: { en, fr },
       schema,
       config: { feeds },
       grants,

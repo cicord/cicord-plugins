@@ -1,0 +1,38 @@
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: channel-automations
+  version: 0.1.0
+  displayName: Channel automations
+  description: Per-channel thread, reaction, publication, media and cleanup rules.
+  license: Apache-2.0
+spec:
+  engine: ">=0.2.0-0"
+  entry: ./src/index.ts
+  capabilities:
+    - storage.kv # persist plugin state
+    - scheduler # durable timers and periodic work
+    - discord.channels.read # resolve destination channels
+    - discord.messages.read # re-read original messages
+  intents: [ServerMessages]
+  optional:
+    - feature: threads
+      capabilities: [discord.threads.manage]
+    - feature: reactions
+      capabilities: [discord.reactions.manage]
+    - feature: crosspost
+      capabilities: [discord.messages.send]
+    - feature: cleanup
+      capabilities: [discord.messages.manage]
+    - feature: mediaOnly
+      capabilities: [discord.messages.manage, discord.dm.send, discord.members.read]
+      intents: [MessageContent]
+  config:
+    schema: ./config.schema.json
+  delivery: at-least-once
+  locales: ./locales
+  privacy:
+    records:
+      - name: members
+        policy: erase
+        description: Rate limits and pending cleanup for authored messages.

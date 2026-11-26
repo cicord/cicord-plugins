@@ -1,0 +1,1 @@
+{"input":{"type":"object","required":["userId"],"properties":{"userId":{"type":"string","maxLength":64}},"additionalProperties":false},"output":{"type":"object","properties":{"timeZone":{"type":"string"}},"additionalProperties":false}}

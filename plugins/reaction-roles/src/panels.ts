@@ -87,12 +87,12 @@ function lines(options: ResolvedOption[]): string[] {
 }
 
 function footer(panel: Panel, ctx: Context): string {
-  const parts = [panel.mode === "single" ? "Pick one role." : "Pick as many roles as you like."];
-  if (panel.style === "reactions") parts.push("Remove your reaction to give the role back.");
-  else parts.push("Pick a role again to remove it.");
+  const parts = [panel.mode === "single" ? ctx.i18n.t("single") : ctx.i18n.t("multiple")];
+  if (panel.style === "reactions") parts.push(ctx.i18n.t("unreact"));
+  else parts.push(ctx.i18n.t("unpick"));
   if (panel.requiredRole) {
     try {
-      parts.push(`Requires the ${ctx.server.role(panel.requiredRole).name} role.`);
+      parts.push(ctx.i18n.t("requires", { role: ctx.server.role(panel.requiredRole).name }));
     } catch {
       // unknown role: the click handler explains it
     }
@@ -129,7 +129,7 @@ export function renderPanel(ctx: Context, panel: Panel, options: ResolvedOption[
         {
           type: "select",
           id: selectId(panel.name),
-          placeholder: panel.mode === "single" ? "Choose a role" : "Choose your roles",
+          placeholder: panel.mode === "single" ? ctx.i18n.t("choose") : ctx.i18n.t("chooseMany"),
           minValues: 0,
           maxValues: panel.mode === "single" ? 1 : options.length,
           options: options.map((o) => ({
@@ -145,7 +145,7 @@ export function renderPanel(ctx: Context, panel: Panel, options: ResolvedOption[
   return {
     embeds: [
       {
-        title: panel.title,
+        title: panel.title === "Pick your roles" ? ctx.i18n.t("panelTitle") : panel.title,
         ...(text.length > 0 ? { description: text.join("\n\n") } : {}),
         color: panel.color,
         footer: { text: footer(panel, ctx) },
@@ -182,10 +182,6 @@ export function isForbidden(error: unknown): boolean {
 }
 
 /** What to tell a member (and log) when a role cannot be given or taken. */
-export function hierarchyHelp(roleName: string): string {
-  return (
-    `I can't change the **${roleName}** role: my highest role must be above it ` +
-    "(Server settings → Roles: drag my role above it) and I need the Manage Roles permission. " +
-    "Please tell an admin."
-  );
+export function hierarchyHelp(ctx: Context, roleName: string): string {
+  return ctx.i18n.t("hierarchy", { role: roleName });
 }

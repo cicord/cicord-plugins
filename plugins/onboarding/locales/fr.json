@@ -1,0 +1,11 @@
+{
+  "disabled": "Ce plugin est désactivé.",
+  "title": "Bienvenue !",
+  "linkMessage": "Choisissez vos rôles sur le portail communautaire :",
+  "buttonLabel": "Ouvrir le parcours",
+  "successMessage": "Tout est prêt !",
+  "memberOnly": "Seuls les membres du serveur peuvent suivre ce parcours.",
+  "roleError": "La mise à jour des rôles a échoué. Réessayez.",
+  "commands.onboarding.name": "accueil",
+  "commands.onboarding.description": "Choisir vos rôles sur le portail communautaire"
+}

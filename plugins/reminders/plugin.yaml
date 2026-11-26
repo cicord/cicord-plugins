@@ -1,0 +1,30 @@
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: reminders
+  version: 0.1.0
+  displayName: Reminders
+  description: Private and channel reminders with local dates, repeat intervals and snooze.
+  license: Apache-2.0
+spec:
+  engine: ">=0.2.0-0"
+  entry: ./src/index.ts
+  capabilities:
+    - storage.kv # persist plugin state
+    - scheduler # durable timers and periodic work
+    - discord.dm.send # deliver private notifications
+    - discord.members.read # resolve members at delivery
+    - discord.channels.read # resolve destination channels
+    - discord.messages.send # post configured messages
+  interop:
+    types: ./src/contracts.ts
+    provides: { queries: [timezone] }
+  config:
+    schema: ./config.schema.json
+  delivery: at-least-once
+  locales: ./locales
+  privacy:
+    records:
+      - name: members
+        policy: erase
+        description: Private time zone, reminder text, delivery and snooze records.

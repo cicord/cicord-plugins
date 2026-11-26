@@ -1,6 +1,8 @@
 import { callRoute, createTestContext, runCommand } from "@cicord/sdk/testing";
 import { describe, expect, test } from "vite-plus/test";
 import schema from "../config.schema.json" with { type: "json" };
+import en from "../locales/en.json" with { type: "json" };
+import fr from "../locales/fr.json" with { type: "json" };
 import plugin from "../src/index.ts";
 
 const config = {
@@ -34,6 +36,7 @@ const grants = ["discord.roles.assign", "storage.kv", "portal.routes", "portal.l
 
 function setup(memberRoles: string[] = []) {
   return createTestContext({
+    locales: { en, fr },
     config,
     schema, // applies the config defaults like the runtime (e.g. steps[].multiple)
     grants,

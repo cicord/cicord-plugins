@@ -245,6 +245,59 @@
       "minimum": 0,
       "maximum": 60,
       "default": 10
+    },
+    "crosspost": {
+      "type": "boolean",
+      "description": "Crosspost announcements in announcement channels.",
+      "default": false
+    },
+    "stickies": {
+      "type": "array",
+      "description": "Sticky messages kept at the bottom of their channels.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "channel": {
+            "type": "string",
+            "description": "Channel receiving the sticky message.",
+            "x-cicord-ref": "channel",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "description": "Sticky text.",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "afterMessages": {
+            "type": "integer",
+            "description": "Posts between refreshes.",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 10
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "channel",
+          "message"
+        ]
+      },
+      "maxItems": 50,
+      "default": []
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Enable this plugin instance.",
+      "default": true
+    },
+    "locale": {
+      "type": "string",
+      "description": "Override the language of this instance.",
+      "enum": [
+        "en",
+        "fr"
+      ]
     }
   },
   "additionalProperties": false

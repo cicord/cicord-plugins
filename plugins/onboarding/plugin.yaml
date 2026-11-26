@@ -3,18 +3,26 @@ apiVersion: cicord.dev/v1alpha1
 kind: Plugin
 metadata:
   name: onboarding
-  version: 0.1.0
+  version: 0.2.0
   displayName: Onboarding
   description: Step-by-step role picking on the community portal (games, platforms, notifications…), with a /onboarding command that links to it.
   license: Apache-2.0
   keywords: [onboarding, roles, portal]
 spec:
-  engine: ">=0.1.0"
+  engine: ">=0.2.0-0"
   entry: ./src/index.ts
   capabilities:
     - discord.roles.assign
     - storage.kv
+    - scheduler # migrate stored choices in bounded batches
     - portal.routes
     - portal.links
   config:
     schema: ./config.schema.json
+  delivery: at-least-once
+  locales: ./locales
+  privacy:
+    records:
+      - name: members
+        policy: erase
+        description: Role choices and last completion time.

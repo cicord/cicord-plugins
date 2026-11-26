@@ -31,6 +31,14 @@ declare module "@cicord/sdk" {
     color: string;
     maxScheduled: number;
     catchUpMinutes: number;
+    crosspost: boolean;
+    stickies: {
+      channel: string;
+      message: string;
+      afterMessages: number;
+    }[];
+    enabled: boolean;
+    locale?: "en" | "fr";
   }
 }
 export {};

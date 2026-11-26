@@ -1,0 +1,43 @@
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: birthdays
+  version: 0.1.0
+  displayName: Birthdays
+  description: Opt-in birthday greetings and 24-hour roles using each member’s local date.
+  license: Apache-2.0
+spec:
+  engine: ">=0.2.0-0"
+  entry: ./src/index.ts
+  capabilities:
+    - storage.kv # persist plugin state
+    - scheduler # durable timers and periodic work
+    - discord.channels.read # resolve destination channels
+    - discord.messages.send # post configured messages
+    - discord.members.read # resolve members at delivery
+    - events.publish # publish the declared event
+    - portal.routes # serve access-controlled forms
+  intents: [ServerMembers]
+  optional:
+    - feature: personalTimeZone
+      capabilities: [plugins.query:reminders.timezone]
+    - feature: temporaryRole
+      capabilities: [plugins.call:member-roles.grantTemporary]
+    - feature: directRole
+      capabilities: [discord.roles.assign]
+  interop:
+    types: ./src/contracts.ts
+    publishes:
+      - { topic: today, version: 1, scope: server }
+    consumes: { queries: [reminders.timezone], actions: [member-roles.grantTemporary] }
+  config:
+    schema: ./config.schema.json
+  delivery: at-least-once
+  locales: ./locales
+  privacy:
+    records:
+      - name: members
+        policy: erase
+        description: Opt-in day, month, celebration and temporary role receipt.
+  routes:
+    types: ./src/routes.ts

@@ -18,6 +18,8 @@ declare module "@cicord/sdk" {
       }[];
     }[];
     syncOnStart: boolean;
+    enabled: boolean;
+    locale?: "en" | "fr";
   }
 }
 export {};

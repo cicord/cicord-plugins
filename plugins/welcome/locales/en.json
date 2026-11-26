@@ -1,0 +1,15 @@
+{
+  "disabled": "This plugin is disabled.",
+  "greeting": "Welcome {member} to {server}!",
+  "number": "Member #{number}",
+  "inviter": "Invited by {member}.",
+  "dm": "Welcome to **{server}**! Pick your roles in 30 seconds:",
+  "start": "Get started",
+  "stats": "Members welcomed: {total}.",
+  "commands.welcome-preview.name": "welcome-preview",
+  "commands.welcome-preview.description": "Preview the welcome message",
+  "commands.welcome-preview.options.member.name": "member",
+  "commands.welcome-preview.options.member.description": "Member to greet (defaults to you)",
+  "commands.welcome-stats.name": "welcome-stats",
+  "commands.welcome-stats.description": "How many members were welcomed"
+}

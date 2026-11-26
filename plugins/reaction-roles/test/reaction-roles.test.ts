@@ -2,6 +2,8 @@ import type { Message, MessagePayload, SelectMenu } from "@cicord/sdk";
 import { createTestContext, runCommand, runComponent } from "@cicord/sdk/testing";
 import { describe, expect, test } from "vite-plus/test";
 import schema from "../config.schema.json" with { type: "json" };
+import en from "../locales/en.json" with { type: "json" };
+import fr from "../locales/fr.json" with { type: "json" };
 import plugin from "../src/index.ts";
 import { apiEmoji, displayEmoji, normalizeEmoji } from "../src/panels.ts";
 
@@ -50,6 +52,7 @@ const panels = [
 
 function setup(config: Record<string, unknown> = {}) {
   return createTestContext({
+    locales: { en, fr },
     schema,
     config: { panels, ...config },
     grants,
@@ -302,6 +305,7 @@ test("a reaction panel offers at most 20 options (Discord's reaction limit)", as
     Array.from({ length: 22 }, (_, i) => [`r${i}`, { name: `R${i}` }]),
   );
   const t = createTestContext({
+    locales: { en, fr },
     schema,
     config: {
       panels: [

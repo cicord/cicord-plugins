@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Channel automations configuration",
+  "type": "object",
+  "properties": {
+    "rules": {
+      "type": "array",
+      "description": "Ordered channel policies, one entry per channel.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "channel": {
+            "type": "string",
+            "description": "Channel governed by this rule.",
+            "x-cicord-ref": "channel",
+            "minLength": 1
+          },
+          "autoThread": {
+            "type": "string",
+            "description": "Thread title template. Use {author} and {id}.",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "autoReact": {
+            "type": "array",
+            "description": "Reactions added to a new member post.",
+            "items": {
+              "type": "string",
+              "description": "Emoji name or Unicode emoji.",
+              "minLength": 1
+            },
+            "maxItems": 10,
+            "uniqueItems": true
+          },
+          "autoCrosspost": {
+            "type": "boolean",
+            "description": "Publish messages in announcement channels.",
+            "default": false
+          },
+          "mediaOnly": {
+            "type": "boolean",
+            "description": "Require an attachment or HTTP(S) link.",
+            "default": false
+          },
+          "autoDelete": {
+            "type": "integer",
+            "description": "Delete unpinned messages after these hours.",
+            "minimum": 1,
+            "maximum": 8760
+          },
+          "onePostPer": {
+            "type": "integer",
+            "description": "Minimum interval in minutes per author.",
+            "minimum": 1,
+            "maximum": 43200
+          },
+          "cleanBots": {
+            "type": "integer",
+            "description": "Delete unpinned bot replies after these minutes.",
+            "minimum": 1,
+            "maximum": 43200
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "channel"
+        ]
+      },
+      "maxItems": 100,
+      "minItems": 1
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Enable this plugin instance.",
+      "default": true
+    },
+    "locale": {
+      "type": "string",
+      "description": "Override the language of this instance.",
+      "enum": [
+        "en",
+        "fr"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": false
+          }
+        },
+        "required": [
+          "enabled"
+        ]
+      },
+      "else": {
+        "required": [
+          "rules"
+        ]
+      }
+    }
+  ]
+}

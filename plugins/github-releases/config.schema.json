@@ -2,9 +2,6 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "GitHub releases plugin config",
   "type": "object",
-  "required": [
-    "feeds"
-  ],
   "properties": {
     "feeds": {
       "description": "Repositories whose releases are announced, each in its own channel. The same repository may be listed twice (e.g. stable releases in one channel, pre-releases in another).",
@@ -72,7 +69,39 @@
       "default": "#2da44e",
       "x-cicord-widget": "color",
       "x-cicord-access": "moderator"
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Enable this plugin instance.",
+      "default": true
+    },
+    "locale": {
+      "type": "string",
+      "description": "Override the language of this instance.",
+      "enum": [
+        "en",
+        "fr"
+      ]
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": false
+          }
+        },
+        "required": [
+          "enabled"
+        ]
+      },
+      "else": {
+        "required": [
+          "feeds"
+        ]
+      }
+    }
+  ]
 }

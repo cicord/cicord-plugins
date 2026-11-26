@@ -1,7 +1,7 @@
 import type { Context, Embed, MessagePayload, PluginConfig } from "@cicord/sdk";
 import type { Release } from "./github.ts";
 
-export type Feed = PluginConfig["feeds"][number];
+export type Feed = NonNullable<PluginConfig["feeds"]>[number];
 
 /** Discord's embed limits (the whole embed must stay under 6000 characters). */
 export const TITLE_LIMIT = 256;
@@ -26,9 +26,14 @@ const oneLine = (s: string, max: number): string => {
  * The release notes, trimmed to `limit` with a link to the full notes when cut: the cut is
  * made at a line break when there is one near the end, and an open code block is closed.
  */
-export function trimNotes(body: string, url: string, limit = DESCRIPTION_LIMIT): string {
+export function trimNotes(
+  body: string,
+  url: string,
+  limit = DESCRIPTION_LIMIT,
+  readMore = "Read the full notes",
+): string {
   if (body.length <= limit) return body;
-  const more = url ? `\n\n… [Read the full notes](${url})` : "\n\n…";
+  const more = url ? `\n\n… [${readMore}](${url})` : "\n\n…";
   const fence = "\n```";
   let text = cut(body, limit - more.length - fence.length);
   const nl = text.lastIndexOf("\n");
@@ -43,7 +48,9 @@ export const displayName = (feed: Feed): string => feed.label ?? feed.repo;
 /** The announcement embed of a release. */
 export function releaseEmbed(ctx: Context, feed: Feed, r: Release): Embed {
   const heading = r.name && r.name !== r.tag ? `**${oneLine(r.name, 200)}**\n\n` : "";
-  const notes = r.body ? trimNotes(r.body, r.url, DESCRIPTION_LIMIT - heading.length) : "";
+  const notes = r.body
+    ? trimNotes(r.body, r.url, DESCRIPTION_LIMIT - heading.length, ctx.i18n.t("readMore"))
+    : "";
   const description = heading + notes;
   return {
     title: oneLine(`${displayName(feed)} ${r.tag}`, TITLE_LIMIT),
@@ -60,7 +67,9 @@ export function releaseEmbed(ctx: Context, feed: Feed, r: Release): Embed {
         }
       : {}),
     ...(r.prerelease
-      ? { fields: [{ name: "🧪 Pre-release", value: "Not a stable release.", inline: true }] }
+      ? {
+          fields: [{ name: ctx.i18n.t("prerelease"), value: ctx.i18n.t("unstable"), inline: true }],
+        }
       : {}),
     footer: { text: feed.repo },
     timestamp: r.publishedAt,

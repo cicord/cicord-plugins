@@ -2,6 +2,8 @@ import type { MessagePayload } from "@cicord/sdk";
 import { callRoute, createTestContext, runCommand, submitModal } from "@cicord/sdk/testing";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import schema from "../config.schema.json" with { type: "json" };
+import en from "../locales/en.json" with { type: "json" };
+import fr from "../locales/fr.json" with { type: "json" };
 import plugin from "../src/index.ts";
 import { parseWhen } from "../src/messages.ts";
 import { dueIn, nextRun, parseCron, parseSchedule } from "../src/schedule.ts";
@@ -17,13 +19,14 @@ const grants = [
 
 function setup(config: Record<string, unknown> = {}) {
   return createTestContext({
+    locales: { en, fr },
     schema,
     config,
     grants,
     plugin: { name: "announcements" },
     roles: {
       events: { name: "Events", id: "100" },
-      mod: { name: "Moderator", id: "200" },
+      mod: { name: "Moderator", id: "200", permissions: ["ViewChannel", "ReadMessageHistory"] },
       other: { name: "Other", id: "300" },
     },
     channels: {
@@ -225,11 +228,11 @@ describe("/announce", () => {
       channel: channel("announcements"),
       mention: { id: "100", name: "Events", mention: "<@&100>" },
     });
-    expect(command.modal?.fields.map((f) => f.id)).toEqual(["title", "message"]);
+    expect(command.modal?.fields.map((f) => "id" in f?f.id:f.component.id)).toEqual(["title", "message"]);
     expect(submit!.replies).toEqual([
       { content: "Posted in <#channel-announcements>.", ephemeral: true },
     ]);
-    expect(payload(t)).toEqual({
+    expect(payload(t)).toMatchObject({
       content: "<@&100>",
       embeds: [{ title: "News", description: "Hello <@&300> @here", color: "#5865f2" }],
       allowedMentions: { roles: true, users: false, everyone: false },

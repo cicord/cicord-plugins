@@ -1,0 +1,15 @@
+{
+  "disabled": "Ce plugin est désactivé.",
+  "greeting": "Bienvenue {member} sur {server} !",
+  "number": "Membre nº {number}",
+  "inviter": "Invitation de {member}.",
+  "dm": "Bienvenue sur **{server}** ! Choisissez vos rôles en 30 secondes.",
+  "start": "Choisir mes rôles",
+  "stats": "Membres accueillis : {total}.",
+  "commands.welcome-preview.name": "aperçu-bienvenue",
+  "commands.welcome-preview.description": "Prévisualiser le message de bienvenue",
+  "commands.welcome-preview.options.member.name": "membre",
+  "commands.welcome-preview.options.member.description": "Membre à accueillir (vous par défaut)",
+  "commands.welcome-stats.name": "stats-bienvenue",
+  "commands.welcome-stats.description": "Afficher le nombre de membres accueillis"
+}

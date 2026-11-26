@@ -3,7 +3,6 @@
   "title": "Onboarding plugin config",
   "description": "Steps shown on the portal's /onboarding page. Members only ever get or lose the roles listed here (and completedRole).",
   "type": "object",
-  "required": ["steps"],
   "properties": {
     "title": {
       "description": "Heading of the onboarding page.",
@@ -29,15 +28,27 @@
       "x-cicord-access": "moderator",
       "items": {
         "type": "object",
-        "required": ["id", "title", "options"],
+        "required": [
+          "id",
+          "title",
+          "options"
+        ],
         "properties": {
           "id": {
             "description": "Stable identifier of the step (used in answers).",
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]{0,31}$"
           },
-          "title": { "type": "string", "minLength": 1, "maxLength": 100 },
-          "description": { "type": "string", "maxLength": 300, "default": "" },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 300,
+            "default": ""
+          },
           "multiple": {
             "description": "Several roles can be picked in this step.",
             "type": "boolean",
@@ -54,12 +65,28 @@
             "maxItems": 25,
             "items": {
               "type": "object",
-              "required": ["role"],
+              "required": [
+                "role"
+              ],
               "properties": {
-                "role": { "description": "Role given when picked.", "type": "string", "x-cicord-ref": "role" },
-                "label": { "description": "Defaults to the role name.", "type": "string", "maxLength": 80 },
-                "emoji": { "type": "string", "maxLength": 16 },
-                "description": { "type": "string", "maxLength": 150 }
+                "role": {
+                  "description": "Role given when picked.",
+                  "type": "string",
+                  "x-cicord-ref": "role"
+                },
+                "label": {
+                  "description": "Defaults to the role name.",
+                  "type": "string",
+                  "maxLength": 80
+                },
+                "emoji": {
+                  "type": "string",
+                  "maxLength": 16
+                },
+                "description": {
+                  "type": "string",
+                  "maxLength": 150
+                }
               },
               "additionalProperties": false
             }
@@ -95,7 +122,39 @@
       "maxLength": 80,
       "default": "Open onboarding",
       "x-cicord-access": "moderator"
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Enable this plugin instance.",
+      "default": true
+    },
+    "locale": {
+      "type": "string",
+      "description": "Override the language of this instance.",
+      "enum": [
+        "en",
+        "fr"
+      ]
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": false
+          }
+        },
+        "required": [
+          "enabled"
+        ]
+      },
+      "else": {
+        "required": [
+          "steps"
+        ]
+      }
+    }
+  ]
 }

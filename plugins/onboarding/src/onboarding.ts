@@ -4,7 +4,7 @@
  */
 import type { Context, Json, Member, PluginConfig, Role } from "@cicord/sdk";
 
-type StepConfig = PluginConfig["steps"][number];
+type StepConfig = NonNullable<PluginConfig["steps"]>[number];
 
 // ───────────────────────────────────────────────────────────── contract (JSON shapes)
 
@@ -134,7 +134,7 @@ export function resolveSteps(
     ? tryRole(ctx, ctx.config.completedRole)
     : undefined;
   return {
-    title: ctx.config.title,
+    title: ctx.config.title === "Welcome!" ? ctx.i18n.t("title") : ctx.config.title,
     intro: ctx.config.intro,
     steps,
     completedRole: completedRole ? toOnboardingRole(completedRole) : null,

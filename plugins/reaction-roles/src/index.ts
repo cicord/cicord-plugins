@@ -47,10 +47,10 @@ function offered(ctx: Context, panel: Panel): { options: ResolvedOption[]; skipp
   return {
     options: withEmoji.slice(0, MAX_REACTIONS),
     skipped: [
-      ...all.filter((o) => !o.emoji).map((o) => `${o.roleName} (no emoji)`),
+      ...all.filter((o) => !o.emoji).map((o) => ctx.i18n.t("noEmoji", { role: o.roleName })),
       ...withEmoji
         .slice(MAX_REACTIONS)
-        .map((o) => `${o.roleName} (over Discord's ${MAX_REACTIONS}-reaction limit)`),
+        .map((o) => ctx.i18n.t("overLimit", { role: o.roleName, n: MAX_REACTIONS })),
     ],
   };
 }
@@ -106,17 +106,9 @@ async function addReactions(ctx: Context, message: Message, options: ResolvedOpt
   }
 }
 
-const STATUS_TEXT: Record<SyncStatus, string> = {
-  posted: "posted in",
-  updated: "updated in",
-  unchanged: "already up to date in",
-  moved: "posted in its new channel",
-  reposted: "posted again (the old message was gone or a new one was asked) in",
-};
-
 /** Why a member cannot use a panel, or undefined. */
 function refusal(ctx: Context, panel: Panel, member: Member | undefined): string | undefined {
-  if (!member) return "Use this panel in the server.";
+  if (!member) return ctx.i18n.t("serverOnly");
   if (panel.requiredRole && !member.hasRole(panel.requiredRole)) {
     let name = panel.requiredRole;
     try {
@@ -124,7 +116,7 @@ function refusal(ctx: Context, panel: Panel, member: Member | undefined): string
     } catch {
       // keep the key
     }
-    return `You need the **${name}** role to use this panel.`;
+    return ctx.i18n.t("need", { role: name });
   }
   return undefined;
 }
@@ -146,7 +138,7 @@ async function apply(
     try {
       if (adding) await member.addRole({ id: o.roleId }, reason);
       else await member.removeRole({ id: o.roleId }, reason);
-      lines.push(`${adding ? "Added" : "Removed"} ${o.roleMention}.`);
+      lines.push(ctx.i18n.t(adding ? "added" : "removed", { role: o.roleMention }));
       return true;
     } catch (error) {
       ctx.log.warn("reaction-roles: role change failed", {
@@ -157,8 +149,8 @@ async function apply(
       });
       lines.push(
         isForbidden(error)
-          ? hierarchyHelp(o.roleName)
-          : `Something went wrong with ${o.roleMention}, please try again later.`,
+          ? hierarchyHelp(ctx, o.roleName)
+          : ctx.i18n.t("error", { role: o.roleMention }),
       );
       return false;
     }
@@ -190,9 +182,13 @@ async function prepare(
 ): Promise<{ panel: Panel; member: Member; options: ResolvedOption[] } | undefined> {
   // No explicit defer: a component deferral is a silent "deferred update", which the
   // runtime also does on its own after 2 s; the ephemeral reply then becomes a follow-up.
+  if (ctx.config.enabled === false) {
+    await reply(interaction, ctx.i18n.t("disabled"));
+    return;
+  }
   const panel = findPanel(ctx, panelOf(interaction));
   if (!panel || panel.style === "reactions") {
-    await reply(interaction, "This panel is no longer available.");
+    await reply(interaction, ctx.i18n.t("expired"));
     return undefined;
   }
   const problem = refusal(ctx, panel, interaction.member);
@@ -221,7 +217,8 @@ async function reactionTarget(
 
 export default definePlugin({
   async onStart(ctx) {
-    if (!ctx.config.syncOnStart) return;
+    await ctx.kv.set("meta:schema", 1);
+    if (ctx.config.enabled === false || !ctx.config.syncOnStart) return;
     for (const panel of ctx.config.panels) {
       try {
         const r = await syncPanel(ctx, panel);
@@ -252,6 +249,7 @@ export default definePlugin({
         },
       },
       async run(ctx, interaction) {
+        if (ctx.config.enabled === false) return interaction.reply(ctx.i18n.t("disabled"));
         const { panel: name, new_message: force = false } = interaction.options;
         const panels = name
           ? ctx.config.panels.filter((p) => p.name === name)
@@ -260,8 +258,8 @@ export default definePlugin({
           const known = ctx.config.panels.map((p) => `\`${p.name}\``).join(", ");
           await interaction.reply(
             name
-              ? `No panel named \`${name}\`. Panels: ${known || "none"}.`
-              : "No panels are configured yet: add them to the plugin config (`panels`).",
+              ? ctx.i18n.t("noPanel", { name, known: known || ctx.i18n.t("none") })
+              : ctx.i18n.t("empty"),
           );
           return;
         }
@@ -269,9 +267,10 @@ export default definePlugin({
         for (const panel of panels) {
           try {
             const r = await syncPanel(ctx, panel, force);
-            let line = `**${panel.name}**: ${STATUS_TEXT[r.status]} ${r.channel}.`;
-            if (r.status === "moved") line += " Delete the old message by hand.";
-            if (r.skipped.length > 0) line += ` Left out: ${r.skipped.join(", ")}.`;
+            let line = `**${panel.name}**: ${ctx.i18n.t("sync." + r.status)} ${r.channel}.`;
+            if (r.status === "moved") line += ctx.i18n.t("dmGone");
+            if (r.skipped.length > 0)
+              line += ctx.i18n.t("skipped", { roles: r.skipped.join(", ") });
             lines.push(line);
           } catch (error) {
             ctx.log.warn("reaction-roles: could not post a panel", {
@@ -279,7 +278,10 @@ export default definePlugin({
               error: String(error),
             });
             lines.push(
-              `**${panel.name}**: failed${isForbidden(error) ? " (I cannot post or read messages in that channel)" : ""}.`,
+              ctx.i18n.t("panelFailed", {
+                name: panel.name,
+                reason: isForbidden(error) ? ctx.i18n.t("channelDenied") : "",
+              }),
             );
           }
         }
@@ -298,7 +300,7 @@ export default definePlugin({
       // Never trust the id alone: the role must be an option of the panel as configured now.
       const option = options.find((o) => o.roleId === roleId);
       if (!option) {
-        await reply(interaction, "This role is no longer offered by the panel.");
+        await reply(interaction, ctx.i18n.t("gone"));
         return;
       }
       const has = member.hasRole({ id: option.roleId });
@@ -326,7 +328,7 @@ export default definePlugin({
         (o) => !chosenIds.has(o.roleId) && member.hasRole({ id: o.roleId }),
       );
       if (add.length + remove.length === 0) {
-        await reply(interaction, "Nothing changed: you already have exactly these roles.");
+        await reply(interaction, ctx.i18n.t("same"));
         return;
       }
       const r = await apply(ctx, member, add, remove, panel);
@@ -336,7 +338,7 @@ export default definePlugin({
 
   events: {
     async reactionAdd(ctx, { message, user, emoji }) {
-      if (user.id === ctx.bot.user.id || user.bot) return;
+      if (ctx.config.enabled === false || user.id === ctx.bot.user.id || user.bot) return;
       const target = await reactionTarget(ctx, message.id, emoji);
       if (!target) return;
       const { panel, option, options } = target;
@@ -359,7 +361,7 @@ export default definePlugin({
     },
 
     async reactionRemove(ctx, { message, user, emoji }) {
-      if (user.id === ctx.bot.user.id || user.bot) return;
+      if (ctx.config.enabled === false || user.id === ctx.bot.user.id || user.bot) return;
       const target = await reactionTarget(ctx, message.id, emoji);
       if (!target) return;
       const member = await ctx.server.member(user.id);

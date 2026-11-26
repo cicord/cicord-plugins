@@ -1,0 +1,13 @@
+{
+  "disabled": "This plugin is disabled.",
+  "staff": "Your staff role is required to start duty.",
+  "on": "You are on duty.",
+  "off": "You are off duty.",
+  "remind": "Your scheduled shift starts {when}.",
+  "commands.duty.name": "duty",
+  "commands.duty.description": "Manage your on-duty status",
+  "commands.duty.on.name": "on",
+  "commands.duty.on.description": "Start duty",
+  "commands.duty.off.name": "off",
+  "commands.duty.off.description": "End duty"
+}

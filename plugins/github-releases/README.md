@@ -112,3 +112,7 @@ Integrations*, and that opens both subcommands.
 | `http.fetch` | GitHub's REST API, restricted to `api.github.com` (`spec.network.allow`). |
 
 No gateway intents. The plugin reads no messages and no member data.
+
+### Language and retention
+
+Version 0.2.0 includes English and French for Discord messages and commands. Set `locale: fr` to override the interaction or server language. Set `enabled: false` to disable the feed without specifying repositories. The plugin stores public GitHub release data, each feed's cursor and the 30 most recently announced release IDs. It does not keep per-member Discord records. The GitHub feed cursor and recent-release state from 0.1 remain readable.

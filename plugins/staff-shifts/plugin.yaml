@@ -1,0 +1,38 @@
+apiVersion: cicord.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: staff-shifts
+  version: 0.1.0
+  displayName: Staff shifts
+  description: Staff duty roles, weekly shifts, timezone-aware coverage and moderation statistics.
+  license: Apache-2.0
+spec:
+  engine: ">=0.2.0-0"
+  entry: ./src/index.ts
+  capabilities:
+    - storage.kv # persist plugin state
+    - scheduler # durable timers and periodic work
+    - discord.roles.assign # manage the configured role
+    - discord.members.read # resolve members at delivery
+    - portal.routes # serve access-controlled forms
+  intents: [ServerMembers]
+  optional:
+    - feature: reminders
+      capabilities: [discord.dm.send]
+    - feature: statistics
+      capabilities: [events.subscribe]
+  interop:
+    types: ./src/contracts.ts
+    provides: { queries: [onDuty] }
+    subscribes: [{ topic: tickets.closed, version: 1 }, { topic: moderation.case, version: 2 }]
+  config:
+    schema: ./config.schema.json
+  delivery: at-least-once
+  locales: ./locales
+  privacy:
+    records:
+      - name: members
+        policy: erase
+        description: Weekly shifts, active duty, reminders and staff statistics.
+  routes:
+    types: ./src/routes.ts

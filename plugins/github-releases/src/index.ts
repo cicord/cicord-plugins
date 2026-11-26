@@ -21,7 +21,7 @@ function suggestRepos(ctx: Context, typed: string): AutocompleteChoice[] {
   const q = typed.trim().toLowerCase();
   const seen = new Set<string>();
   const out: AutocompleteChoice[] = [];
-  for (const feed of ctx.config.feeds) {
+  for (const feed of ctx.config.feeds ?? []) {
     const key = feed.repo.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -51,21 +51,23 @@ async function latestRelease(
   // Not checked yet: ask GitHub, without touching the feeds' state.
   const backoff = (await ctx.kv.get("backoff")) as { until?: number } | undefined;
   if (backoff?.until && backoff.until > Date.now())
-    return `GitHub's rate limit was reached: try again ${relative(backoff.until)}.`;
+    return ctx.i18n.t("rate", { when: relative(backoff.until) });
   const feed = feeds[0]!;
   const res = await fetchReleases(ctx, feed.repo, undefined);
   switch (res.kind) {
     case "ok": {
       const pick = feeds.find((f) => f.includePrereleases) ?? feed;
       const release = res.releases.findLast((r) => eligible(pick, r));
-      return release ? { feed: pick, release } : `**${feed.repo}** has no published release yet.`;
+      return release ? { feed: pick, release } : ctx.i18n.t("empty", { repo: feed.repo });
     }
     case "not-found":
-      return `GitHub does not know **${feed.repo}** (missing, renamed or private).`;
+      return ctx.i18n.t("missing", { repo: feed.repo });
     case "rate-limited":
-      return `GitHub's rate limit was reached${res.until ? `: try again ${relative(res.until)}` : ""}.`;
+      return ctx.i18n.t("noTime", {
+        retry: res.until ? ctx.i18n.t("retry", { when: relative(res.until) }) : "",
+      });
     default:
-      return `Could not reach GitHub: ${res.kind === "error" ? res.message : res.kind}.`;
+      return ctx.i18n.t("error", { error: res.kind === "error" ? res.message : res.kind });
   }
 }
 
@@ -79,38 +81,45 @@ function describe(ctx: Context, r: FeedResult): string {
   const name = `**${displayName(r.feed)}** → ${where}`;
   switch (r.kind) {
     case "posted":
-      return `✅ ${name}: ${r.posted} new release${r.posted === 1 ? "" : "s"} announced${r.pending ? ", more at the next check" : ""}`;
+      return ctx.i18n.t(r.posted === 1 ? "posted.one" : "posted.many", {
+        name,
+        n: r.posted,
+        pending: r.pending ? ctx.i18n.t("pending") : "",
+      });
     case "seeded":
-      return `📌 ${name}: first check, ${r.recorded} existing release${r.recorded === 1 ? "" : "s"} recorded (not announced)`;
+      return ctx.i18n.t(r.recorded === 1 ? "seeded.one" : "seeded.many", { name, n: r.recorded });
     case "unchanged":
-      return `▫️ ${name}: nothing new`;
+      return `▫️ ${name}: ${ctx.i18n.t("unchanged")}`;
     case "not-found":
-      return `⚠️ ${name}: repository not found (missing, renamed or private)`;
+      return `⚠️ ${name}: ${ctx.i18n.t("not-found")}`;
     case "rate-limited":
-      return `⏳ ${name}: GitHub rate limit${r.until ? `, retrying ${relative(r.until)}` : ""}`;
+      return ctx.i18n.t("rateFeed", {
+        name,
+        retry: r.until ? ctx.i18n.t("retryFeed", { when: relative(r.until) }) : "",
+      });
     case "error":
       return `⚠️ ${name}: ${r.message}`;
     case "deferred":
-      return `⏭️ ${name}: left for the next check`;
+      return `⏭️ ${name}: ${ctx.i18n.t("deferred")}`;
   }
 }
 
 function summary(ctx: Context, s: CheckSummary): string {
-  if (s.busy) return "A check is already running: try again in a few seconds.";
-  if (s.backoffUntil)
-    return `GitHub's rate limit was reached: the next check is ${relative(s.backoffUntil)}.`;
+  if (s.busy) return ctx.i18n.t("busy");
+  if (s.backoffUntil) return ctx.i18n.t("next", { when: relative(s.backoffUntil) });
   const text = s.results.map((r) => describe(ctx, r)).join("\n");
   return text.length <= 2000 ? text : `${text.slice(0, 1990)}…`;
 }
 
 export default definePlugin({
-  onStart(ctx) {
-    const perHour = (ctx.config.feeds.length * 60) / ctx.config.pollMinutes;
+  async onStart(ctx) {
+    await ctx.kv.set("meta:schema", 1);
+    const perHour = ((ctx.config.feeds ?? []).length * 60) / ctx.config.pollMinutes;
     if (perHour > HOURLY_LIMIT / 2)
       ctx.log.warn(
         "github-releases: polling uses more than half of GitHub's unauthenticated limit (60 requests per hour per IP address, shared with everything on it): raise pollMinutes or list fewer feeds",
         {
-          feeds: ctx.config.feeds.length,
+          feeds: (ctx.config.feeds ?? []).length,
           pollMinutes: ctx.config.pollMinutes,
           requestsPerHour: perHour,
         },
@@ -145,17 +154,18 @@ export default definePlugin({
             },
           },
           async run(ctx, interaction) {
-            const feeds = ctx.config.feeds.filter((f) =>
+            if (ctx.config.enabled === false) return interaction.reply(ctx.i18n.t("disabled"));
+            const feeds = (ctx.config.feeds ?? []).filter((f) =>
               sameRepo(f.repo, interaction.options.repo),
             );
             if (feeds.length === 0) {
               await interaction.reply({
-                content: `**${interaction.options.repo}** is not announced here. Configured: ${suggestRepos(
-                  ctx,
-                  "",
-                )
-                  .map((c) => `\`${c.value}\``)
-                  .join(", ")}.`,
+                content: ctx.i18n.t("unconfigured", {
+                  repo: interaction.options.repo,
+                  list: suggestRepos(ctx, "")
+                    .map((c) => "`" + c.value + "`")
+                    .join(", "),
+                }),
                 ephemeral: true,
                 allowedMentions: NO_PINGS,
               });
@@ -179,6 +189,7 @@ export default definePlugin({
         check: subcommand({
           description: "Check every feed for new releases now",
           async run(ctx, interaction) {
+            if (ctx.config.enabled === false) return interaction.reply(ctx.i18n.t("disabled"));
             await interaction.defer({ ephemeral: true });
             const s = await checkFeeds(ctx, { force: true });
             ctx.log.info("github-releases: check requested", { by: interaction.user.id });

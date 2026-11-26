@@ -3,19 +3,36 @@ apiVersion: cicord.dev/v1alpha1
 kind: Plugin
 metadata:
   name: announcements
-  version: 0.1.0
+  version: 0.2.0
   displayName: Scheduled announcements
   description: Recurring or one-off announcements from the config (cron, interval or date, in your time zone), and /announce for moderators to schedule, list and cancel their own. Mentions ping only who you say.
   license: Apache-2.0
   keywords: [announcements, schedule, reminders, cron, events]
 spec:
-  engine: ">=0.1.0"
+  engine: ">=0.2.0-0"
   entry: ./src/index.ts
   capabilities:
-    - discord.messages.send     # the announcements
-    - discord.channels.read
-    - storage.kv                # scheduled /announce messages, last run of each announcement
-    - scheduler                 # the minute tick and the /announce tasks
-    - portal.routes             # GET /scheduled for the staff portal
+    - storage.kv # persist plugin state
+    - scheduler # durable timers and periodic work
+    - discord.channels.read # resolve destination channels
+    - discord.messages.send # post configured messages
+    - portal.routes # serve access-controlled forms
+  optional:
+    - feature: recoverPosts
+      capabilities: [discord.messages.read]
+    - feature: stickies
+      capabilities: [discord.messages.read, discord.messages.manage]
+      intents: [ServerMessages]
+    - feature: countdowns
+      capabilities: [discord.messages.read]
   config:
     schema: ./config.schema.json
+  delivery: at-least-once
+  locales: ./locales
+  privacy:
+    records:
+      - name: members
+        policy: erase
+        description: Pending messages authored by or mentioning the member.
+  routes:
+    types: ./src/routes.ts

@@ -139,7 +139,9 @@ export async function checkFeed(ctx: Context, feed: Feed): Promise<FeedResult> {
       break;
     }
     try {
-      await ctx.server.channel(feed.channel).send(announcement(ctx, feed, r));
+      await ctx.server
+        .channel(feed.channel)
+        .send({ ...announcement(ctx, feed, r), nonce: "gh" + r.id, enforceNonce: true });
     } catch (error) {
       noteError(ctx, feed, state, `could not post in ${feed.channel}: ${String(error)}`);
       pending = true;
@@ -170,7 +172,7 @@ export async function checkFeed(ctx: Context, feed: Feed): Promise<FeedResult> {
 async function dueFeeds(ctx: Context, force: boolean, now: number): Promise<Feed[]> {
   const period = ctx.config.pollMinutes * 60_000 - SLACK_MS;
   const withState = await Promise.all(
-    ctx.config.feeds.map(async (feed) => ({
+    (ctx.config.feeds ?? []).map(async (feed) => ({
       feed,
       checkedAt: (await loadState(ctx, feed)).checkedAt,
     })),
@@ -192,6 +194,7 @@ export async function checkFeeds(
   ctx: Context,
   options: { force?: boolean } = {},
 ): Promise<CheckSummary> {
+  if (ctx.config.enabled === false) return { results: [] };
   const start = Date.now();
   if (start < busyUntil) return { busy: true, results: [] };
   busyUntil = start + 15_000; // also released if the handler is cut short

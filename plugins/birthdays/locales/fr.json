@@ -1,0 +1,20 @@
+{
+  "disabled": "Ce plugin est désactivé.",
+  "greeting": "Joyeux anniversaire, {member} !",
+  "invalid": "Saisissez un jour et un mois valides.",
+  "saved": "Votre anniversaire est enregistré. Il figurera parmi les prochains anniversaires.",
+  "removed": "Votre anniversaire a été effacé.",
+  "empty": "Personne n’a encore enregistré son anniversaire.",
+  "commands.birthday.name": "anniversaire",
+  "commands.birthday.description": "Inscrire votre anniversaire",
+  "commands.birthday.set.name": "définir",
+  "commands.birthday.set.description": "Enregistrer le jour et le mois de votre anniversaire",
+  "commands.birthday.set.options.day.name": "jour",
+  "commands.birthday.set.options.day.description": "Jour",
+  "commands.birthday.set.options.month.name": "mois",
+  "commands.birthday.set.options.month.description": "Mois",
+  "commands.birthday.remove.name": "retirer",
+  "commands.birthday.remove.description": "Effacer votre anniversaire",
+  "commands.birthday.upcoming.name": "prochains",
+  "commands.birthday.upcoming.description": "Afficher les dix prochains anniversaires"
+}

@@ -1,0 +1,20 @@
+{
+  "disabled": "This plugin is disabled.",
+  "greeting": "Happy birthday, {member}!",
+  "invalid": "Enter a valid day and month.",
+  "saved": "Your birthday is saved. It will appear in upcoming birthdays.",
+  "removed": "Your birthday was removed.",
+  "empty": "Nobody has opted in yet.",
+  "commands.birthday.name": "birthday",
+  "commands.birthday.description": "Opt in to birthday celebrations",
+  "commands.birthday.set.name": "set",
+  "commands.birthday.set.description": "Save your day and month",
+  "commands.birthday.set.options.day.name": "day",
+  "commands.birthday.set.options.day.description": "Day",
+  "commands.birthday.set.options.month.name": "month",
+  "commands.birthday.set.options.month.description": "Month",
+  "commands.birthday.remove.name": "remove",
+  "commands.birthday.remove.description": "Withdraw your birthday",
+  "commands.birthday.upcoming.name": "upcoming",
+  "commands.birthday.upcoming.description": "Show the next ten birthdays"
+}

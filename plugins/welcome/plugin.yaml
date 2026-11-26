@@ -3,22 +3,44 @@ apiVersion: cicord.dev/v1alpha1
 kind: Plugin
 metadata:
   name: welcome
-  version: 0.1.1
+  version: 0.2.0
   displayName: Welcome
   description: Greets new members, gives them a default role and sends an onboarding link.
   license: Apache-2.0
   keywords: [welcome, onboarding]
 spec:
-  engine: ">=0.1.0"
+  engine: ">=0.2.0-0"
   entry: ./src/index.ts
   capabilities:
-    - discord.messages.send
-    - discord.channels.read
-    - discord.members.read
-    - discord.roles.assign
-    - discord.dm.send
-    - portal.links
-    - storage.kv
+    - storage.kv # persist plugin state
+    - discord.messages.send # post configured messages
+    - discord.members.read # resolve members at delivery
+    - discord.channels.read # resolve destination channels
   intents: [ServerMembers]
+  optional:
+    - feature: onboarding
+      capabilities: [discord.dm.send, portal.links]
+    - feature: defaultRole
+      capabilities: [discord.roles.assign]
+    - feature: verified
+      capabilities: [events.subscribe]
+    - feature: inviter
+      capabilities: [plugins.query:invite-tracker.inviterOf]
+    - feature: cards
+      capabilities: [render]
+    - feature: templates
+      capabilities: [files.read]
+  interop:
+    types: ./src/contracts.ts
+    subscribes: [{ topic: verification.passed, version: 1 }]
+    consumes: { queries: [invite-tracker.inviterOf] }
   config:
     schema: ./config.schema.json
+  delivery: at-least-once
+  locales: ./locales
+  privacy:
+    records:
+      - name: members
+        policy: erase
+        description: Greeting receipt and member number for the current membership.
+  assets: ./assets

@@ -22,11 +22,15 @@ export interface Scheduled {
   mentions: Mentions;
   by: { id: string; name: string };
   taskId?: string;
+  layout?: boolean;
+  sendingSince?: number;
+  scanBefore?: string;
   createdAt: string;
 }
 
 /** An /announce draft between the command and its modal, stored under `draft:<n>`. */
 export interface Draft {
+  owner?: string;
   channelId: string;
   at: number;
   mentions: Mentions;
@@ -139,6 +143,16 @@ export function renderConfigured(ctx: Context, a: Configured): MessagePayload | 
 /** Message of an /announce announcement: mentions as text, the body in an embed (never pings). */
 export function renderScheduled(ctx: Context, s: Scheduled): MessagePayload {
   const m = mentionPart(ctx, s.mentions);
+  if (s.layout)
+    return {
+      layout: [
+        {
+          type: "text",
+          content: [s.title ? "## " + s.title : "", s.body].filter(Boolean).join("\n"),
+        },
+      ],
+      allowedMentions: m.allowed,
+    };
   const embed: Embed = {
     ...(s.title ? { title: s.title } : {}),
     description: s.body,
@@ -216,4 +230,9 @@ export function parseWhen(
     return toUtcMs(ms / 60_000);
   }
   return `I don't understand "${text}": try "now", "in 2h", "18:30" or "2026-12-24 18:00".`;
+}
+
+/** Stable receipt visible in the message history for scheduled deliveries. */
+export function deliveryReference(ctx: Context, id: number): string {
+  return ctx.i18n.t("receipt", { id, instance: ctx.plugin.instance });
 }

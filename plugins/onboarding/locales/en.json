@@ -1,0 +1,11 @@
+{
+  "disabled": "This plugin is disabled.",
+  "title": "Welcome!",
+  "linkMessage": "Pick your roles on the community portal:",
+  "buttonLabel": "Open onboarding",
+  "successMessage": "You're all set!",
+  "memberOnly": "only members of the server can do the onboarding",
+  "roleError": "the roles could not be updated, please try again",
+  "commands.onboarding.name": "onboarding",
+  "commands.onboarding.description": "Pick your roles on the community portal"
+}

@@ -1,0 +1,13 @@
+{
+  "disabled": "Ce plugin est désactivé.",
+  "staff": "Vous devez avoir le rôle staff pour prendre une garde.",
+  "on": "Vous êtes de garde.",
+  "off": "Votre garde est terminée.",
+  "remind": "Votre garde commence {when}.",
+  "commands.duty.name": "garde",
+  "commands.duty.description": "Gérer votre garde",
+  "commands.duty.on.name": "début",
+  "commands.duty.on.description": "Prendre une garde",
+  "commands.duty.off.name": "fin",
+  "commands.duty.off.description": "Terminer une garde"
+}

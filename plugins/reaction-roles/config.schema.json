@@ -10,7 +10,11 @@
       "default": [],
       "items": {
         "type": "object",
-        "required": ["name", "channel", "options"],
+        "required": [
+          "name",
+          "channel",
+          "options"
+        ],
         "properties": {
           "name": {
             "description": "Stable key of the panel (lowercase letters, digits, '-'). The plugin finds the panel message again by this name, so renaming a panel posts a new message.",
@@ -44,12 +48,19 @@
           },
           "style": {
             "description": "buttons: one button per role. select: a select menu. reactions: members react with the option's emoji (each option needs an emoji).",
-            "enum": ["buttons", "select", "reactions"],
+            "enum": [
+              "buttons",
+              "select",
+              "reactions"
+            ],
             "default": "buttons"
           },
           "mode": {
             "description": "multiple: members take any number of the roles. single: taking one removes the others of the panel.",
-            "enum": ["multiple", "single"],
+            "enum": [
+              "multiple",
+              "single"
+            ],
             "default": "multiple"
           },
           "requiredRole": {
@@ -64,7 +75,9 @@
             "maxItems": 25,
             "items": {
               "type": "object",
-              "required": ["role"],
+              "required": [
+                "role"
+              ],
               "properties": {
                 "role": {
                   "description": "Role given by this option. It must be below the bot's highest role.",
@@ -100,6 +113,19 @@
       "description": "Post missing panels and update changed ones when the plugin starts (every new revision). Off: only /role-panel posts them.",
       "type": "boolean",
       "default": true
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Enable this plugin instance.",
+      "default": true
+    },
+    "locale": {
+      "type": "string",
+      "description": "Override the language of this instance.",
+      "enum": [
+        "en",
+        "fr"
+      ]
     }
   },
   "additionalProperties": false
