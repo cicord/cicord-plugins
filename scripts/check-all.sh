@@ -9,4 +9,5 @@ fi
 for dir in plugins/*/; do
   bash scripts/check-plugin.sh "$dir"
 done
+node --test scripts/disabled-instances.test.mjs
 bash scripts/check-index.sh "$@"

@@ -68,6 +68,11 @@ jobs:
         with:
           version: ${{ needs.list.outputs.core-ref }}
           feature-build: ${{ needs.list.outputs.feature-build }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+      - name: Verify disabled installations without grants
+        run: node --test scripts/disabled-instances.test.mjs
       - name: Check index.yaml
         env:
           EVENT: ${{ github.event_name }}
