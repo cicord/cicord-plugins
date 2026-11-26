@@ -27,5 +27,9 @@
   "contextMenus.Block image.name": "Block image",
   "status.raidPending": "Raid recorded. Some restrictions are pending and will be retried automatically.",
   "status.raidNoticePending": "Raid measures are in place. A staff notification is pending and will be retried.",
-  "status.raidClosing": "Guard is lifting raid restrictions and will retry until complete."
+  "status.raidClosing": "Guard is lifting raid restrictions and will retry until complete.",
+  "status.inviteGrant": "Discord invites are blocked: without the discord.invites.read grant Guard cannot recognize this server's own invites.",
+  "status.sanctionLimit": "Automatic sanctions paused: more than {count} in {seconds} s. New findings wait for staff review.",
+  "message.lockdownActive": "Lockdown active. Raid restrictions are applied until lifted or until the calm period ends.",
+  "message.lockdownRefused": "Nothing was applied: a lockdown needs the server.overlays grant for this Guard installation."
 }

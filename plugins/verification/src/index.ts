@@ -108,7 +108,23 @@ async function status(
     : { verified: true };
 }
 type Recovery = { caseId: string; retryAt: number };
-async function kick(ctx: Context, member: Member, reason: string) {
+const HOUR = 3600000;
+/** The grant a kick needs and lacks, if any: moderation's sanction when it is installed. */
+function missingKickGrant(ctx: Context) {
+  const delegated = ctx.plugins.has("moderation");
+  if (ctx.features.enabled(delegated ? "sanctions" : "directKick")) return undefined;
+  return delegated ? "plugins.call:moderation.sanction" : "discord.members.moderate";
+}
+const kicks = (ctx: Context) => ctx.config.youngAccount === "kick" || ctx.config.kickAfterHours > 0;
+// A delayed member keeps the full expiry window after their retry time.
+function deadlineOf(ctx: Context, p: Pending) {
+  if (!ctx.config.kickAfterHours) return 0;
+  return p.state === "delay"
+    ? Math.max(p.deadline, p.retry + ctx.config.kickAfterHours * HOUR)
+    : p.deadline;
+}
+/** Returns false when the kick cannot be delegated or applied with the current grants. */
+async function kick(ctx: Context, member: Member, reason: string): Promise<boolean> {
   if (
     !member.access ||
     staff(member) ||
@@ -116,11 +132,13 @@ async function kick(ctx: Context, member: Member, reason: string) {
     member.user.bot ||
     member.hasRole(ctx.config.verifiedRole)
   )
-    return;
-  if (!ctx.features.enabled("dm")) throw new Error("verification kick requires discord.dm.send");
+    return true;
+  const grant = missingKickGrant(ctx);
+  if (grant) {
+    ctx.status.set("kick", ctx.i18n.t("status.kickGrant", { grant }));
+    return false;
+  }
   const delegated = ctx.plugins.has("moderation");
-  if (!ctx.features.enabled(delegated ? "sanctions" : "directKick"))
-    throw new Error("verification kick requires the configured sanction grant");
   const caseId = member.id + "-" + member.joinedAt.getTime();
   const earlier = await ctx.kv.get<Recovery>("recovery:" + member.id);
   if (earlier && earlier.caseId !== caseId)
@@ -130,14 +148,21 @@ async function kick(ctx: Context, member: Member, reason: string) {
     (age(member) || Date.now()) + ctx.config.minAccountAgeDays * 86400000,
   );
   const ttl = Math.min(604800, Math.ceil((retryAt - Date.now()) / 1000) + 86400);
-  const url = await ctx.portal.link(portalPath(ctx, "return/" + caseId), {
-    user: member.user,
-    scope: { kind: "case", id: caseId },
-    expiresInSeconds: ttl,
-  });
-  await member.send({
-    content: tr(ctx, "message.youCanRejoinAfter") + new Date(retryAt).toISOString() + "\n" + url,
-  });
+  // The notice is a courtesy: closed DMs or a missing DM grant never block the kick.
+  if (ctx.features.enabled("dm"))
+    try {
+      const url = await ctx.portal.link(portalPath(ctx, "return/" + caseId), {
+        user: member.user,
+        scope: { kind: "case", id: caseId },
+        expiresInSeconds: ttl,
+      });
+      await member.send({
+        content:
+          tr(ctx, "message.youCanRejoinAfter") + new Date(retryAt).toISOString() + "\n" + url,
+      });
+    } catch {
+      ctx.log.info("Verification kick notice undeliverable", { reason });
+    }
   if (delegated)
     await ctx.plugins.call(
       "moderation",
@@ -148,6 +173,19 @@ async function kick(ctx: Context, member: Member, reason: string) {
   else await member.kick(reason);
   await ctx.kv.set("recovery:" + member.id, { caseId, retryAt }, { ttlSeconds: ttl });
   await publish(ctx, member.id, { result: "kicked", method: reason, at: date() });
+  return true;
+}
+// Three failures lock the challenge for 15 minutes. Six within a day send the member
+// to the staff queue, so blind guessing cannot be repeated indefinitely.
+const FAILURES = 3,
+  LOCK_SECONDS = 900,
+  STRIKES = 6;
+async function hold(ctx: Context, member: Member, r: Pending, method: string, reason: string) {
+  r.state = "hold";
+  r.retry = 0;
+  await ctx.kv.set("pending:" + member.id, r, { ttlSeconds: MONTH });
+  await ctx.events.publish("failed", { userId: member.id, method, reason });
+  return { state: r.state, retryAt: r.retry };
 }
 async function submit(
   ctx: Context,
@@ -160,7 +198,7 @@ async function submit(
   if (r.state === "hold" || (r.state === "delay" && r.retry > Date.now()))
     return { state: r.state, retryAt: r.retry };
   const failures = (await ctx.kv.get<number>("attempts:" + member.id)) ?? 0;
-  if (failures >= 5) return { status: 429, body: { error: "try_later" } };
+  if (failures >= FAILURES) return { status: 429, body: { error: "try_later" } };
   let method;
   try {
     method = await check(ctx, member, object(body));
@@ -168,7 +206,10 @@ async function submit(
     return { status: 503, body: { error: "challenge_unavailable" } };
   }
   if (!method) {
-    await ctx.kv.set("attempts:" + member.id, failures + 1, { ttlSeconds: 300 });
+    const strikes = ((await ctx.kv.get<number>("strikes:" + member.id)) ?? 0) + 1;
+    await ctx.kv.set("attempts:" + member.id, failures + 1, { ttlSeconds: LOCK_SECONDS });
+    await ctx.kv.set("strikes:" + member.id, strikes, { ttlSeconds: 86400 });
+    if (strikes >= STRIKES) return hold(ctx, member, r, methodFor(ctx, member), "attempts");
     await ctx.events.publish("failed", {
       userId: member.id,
       method: methodFor(ctx, member),
@@ -178,11 +219,13 @@ async function submit(
   }
   if (young(ctx, member)) {
     if (ctx.config.youngAccount === "kick") {
-      await kick(ctx, member, "age");
-      return { verified: false };
+      if (await kick(ctx, member, "age")) return { verified: false };
+      // Without the sanction grant, staff decide instead of the member being admitted.
+      return hold(ctx, member, r, method, "age");
     }
     r.state = ctx.config.youngAccount;
-    r.retry = r.state === "delay" ? Date.now() + ctx.config.delayHours * 3600000 : 0;
+    r.retry = r.state === "delay" ? Date.now() + ctx.config.delayHours * HOUR : 0;
+    r.deadline = deadlineOf(ctx, r);
     await ctx.kv.set("pending:" + member.id, r, { ttlSeconds: MONTH });
     await ctx.events.publish("failed", { userId: member.id, method, reason: "age" });
     return { state: r.state, retryAt: r.retry };
@@ -242,6 +285,7 @@ const prefixes = [
   "pending:",
   "challenge:",
   "attempts:",
+  "strikes:",
   "recovery:",
   "lock:",
   "grant:",
@@ -249,9 +293,18 @@ const prefixes = [
 ];
 export default definePlugin({
   onStart(ctx) {
-    if (methodFor(ctx) !== ctx.config.method)
+    const served = methodFor(ctx);
+    if (served === "review")
+      ctx.status.set("challenge", tr(ctx, "status.challengeReview"));
+    else if (served !== ctx.config.method)
       ctx.status.set("challenge", tr(ctx, "message.challengeFallbackIsActiveCheckOptional"));
     else ctx.status.set("challenge", null);
+    const grant = kicks(ctx) ? missingKickGrant(ctx) : undefined;
+    ctx.status.set("kick", grant ? ctx.i18n.t("status.kickGrant", { grant }) : null);
+    ctx.status.set(
+      "kickNotice",
+      kicks(ctx) && !ctx.features.enabled("dm") ? tr(ctx, "status.kickNotice") : null,
+    );
   },
   events: {
     async memberJoin(ctx, member) {
@@ -289,16 +342,26 @@ export default definePlugin({
         if (!ctx.config.kickAfterHours) return;
         const cursor = await ctx.kv.get<string>("expiryCursor");
         const page = await ctx.kv.list<Pending>({ prefix: "pending:", limit: 100, cursor });
+        let failed = 0;
         for (const { key, value } of page.items) {
-          if (value.state === "hold" || !value.deadline || value.deadline > Date.now()) continue;
+          const deadline = deadlineOf(ctx, value);
+          if (value.state === "hold" || !deadline || deadline > Date.now()) continue;
           const id = key.slice(8);
-          await serial(ctx, id, async () => {
-            const member = await ctx.server.member(id);
-            if (member && member.joinedAt.getTime() === value.joined)
-              await kick(ctx, member, "expired");
-            else await ctx.kv.delete(key);
-          });
+          // One member's failure must not stall the cursor for everyone after them.
+          try {
+            await serial(ctx, id, async () => {
+              const member = await ctx.server.member(id);
+              if (member && member.joinedAt.getTime() === value.joined)
+                await kick(ctx, member, "expired");
+              else await ctx.kv.delete(key);
+            });
+          } catch (error) {
+            failed++;
+            ctx.log.warn("Verification expiry kick failed", { error: String(error) });
+          }
         }
+        if (failed) ctx.status.set("expiry", ctx.i18n.t("status.expiryFailed", { count: failed }));
+        else if (!page.cursor) ctx.status.set("expiry", null);
         if (page.cursor) await ctx.kv.set("expiryCursor", page.cursor, { ttlSeconds: 86400 });
         else await ctx.kv.delete("expiryCursor");
       },
@@ -330,7 +393,8 @@ export default definePlugin({
         const p = await pending(ctx, member);
         if (p.state === "hold" || (p.state === "delay" && p.retry > Date.now()))
           return { state: p.state, retryAt: p.retry };
-        return begin(ctx, member);
+        // No challenge can be served (fallback: review): staff decide, never a silent pass.
+        return (await begin(ctx, member)) ?? hold(ctx, member, p, ctx.config.method, "unavailable");
       },
     },
     "POST /challenge": {

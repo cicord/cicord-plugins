@@ -42,7 +42,7 @@ async function redactCase(ctx: Context, k: string, user: string, deleted: string
     const ttlSeconds = caseTTL(c.at);
     if (!ttlSeconds || c.action === "note") tx.delete(k);
     else {
-      const removed = { id: deleted, name: "Deleted user" };
+      const removed = { id: deleted, name: ctx.i18n.t("case.deletedUser") };
       c.reason = "";
       delete c.evidence;
       delete c.evidenceChannelId;
@@ -129,8 +129,8 @@ export const privacy = {
           c.reason = "";
           delete c.evidence;
           delete c.evidenceChannelId;
-          if (c.member?.id === user) c.member = { id: user, name: "Deleted user" };
-          if (c.moderator?.id === user) c.moderator = { id: deleted, name: "Deleted user" };
+          if (c.member?.id === user) c.member = { id: user, name: ctx.i18n.t("case.deletedUser") };
+          if (c.moderator?.id === user) c.moderator = { id: deleted, name: ctx.i18n.t("case.deletedUser") };
         }
         if (!changed) return;
         if ((await ctx.kv.atomic().check(k, row.version).set(k, record).commit()).ok) {

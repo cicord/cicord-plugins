@@ -12,6 +12,11 @@
   "error.member": "Ce membre est introuvable sur ce serveur.",
   "error.unmanaged": "Impossible de gérer {role}. Vérifiez les titulaires déclarés en YAML, les intégrations et les métadonnées du rôle.",
   "status.boost": "Les annonces de boost requièrent discord.channels.read et discord.messages.send.",
+  "error.failed": "Le changement de rôle a échoué. Réessayez ou demandez à un administrateur de vérifier le statut de l’instance.",
+  "error.interopAllowlist": "Les autres plugins ne peuvent accorder des rôles temporaires que si temp.roles les liste.",
+  "status.unmanaged": "Le rôle {role} est ignoré : ses titulaires sont déclarés en YAML, une intégration le possède ou ses métadonnées sont indisponibles.",
+  "status.hierarchy": "Le rôle {role} est ignoré : le bot a besoin de Gérer les rôles et d’un rôle placé au-dessus.",
+  "status.missing": "Le rôle {role} est ignoré : il n’existe pas sur ce serveur.",
   "commands.temprole.name": "roletemp",
   "commands.temprole.add.name": "ajouter",
   "commands.temprole.remove.name": "retirer",
@@ -35,5 +40,8 @@
   "commands.temprole.remove.options.reason.name": "raison",
   "commands.temprole.remove.options.reason.description": "Motif consigné",
   "commands.temprole.list.options.user.name": "membre",
-  "commands.temprole.list.options.user.description": "Membre du serveur"
+  "commands.temprole.list.options.user.description": "Membre du serveur",
+  "error.privileged": "{role} accorde {permissions} : ajoutez-le à temp.privilegedRoles pour l’attribuer temporairement.",
+  "error.permissionsUnknown": "Les permissions de {role} ne sont pas encore connues : il n’est pas attribué. Réessayez dans un instant, ou ajoutez-le à temp.privilegedRoles.",
+  "status.privileged": "Le rôle temporaire {role} accorde {permissions} et est refusé : ajoutez-le à temp.privilegedRoles pour l’autoriser."
 }

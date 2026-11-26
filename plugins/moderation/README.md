@@ -3,11 +3,11 @@
 Configure a private staff log channel with `logChannel`. The 0.2 plugin requires the Cicord 0.2 moderation API and task scheduler. Review the added grants before upgrading. Existing cases are indexed in batches on startup and can be read while migration progresses.
 
 - `/ban` accepts a user and an optional duration in minutes. A permanent ban supersedes an earlier temporary ban. Expiration checks the active case and the recorded Discord ban before lifting it. `/unban` records a manual release.
-- `/purge` previews recent messages in the current channel. Only the moderator who requested the preview can confirm it, within two minutes. Confirmation applies only to the selected message IDs. Text and attachment filters require the plugin's Message Content intent. The default manifest does not request it.
+- `/purge` previews recent messages in the current channel. A purge that stops after a failed batch still records a case for the messages it deleted. Only the moderator who requested the preview can confirm it, within two minutes. Confirmation applies only to the selected message IDs. Text and attachment filters require the plugin's Message Content intent. The default manifest does not request it.
 - `/case view`, `/case reason`, `/case void`, `/history` and `/note` manage case records. Voiding a warning also removes it from the active warning count. Voiding a case does not lift a Discord sanction.
 - `GET /members/:id` exposes the caller's case history, excluding staff notes. Moderators can review member history including notes. `GET /cases` is staff-only and accepts status, action, moderator and cursor parameters. The plugin sends no private note content to its webhook or event subscribers.
 
-Temporary ban tasks carry an opaque case reference. Erasure keeps the minimum target information in the active sanction until release and migrates older pending timers. The plugin requires `discord.auditlog.read`, the Server Moderation intent and the bot’s View Audit Log permission. It binds a ban to a confirmed Discord audit entry from this bot and plugin installation. Delayed evidence is retried. Long bans are checked weekly so the plugin retains verified continuity across Discord’s audit retention window. An ambiguous history, a gap of 44 days, or a scan exceeding 500 entries for either action leaves the ban in place for staff review. A release case number is saved before lifting the ban, so a retry after an interruption uses the same record. Discord exposes separate audit-read and remove-ban requests, so simultaneous external changes can still race the last check.
+Temporary ban tasks carry an opaque case reference. Erasure keeps the minimum target information in the active sanction until release and migrates older pending timers. A temporary ban is lifted from the plugin's own records: the case is still the active one for the member, its expiry record exists and the current Discord ban carries the case's marker. When the bot can read the audit log (`discord.auditlog.read` and View Audit Log), a newer ban or unban of the member by another account or installation means staff took the ban over, and the expiry leaves it in place. A missing, late or probable audit entry never keeps a ban in force. If the audit log cannot be read, the instance status says so and expiries rely on the case marker alone. Banning a member who is already banned replaces the ban: when Discord keeps the earlier ban and its reason, the plugin lifts it and bans again, so the new case owns the ban, its expiry and any requested message deletion. A release case number is saved before lifting the ban, so a retry after an interruption uses the same record. When the audit log shows that staff lifted the ban first, no automatic unban case is recorded.
 
 Case events use a stable delivery key per case and contract version. The staff log uses an enforced Discord nonce. Recovery checks up to 100 recent messages for the same bot and delivery marker. If that history no longer reaches the send attempt after two minutes, the task records a failure for staff review. Log messages are retracted on case erasure or at the end of one-year case retention. Optional webhooks receive only the case number and action, with at most one delivery attempt. Staff notes stay in case storage. Attachment evidence can appear in the staff log only when the recorded source has an equal or wider audience.
 
@@ -29,7 +29,15 @@ current revision. For other roles, it retains the assignments present at
 quarantine and incorporates additions and removals observed during restriction.
 Discord emits membership changes only when an assignment actually changes.
 `/lock` and `/slowmode` apply a temporary overlay to the named managed channel.
-An administrator can lift each lock independently on the server Plan page.
+A lock denies Send Messages (and in threads) to `@everyone` and neutralizes every
+role or member allow of those permissions in the channel, except the bot's and the
+staff roles'. If the runtime refuses the overlay, the command says that nothing was
+applied. An administrator can lift each lock independently on the server Plan page.
+
+A quarantined member who leaves and returns gets the quarantine role back, and roles
+given on return are suspended with the saved set. With the optional `tempRoles`
+feature (`events.subscribe`), a member-roles temporary role that expires during a
+quarantine is dropped from the saved set instead of returning permanently at release.
 
 ## Appeals
 
@@ -38,7 +46,8 @@ public URL. Install a portal version with the `/appeals` page and grant
 `portal.links`. A sanction DM includes a link to one case, valid for seven
 days. The recipient authenticates with Discord even after a ban. The staff
 queue is at `/appeals/staff`. The moderator's decision records whether the
-original sanction could still be lifted. A newer ban, timeout, or quarantine
+original sanction could still be lifted. Staff cannot decide an appeal of their own
+case, nor one whose issuing moderator ranks above them (the owner can). A newer ban, timeout, or quarantine
 must remain active. A kick that already removed the member has no reversible
 sanction. Expired links can request a fresh DM for up to 30 days. The configured
 cooldown defaults to seven days. A recipient who blocks DMs needs a staff-assisted

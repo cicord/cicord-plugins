@@ -7,7 +7,7 @@ metadata:
   description: Member-bound challenges, age checks and a staff approval queue. Role assignment uses the existing server permission policy.
   license: Apache-2.0
 spec:
-  engine: ">=0.2.0-0"
+  engine: ">=0.2.0"
   entry: ./src/index.ts
   locales: ./locales
   capabilities:
@@ -72,5 +72,5 @@ spec:
         retention: 30 days
       - name: pending
         policy: erase
-        description: Join and review state, rate limit and transient challenge.
+        description: Join and review state, failure counters (15 minutes and one day) and transient challenge.
         retention: 30 days

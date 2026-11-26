@@ -1,5 +1,4 @@
 {
-  "message.howManySquaresAreInThe": "How many squares are in the image?",
   "message.youCanRejoinAfter": "You can rejoin after ",
   "message.openChallenge": "Open challenge",
   "message.challengeFallbackIsActiveCheckOptional": "Challenge fallback is active. Check optional grants, site key and provider secret.",
@@ -20,5 +19,12 @@
   "review.denied": "Review denied.",
   "review.missing": "No current review for this member.",
   "status.verified": "Verified.",
-  "status.pending": "Unverified."
+  "status.pending": "Unverified.",
+  "message.whichNumberIsShown": "Which number is shown in the image?",
+  "status.kickGrant": "Verification kicks need {grant}. Young accounts are held for staff review, and expired pending members stay until it is granted.",
+  "status.kickNotice": "Kicked members get no notice or recovery link: grant discord.dm.send.",
+  "status.expiryFailed": "{count} expired pending members could not be kicked. They will be retried; check the logs.",
+  "message.typeTheCode": "Type the code shown in the image.",
+  "status.renderFailed": "The challenge image could not be rendered. Members get the configured fallback (staff review or the button) until rendering works again.",
+  "status.challengeReview": "The image challenge needs the optional render grant. Until it is granted, new members wait in the staff queue (fallback: review)."
 }

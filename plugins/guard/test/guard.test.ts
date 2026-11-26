@@ -28,7 +28,13 @@ const setup = (
 afterEach(() => vi.useRealTimers());
 test("duplicates span channels; compare actual messages and remove exactly the three matches", async () => {
   const t = setup(
-    { mode: "enforce", quarantineRole: "quarantine", newAccounts: { restrict: [] } },
+    {
+      mode: "enforce",
+      quarantineRole: "quarantine",
+      newAccounts: { restrict: [] },
+      // The spec's acceptance case; the shipped defaults are 4 copies and message removal.
+      duplicates: { count: 3, action: { type: "quarantine" } },
+    },
     ["removeMessages", "directQuarantine"],
   );
   const m = t.member("user")!;
@@ -135,9 +141,11 @@ test("raid overlay uses a stable instance-local ID and releases only that overla
   const now = Date.now();
   await open(ctx, 20);
   await open(ctx, 40);
+  // The deadline moved by less than a minute: no second overlay write (MOD-05).
+  expect(applied).toEqual(["raid"]);
   vi.setSystemTime(now + 61000);
   await quiet(ctx);
-  expect(applied).toEqual(["raid", "raid"]);
+  expect(applied).toEqual(["raid"]);
   expect(released).toEqual(["raid"]);
 });
 
@@ -260,4 +268,34 @@ test("a failed incident step and a failed lift retry without reopening a finishe
   await reconcileRaid(ctx, first!.started, first!.wake);
   expect(lift).toHaveBeenCalledTimes(2);
   expect(grant).toHaveBeenCalledTimes(1);
+});
+test("the project's other Cicord bots are always exempt, even without a bot flag (P7)", async () => {
+  const t = createTestContext({
+    schema,
+    config: { mode: "enforce", links: { mode: "denylist", domains: ["unsafe.example"] } },
+    features: ["directSanctions", "removeMessages"],
+    server: { ownerId: "staff", otherCicordBotIds: ["sibling"] },
+    channels: { a: { name: "A" } },
+    // A sibling Cicord bot seen without its bot flag (partial member data).
+    members: [{ id: "sibling", joinedAt: new Date(0) }, { id: "user", joinedAt: new Date(0) }],
+  });
+  const post = async (id: string) => {
+    const m = t.member(id)!;
+    await plugin.events!.messageCreate!(t.ctx, {
+      ...(await t.channel("a")!.send("fixture")),
+      author: m.user,
+      member: m,
+      content: "see https://unsafe.example/x",
+      attachments: [],
+    });
+  };
+  expect(t.ctx.server.cicordBotIds).toContain("sibling");
+  await post("sibling");
+  expect(JSON.stringify([...t.kv])).not.toContain("sibling");
+  await post("user");
+  expect(JSON.stringify([...t.kv])).toContain("user");
+  // The sanction path refuses them too, whatever led there.
+  await sanction(t.ctx, t.member("sibling")!, { type: "kick" } as never, "guard links", "k1");
+  await sanction(t.ctx, t.member("bot") ?? ({ id: "bot" } as never), { type: "ban" } as never, "x", "k2");
+  expect(t.moderation.filter((m) => m.member === "sibling" || m.member === "bot")).toEqual([]);
 });

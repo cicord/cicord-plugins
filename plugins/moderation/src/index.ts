@@ -11,6 +11,7 @@ import {
   type Context,
   type Json,
   type Member,
+  type Permission,
   type RouteResponse,
 } from "@cicord/sdk";
 import {
@@ -50,6 +51,7 @@ import {
   staffRoleChange,
   quarantineTask,
   excludeSavedRole,
+  rejoinQuarantine,
 } from "./quarantine.ts";
 import {
   appealLink,
@@ -149,7 +151,10 @@ async function sanction(
       member,
       action === "untimeout" ? text : await linkMessage(ctx, c, text),
     );
-    const auditReason = (moderator?.name ?? "automatic") + ": " + (reason || "no reason");
+    const auditReason =
+      (moderator?.name ?? ctx.i18n.t("case.automatic")) +
+      ": " +
+      (reason || ctx.i18n.t("case.noReason"));
     if (action === "kick") await member.kick(auditReason);
     else {
       await member.timeout((opts.minutes ?? 0) * MINUTE_MS, auditReason);
@@ -417,7 +422,7 @@ export default definePlugin({
         const m = await target(ctx, it, it.options.user.id);
         if (!m) return;
         await it.reply(
-          (await release(ctx, m.id, undefined, moderatorOf(it), "Staff released quarantine"))
+          (await release(ctx, m.id, undefined, moderatorOf(it), ctx.i18n.t("quarantine.staffRelease")))
             ? ctx.i18n.t("quarantine.lifted")
             : ctx.i18n.t("quarantine.absent"),
         );
@@ -617,9 +622,24 @@ export default definePlugin({
     expireCaseLog,
     expireBan,
   },
+  subscriptions: {
+    // A temporary role that expires while it is saved by a quarantine must not come back
+    // permanently at the release (member-roles' expiry finds the member without it).
+    "member-roles.tempRoleExpired": async (ctx, payload) => {
+      const p = payload as { userId?: unknown; roleId?: unknown } | null;
+      if (typeof p?.userId === "string" && typeof p.roleId === "string")
+        await excludeSavedRole(ctx, p.userId, p.roleId);
+    },
+  },
   events: {
     auditLogEntry: staffRoleChange,
     async memberJoin(ctx, member) {
+      try {
+        await rejoinQuarantine(ctx, member);
+      } catch (error) {
+        ctx.log.warn("Quarantine could not be restored on return", { error: String(error) });
+        ctx.status.set("quarantine", ctx.i18n.t("status.quarantineReturn"));
+      }
       if (!ctx.plugins.has("audit-log") && ctx.config.log.joins)
         await writeActivity(
           ctx,
@@ -643,14 +663,19 @@ export default definePlugin({
       if (ctx.plugins.has("audit-log") || !ctx.config.log.updates || !previous) return;
       const changes: string[] = [];
       if ((previous.nickname ?? null) !== (member.nickname ?? null)) {
-        changes.push(`nickname: ${previous.nickname ?? "—"} → ${member.nickname ?? "—"}`);
+        changes.push(
+          ctx.i18n.t("activity.nickname", {
+            before: previous.nickname ?? "—",
+            after: member.nickname ?? "—",
+          }),
+        );
       }
       const before = new Set(previous.roles.map((r) => r.id));
       const after = new Set(member.roles.map((r) => r.id));
       const added = member.roles.filter((r) => !before.has(r.id)).map((r) => `+${r.name}`);
       const removed = previous.roles.filter((r) => !after.has(r.id)).map((r) => `-${r.name}`);
       if (added.length + removed.length > 0)
-        changes.push(`roles: ${[...added, ...removed].join(" ")}`);
+        changes.push(ctx.i18n.t("activity.roles", { changes: [...added, ...removed].join(" ") }));
       if (changes.length > 0)
         await writeActivity(ctx, member.id, `✏️ ${member.mention}: ${changes.join("; ")}`);
     },
@@ -745,7 +770,7 @@ export default definePlugin({
             action: "clear",
             member: { id: userId, name: (await ctx.server.member(userId))?.displayName ?? userId },
             moderator: viewer ? who(viewer.user, viewer.member?.displayName) : null,
-            reason: `${items.length} warning(s) cleared from the portal`,
+            reason: ctx.i18n.t("warnings.portalCleared", { count: items.length }),
           });
         }
         return { cleared: items.length };
@@ -857,6 +882,7 @@ async function interopSanction(ctx: Context, input: SanctionInput, call: Interop
   return { number: c.number, action: c.action, status: c.status ?? "active" };
 }
 
+const LOCKED: Permission[] = ["SendMessages", "SendMessagesInThreads"];
 function overlayCommand(kind: "lock" | "slowmode") {
   return command({
     description:
@@ -896,18 +922,40 @@ function overlayCommand(kind: "lock" | "slowmode") {
         await it.reply(ctx.i18n.t("overlay.seconds"));
         return;
       }
-      await ctx.server.overlays.apply({
-        id: kind + "-" + ch.key,
-        until: new Date(Date.now() + (it.options.duration ?? 60) * 60000),
-        reason: kind + " requested by " + it.user.id,
-        channels: {
-          [ch.key]:
-            kind === "lock"
-              ? { overwrites: { "@everyone": { deny: ["SendMessages"] } } }
-              : { slowmodeSeconds: it.options.seconds },
-        },
-      });
-      await it.reply(ctx.i18n.t("overlay.applied", { kind, channel: ch.name }));
+      try {
+        await ctx.server.overlays.apply({
+          id: kind + "-" + ch.key,
+          until: new Date(Date.now() + (it.options.duration ?? 60) * 60000),
+          reason: kind + " requested by " + it.user.id,
+          channels: {
+            [ch.key]:
+              kind === "lock"
+                ? // A role or member allow wins over the @everyone deny: "*" neutralizes
+                  // every such allow in the channel except the bot's and staff roles'.
+                  {
+                    overwrites: {
+                      "@everyone": { deny: LOCKED },
+                      "*": { neutral: LOCKED },
+                    },
+                  }
+                : { slowmodeSeconds: it.options.seconds },
+          },
+        });
+      } catch (error) {
+        ctx.log.warn("Channel overlay refused", { kind, channel: ch.key, error: String(error) });
+        await it.reply(ctx.i18n.t("overlay.failed", { channel: ch.name }));
+        return;
+      }
+      const minutes = it.options.duration ?? 60;
+      await it.reply(
+        kind === "lock"
+          ? ctx.i18n.t("overlay.locked", { channel: ch.name, minutes })
+          : ctx.i18n.t("overlay.slowed", {
+              channel: ch.name,
+              minutes,
+              seconds: it.options.seconds ?? 0,
+            }),
+      );
     },
   });
 }

@@ -141,7 +141,7 @@
           "type": "integer",
           "minimum": 2,
           "maximum": 20,
-          "default": 3,
+          "default": 4,
           "description": "Number of observations that triggers this rule."
         },
         "seconds": {
@@ -150,6 +150,20 @@
           "maximum": 600,
           "default": 30,
           "description": "Window or slowmode duration in seconds."
+        },
+        "minChannels": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "default": 2,
+          "description": "Distinct channels the repeated message must appear in."
+        },
+        "minLength": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2000,
+          "default": 20,
+          "description": "Minimum normalized length of a repeated message without a link; shorter messages never count."
         },
         "action": {
           "type": "object",
@@ -164,7 +178,7 @@
                 "kick",
                 "ban"
               ],
-              "default": "quarantine",
+              "default": "delete",
               "description": "Kind of moderation action."
             },
             "minutes": {
@@ -182,7 +196,7 @@
       },
       "additionalProperties": false,
       "default": {},
-      "description": "Match identical normalized messages across channels."
+      "description": "Match identical normalized messages across channels. A match needs a link or minLength characters."
     },
     "mentions": {
       "type": "object",
@@ -289,7 +303,7 @@
                 "kick",
                 "ban"
               ],
-              "default": "warn",
+              "default": "delete",
               "description": "Kind of moderation action."
             },
             "minutes": {
@@ -467,6 +481,28 @@
       "default": {},
       "description": "Escalation after repeated violations by one member."
     },
+    "sanctionLimit": {
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 5,
+          "description": "Automatic sanctions allowed per window. Further findings wait for staff review."
+        },
+        "seconds": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 3600,
+          "default": 60,
+          "description": "Window or slowmode duration in seconds."
+        }
+      },
+      "additionalProperties": false,
+      "default": {},
+      "description": "Circuit breaker for automatic sanctions across all members. Message removal and staff-confirmed raid bans are not counted."
+    },
     "raid": {
       "type": "object",
       "properties": {
@@ -607,7 +643,7 @@
           },
           "maxItems": 64,
           "default": [],
-          "description": "Discord IDs for specifically trusted bots."
+          "description": "Discord IDs of trusted accounts. Every bot account is exempt regardless of this list."
         }
       },
       "additionalProperties": false,

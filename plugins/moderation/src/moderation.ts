@@ -86,7 +86,7 @@ function caseEmbed(ctx: Context, c: Case): Embed {
       : []),
     {
       name: ctx.i18n.t("case.moderator"),
-      value: c.moderator ? `<@${c.moderator.id}>` : "automatic",
+      value: c.moderator ? `<@${c.moderator.id}>` : ctx.i18n.t("case.automatic"),
       inline: true,
     },
   ];
@@ -209,7 +209,8 @@ async function recordedMessage(ctx: Context, r: Receipt) {
   const channel = ctx.server.channel({ id: r.channelId });
   const owns = (m: import("@cicord/sdk").Message) =>
     m.author.id === ctx.bot.user.id &&
-    m.embeds.some((e) => e.footer?.text === `Case delivery ${r.nonce}`);
+    // The footer is localized: the nonce identifies it in any locale.
+    m.embeds.some((e) => e.footer?.text?.endsWith(" " + r.nonce) === true);
   if (r.messageId) {
     const message = await channel.message(r.messageId);
     if (message && !owns(message)) throw new Error("Staff log receipt could not be verified");
@@ -400,11 +401,14 @@ async function deliver(ctx: Context, number: number) {
   if (!d.webhookAttempted && (ctx.secrets.has("WEBHOOK_URL") || ctx.config.webhook?.url)) {
     d.webhookAttempted = true;
     await ctx.kv.set(key, d, { ttlSeconds });
-    await notifyWebhook(ctx, `Case #${number} · ${ctx.i18n.t("actions." + c.action)}`);
+    await notifyWebhook(
+      ctx,
+      ctx.i18n.t("case.title", { number, action: ctx.i18n.t("actions." + c.action) }),
+    );
   }
   const channel = ctx.server.channel({ id: d.channelId });
   const nonce = d.taskId.slice(0, 25);
-  const footer = `Case delivery ${nonce}`;
+  const footer = ctx.i18n.t("case.delivery", { nonce });
   const existing = await ctx.kv.get<Receipt>(receiptKey(number));
   let receipt: Receipt = existing ?? {
     number,

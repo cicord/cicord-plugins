@@ -176,10 +176,10 @@ test("appeal renewal sends one DM per case and erasure preserves other members",
   expect((await callRoute(plugin, t, "POST /scope/renew", call)).status).toBe(429);
   expect(t.sent.filter((m) => m.to === "dm:member")).toHaveLength(1);
   await callRoute(plugin, t, "POST /appeals", { ...call, body: { text: "private appeal" } });
-  const exported = await plugin.privacy!.export(t.ctx, "member");
+  const exported = await t.exportMember(plugin, "member");
   expect(JSON.stringify(exported)).toContain("private appeal");
   expect(JSON.stringify(exported)).not.toContain("Bob");
-  await plugin.privacy!.erase(t.ctx, "member");
+  await t.eraseMember(plugin, "member");
   expect(await t.ctx.kv.get("case:2")).toEqual(other);
   expect(await t.ctx.kv.get("case:3")).toBeUndefined();
   expect(await t.ctx.kv.get("appeal:1")).toBeUndefined();
@@ -225,7 +225,7 @@ test("privacy erases identifying Discord copies but preserves the pending quaran
   expect(JSON.stringify((await visible()).map((x) => x.embeds))).toContain(
     "sensitive staff reason",
   );
-  const erased = await plugin.privacy!.erase(t.ctx, m.id);
+  const erased = await t.eraseMember(plugin, m.id);
   expect(erased.erased).toBeGreaterThan(0);
   const after = JSON.stringify((await visible()).map((x) => x.embeds));
   expect(after).not.toContain("sensitive staff reason");
@@ -240,4 +240,62 @@ test("privacy erases identifying Discord copies but preserves the pending quaran
   expect(m.hasRole("member")).toBe(true);
   expect(await t.ctx.kv.get("quarantine:" + m.id)).toBeUndefined();
   expect(await t.ctx.kv.get("quarantine-case:" + c.number)).toBeUndefined();
+});
+
+test("a quarantined member who leaves and returns is quarantined again, keeping the saved roles", async () => {
+  const t = setup();
+  const m = t.member("member")!;
+  await quarantine(t.ctx, m, "spam", 60, null, { type: "command" });
+  t.removeMember("member");
+  await plugin.events!.memberLeave!(t.ctx, m.user, m);
+  // Another plugin gives the returning member an automatic role.
+  const back = t.addMember({ id: "member", roles: ["extra"] });
+  await plugin.events!.memberJoin!(t.ctx, back);
+  expect(back.hasRole("restricted")).toBe(true);
+  expect(back.hasRole("extra")).toBe(false);
+  expect(await release(t.ctx, "member", undefined, null, "done")).toBe(true);
+  expect(back.hasRole("restricted")).toBe(false);
+  expect(back.hasRole("member")).toBe(true);
+  expect(back.hasRole("extra")).toBe(true);
+});
+
+test("a temporary role that expires during a quarantine is not restored by the release", async () => {
+  const t = setup();
+  const m = t.member("member")!;
+  await m.addRole("extra");
+  await quarantine(t.ctx, m, "spam", 60, null, { type: "command" });
+  expect(m.hasRole("extra")).toBe(false);
+  const extra = t.ctx.server.role("extra").id;
+  await plugin.subscriptions!["member-roles.tempRoleExpired"]!(t.ctx, {
+    userId: "member",
+    roleId: extra,
+    expiresAt: Date.now(),
+  });
+  expect(await release(t.ctx, "member", undefined, null, "done")).toBe(true);
+  expect(m.hasRole("member")).toBe(true);
+  expect(m.hasRole("extra")).toBe(false);
+});
+
+test("staff never decide an appeal of their own case or overrule a higher moderator", async () => {
+  const t = setup();
+  t.addMember({ id: "senior", roles: ["botTop"] });
+  t.addMember({ id: "owner" });
+  const own = { ...c(1), member: { id: "staffer", name: "Staff" }, moderator: { id: "senior", name: "Senior" }, status: "active" as const };
+  const higher = { ...c(2), moderator: { id: "senior", name: "Senior" }, status: "active" as const };
+  for (const item of [own, higher]) {
+    await t.ctx.kv.set("case:" + item.number, item);
+    await t.ctx.kv.set("appeal:" + item.number, {
+      case: item.number,
+      userId: item.member!.id,
+      text: "Please",
+      status: "pending",
+      submittedAt: new Date().toISOString(),
+    });
+  }
+  const decide = (n: number, viewer: string) =>
+    callRoute(plugin, t, `POST /appeals/${n}/decision`, { viewer, body: { decision: "accepted" } });
+  expect((await decide(1, "staffer")).status).toBe(403);
+  expect((await decide(2, "staffer")).status).toBe(403);
+  expect(await t.ctx.kv.get("appeal:2")).toMatchObject({ status: "pending" });
+  expect((await decide(2, "owner")).status).toBe(200);
 });

@@ -91,8 +91,8 @@ export default definePlugin({tasks:{expireBan,bindBanEvidence,deliverCase,expire
 		return m
 	}
 	row := ledger()
-	if len(row["proof"]) == 0 {
-		t.Fatal("simulator failed to bind the ban audit entry")
+	if string(row["caseSaved"]) != "true" {
+		t.Fatal("the ban was not bound to its case")
 	}
 	var old string
 	must(json.Unmarshal(row["taskId"], &old))

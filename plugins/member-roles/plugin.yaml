@@ -8,7 +8,7 @@ metadata:
   license: Apache-2.0
   keywords: [roles, membership, boosts]
 spec:
-  engine: ">=0.2.0-0"
+  engine: ">=0.2.0"
   entry: ./src/index.ts
   config: {schema: ./config.schema.json}
   locales: ./locales
@@ -32,5 +32,6 @@ spec:
     provides: {actions: [grantTemporary, revoke]}
   privacy:
     records:
-      - {name: memberRoles, policy: erase, description: "Active temporary grants, sticky-role snapshots and boost state keyed by member."}
-      - {name: roleJobs, policy: erase, description: "Member-specific expiry tasks and the current tenure pagination cursor."}
+      - {name: memberRoles, policy: erase, description: "Sticky-role snapshots, boost state and the request token of temporary grants keyed by member."}
+      - {name: activeTemporaryGrants, policy: retain, description: "Member, role and deadline of a live temporary grant, with its expiry task.", retention: "Until the grant expires", justification: "A data request must not turn a timed role or restriction into a permanent one; the expiry task removes the role on schedule."}
+      - {name: roleJobs, policy: erase, description: "The current tenure pagination cursor when it names the member."}

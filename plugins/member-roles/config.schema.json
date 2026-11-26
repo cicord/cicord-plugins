@@ -114,7 +114,19 @@
           },
           "uniqueItems": true,
           "default": [],
-          "description": "Optional allowlist for temporary grants. Empty permits all assignable roles."
+          "description": "Roles that may be granted temporarily. Empty permits every assignable role for /temprole only; inter-plugin grantTemporary and revoke calls require an explicit list."
+        },
+        "privilegedRoles": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "x-cicord-ref": "role"
+          },
+          "uniqueItems": true,
+          "default": [],
+          "description": "Temporary roles that may carry Administrator, Manage Roles, Manage Server, Ban, Kick, Manage Channels, Manage Webhooks, Mention Everyone or Timeout Members. Other roles with these permissions, or whose permissions are unknown, are refused."
         }
       },
       "additionalProperties": false,

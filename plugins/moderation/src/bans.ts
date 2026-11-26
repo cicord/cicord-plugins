@@ -9,15 +9,15 @@ import {
 } from "./moderation.ts";
 
 type Person = NonNullable<Case["member"]>;
-type BanProof = { entryId: string; actorId: string; checkedAt: number; entryAt?: number };
 type Expiry = {
   sanction: Case;
   taskId?: string;
   release?: Case;
+  /** Latest `member.ban` audit entry before ours: older entries never concern this case. */
   floor?: string;
   supersedes?: number;
   caseSaved?: boolean;
-  proof?: BanProof;
+  /** Generation of the pending materialization check. */
   nextCheck?: number;
   opaqueJobs?: boolean;
   erasedTarget?: string;
@@ -25,12 +25,10 @@ type Expiry = {
 
 type BanOptions = { source?: Case["source"]; beforeDiscord?(sanction: Case): Promise<void> };
 
-const DAY = 86_400_000;
-const WEEK = 7 * DAY;
 const pending = new Map<string, Promise<void>>();
 const activeKey = (user: string) => `active-ban:${user}`;
 const expiryKey = (number: number) => `ban-expiry:${number}`;
-const marker = (c: Case) => `[cicord ${c.action} #${c.number}] `;
+const marker = (c: Pick<Case, "action" | "number">) => `[cicord ${c.action} #${c.number}] `;
 
 // Use only alphabetic case-local references in the scheduler. A case counter or
 // clock value must never be mistaken for an erased Discord user ID.
@@ -111,7 +109,7 @@ async function setStatus(
     if (!ttlSeconds) tx.delete(key);
     else {
       const value = { ...old.value, status: old.value.status === "void" ? "void" : status };
-      if (erasedTarget) value.member = { id: erasedTarget, name: "Deleted user" };
+      if (erasedTarget) value.member = { id: erasedTarget, name: ctx.i18n.t("case.deletedUser") };
       tx.set(key, value as Json, { ttlSeconds });
     }
     if ((await tx.commit()).ok) return;
@@ -136,7 +134,7 @@ async function currentBan(ctx: Context, user: string) {
   return entry?.user.id === user ? entry : undefined;
 }
 
-function hasMarker(ctx: Context, c: Case, reason?: string) {
+function hasMarker(ctx: Context, c: Pick<Case, "action" | "number">, reason?: string) {
   const prefix = marker(c);
   return (
     !!reason &&
@@ -145,21 +143,26 @@ function hasMarker(ctx: Context, c: Case, reason?: string) {
   );
 }
 
-function confirmedInstallation(ctx: Context, event: AuditLogEntry): boolean {
+/**
+ * Whether an audit entry may be this installation's own ban or unban. The actor is
+ * Discord's own record: another account's entry is never ours. A confirmed binding to
+ * another installation (or to a human) is also not ours. Probable or unknown attribution
+ * of our bot's own entry does not veto, since the plugin's own records own the case.
+ */
+function mayBeOurs(ctx: Context, event: AuditLogEntry): boolean {
+  if (event.actorId !== ctx.bot.user.id) return false;
+  if (event.attribution.certainty !== "confirmed") return true;
   const origin = event.attribution.plugin;
   return (
-    !event.mergeable &&
-    event.actorId === ctx.bot.user.id &&
     event.attribution.kind === "cicord" &&
-    event.attribution.certainty === "confirmed" &&
     origin?.bot === ctx.bot.key &&
     origin.instance === ctx.plugin.instance &&
     origin.plugin === ctx.plugin.name
   );
 }
 
-// Discord has no target filter. An incomplete scan cannot establish that no intervening
-// ban or unban occurred. The overlap includes audit entries arriving after a checkpoint.
+// Discord has no target filter. An incomplete scan throws: the caller then relies on
+// the plugin's own records alone.
 async function latest(
   ctx: Context,
   action: string,
@@ -176,47 +179,62 @@ async function latest(
     if (rows.length < 100) return undefined;
     before = rows[rows.length - 1]!.id;
   }
-  throw new Error("Ban audit history exceeds the verification window; staff review required");
+  throw new Error("Ban audit history exceeds the scanned window");
 }
 
-type Check = { kind: "verified"; proof: BanProof } | { kind: "replaced" | "absent" | "pending" };
+/** The latest ban and unban of a user since a time, or undefined when the audit log
+ * cannot be read. A missing permission is reported once in the instance status. */
+async function trail(ctx: Context, user: string, since: number) {
+  try {
+    const found = {
+      ban: await latest(ctx, "member.ban", user, since),
+      unban: await latest(ctx, "member.unban", user, since),
+    };
+    ctx.status.set("banAudit", null);
+    return found;
+  } catch (error) {
+    ctx.status.set("banAudit", ctx.i18n.t("status.banAudit"));
+    ctx.log.warn("Ban audit history unavailable; using moderation records", {
+      error: String(error),
+    });
+    return undefined;
+  }
+}
 
+async function auditFloor(ctx: Context) {
+  try {
+    const [before] = await ctx.server.auditLog({ action: "member.ban", limit: 1 });
+    return before?.id ?? "0";
+  } catch {
+    ctx.status.set("banAudit", ctx.i18n.t("status.banAudit"));
+    return "0";
+  }
+}
+
+type Check = "ours" | "replaced" | "absent";
+
+/**
+ * The plugin's own records decide whether the current Discord ban is this case's:
+ * the active pointer names it, its expiry record exists and the Discord ban carries
+ * its marker. The audit log, when readable, only vetoes: a newer ban or unban by
+ * another account or installation means staff took the ban over (P5). A missing,
+ * late or probable entry never keeps a sanction in force.
+ */
 async function checkBan(ctx: Context, p: Expiry): Promise<Check> {
   const c = p.sanction,
     user = c.member!.id;
-  if (((await ctx.kv.get<number>(activeKey(user))) ?? 0) > c.number) return { kind: "replaced" };
+  if (((await ctx.kv.get<number>(activeKey(user))) ?? 0) > c.number) return "replaced";
   const remote = await currentBan(ctx, user);
-  if (!remote) return { kind: "absent" };
-  if (!hasMarker(ctx, c, remote.reason)) return { kind: "replaced" };
-  const now = Date.now();
-  const since = (p.proof?.checkedAt ?? Date.parse(c.at)) - 120_000;
-  // Discord keeps an audit entry for 45 days. Do not infer continuity across
-  // an outage longer than our verified history, even for an identical ban reason.
-  if (!Number.isFinite(since) || now - since >= 44 * DAY) return { kind: "pending" };
-  const ban = await latest(ctx, "member.ban", user, since);
-  const lift = await latest(ctx, "member.unban", user, since);
-  if (p.proof) {
-    const original = BigInt(p.proof.entryId);
-    if (p.proof.actorId !== ctx.bot.user.id) return { kind: "pending" };
-    if (
-      (!ban && (p.proof.entryAt ?? Date.parse(c.at)) >= since) ||
-      (ban && BigInt(ban.id) < original)
-    )
-      return { kind: "pending" };
-    if ((ban && BigInt(ban.id) > original) || (lift && BigInt(lift.id) > original))
-      return { kind: "replaced" };
-    if (ban && BigInt(ban.id) === original && ban.actorId !== p.proof.actorId)
-      return { kind: "pending" };
-    return { kind: "verified", proof: { ...p.proof, checkedAt: now } };
-  }
-  if (!ban || BigInt(ban.id) <= BigInt(p.floor ?? "0")) return { kind: "pending" };
-  if (lift && BigInt(lift.id) > BigInt(ban.id)) return { kind: "pending" };
-  if (!hasMarker(ctx, c, ban.reason) || !confirmedInstallation(ctx, ban))
-    return { kind: "pending" };
-  return {
-    kind: "verified",
-    proof: { entryId: ban.id, actorId: ctx.bot.user.id, entryAt: ban.at.getTime(), checkedAt: now },
-  };
+  if (!remote) return "absent";
+  if (!hasMarker(ctx, c, remote.reason)) return "replaced";
+  const found = await trail(ctx, user, Date.parse(c.at) - 120_000);
+  const floor = BigInt(p.floor ?? "0");
+  const ban = found?.ban && BigInt(found.ban.id) > floor ? found.ban : undefined;
+  const lift = found?.unban && BigInt(found.unban.id) > floor ? found.unban : undefined;
+  if (ban && !mayBeOurs(ctx, ban)) return "replaced";
+  if (lift && !mayBeOurs(ctx, lift) && (!ban || BigInt(lift.id) > BigInt(ban.id)))
+    return "replaced";
+  return "ours";
 }
 
 const store = (ctx: Context, p: Expiry) =>
@@ -234,12 +252,12 @@ async function materialize(ctx: Context, p: Expiry) {
     await saveNewCase(
       ctx,
       p.erasedTarget
-        ? { ...p.sanction, member: { id: p.erasedTarget, name: "Deleted user" }, reason: "" }
+        ? { ...p.sanction, member: { id: p.erasedTarget, name: ctx.i18n.t("case.deletedUser") }, reason: "" }
         : p.sanction,
     );
     p.caseSaved = true;
     const c = p.sanction;
-    // Keep only what an expiration, checkpoint or conditional release needs.
+    // Keep only what an expiration or conditional release needs.
     // Case history owns the names, reason, moderator, evidence and its own TTL.
     p.sanction = {
       number: c.number,
@@ -258,36 +276,9 @@ async function materialize(ctx: Context, p: Expiry) {
     else await setStatus(ctx, p.supersedes, "superseded");
   }
 }
-async function checkpoint(ctx: Context, p: Expiry, result: Check) {
-  if (result.kind === "absent" || result.kind === "replaced") {
-    await retire(ctx, p, result.kind === "absent" ? "lifted" : "superseded");
-    return;
-  }
-  let delay: number;
-  if (result.kind === "verified") {
-    p.proof = result.proof;
-    // A long or permanent ban must periodically reestablish continuity before
-    // Discord expires its audit history. Short bans are checked again on expiry.
-    delay = WEEK;
-    if (p.sanction.expiresAt && Date.parse(p.sanction.expiresAt) <= Date.now() + delay) {
-      delete p.nextCheck;
-      await store(ctx, p);
-      return;
-    }
-  } else {
-    if (Date.now() - Date.parse(p.sanction.at) > 180_000)
-      throw new Error("Ban ownership could not be confirmed; staff review required");
-    delay = 20_000;
-  }
-  p.nextCheck = Date.now() + delay;
-  await ctx.schedule.after(
-    delay,
-    "bindBanEvidence",
-    jobRef(p.sanction.number, "check", p.nextCheck),
-  );
-  await store(ctx, p);
-}
 
+/** A command that died around its Discord ban leaves a record: bind it to the case,
+ * or drop it when the ban never happened or was already taken over. */
 export async function bindBanEvidence(ctx: Context, payload?: Json) {
   const job = parseJob(payload);
   const user = (await ctx.kv.get<Expiry>(expiryKey(job.number)))?.sanction.member?.id;
@@ -302,10 +293,49 @@ export async function bindBanEvidence(ctx: Context, payload?: Json) {
     }
     if (job.check === undefined || p.nextCheck !== job.check) return;
     if (p.release) return; // The resolution has its own recovery task.
-    const result = await checkBan(ctx, p);
-    if (result.kind === "verified") await materialize(ctx, p);
-    await checkpoint(ctx, p, result);
+    const state = await checkBan(ctx, p);
+    if (state === "ours") {
+      await materialize(ctx, p);
+      delete p.nextCheck;
+      await store(ctx, p);
+    } else await retire(ctx, p, state === "absent" ? "lifted" : "superseded");
   });
+}
+
+/**
+ * Ban with this case's marker. Discord may keep an existing ban (and its reason) when
+ * a banned user is banned again, so a replacement verifies the marker and otherwise
+ * lifts the earlier ban before banning again: the new case then owns the ban, its
+ * expiry and the requested message deletion.
+ */
+async function banWithMarker(
+  ctx: Context,
+  user: string,
+  c: Case,
+  options: { reason: string; deleteMessagesSeconds?: number },
+) {
+  const banned = await currentBan(ctx, user);
+  if (banned) {
+    try {
+      await ctx.server.ban(user, options);
+    } catch (error) {
+      ctx.log.info("Replacement ban was not applied in place", { error: String(error) });
+    }
+    if (hasMarker(ctx, c, (await currentBan(ctx, user))?.reason)) return;
+    await ctx.server.unban(user, marker(c) + "replacing the current ban");
+  }
+  try {
+    await ctx.server.ban(user, options);
+  } catch (error) {
+    if (!banned) throw error;
+    // The earlier ban is already lifted: one retry before reporting the failure.
+    try {
+      await ctx.server.ban(user, options);
+    } catch (retry) {
+      ctx.status.set("banReplace", ctx.i18n.t("status.banReplace", { number: c.number }));
+      throw retry;
+    }
+  }
 }
 
 export async function applyBan(
@@ -319,7 +349,7 @@ export async function applyBan(
 ) {
   return forMember(ctx, member.id, async () => {
     const previous = await ctx.kv.get<number>(activeKey(member.id));
-    const [before] = await ctx.server.auditLog({ action: "member.ban", limit: 1 });
+    const floor = await auditFloor(ctx);
     const number = await ctx.kv.increment("cases"),
       at = new Date();
     const c: Case = {
@@ -337,7 +367,7 @@ export async function applyBan(
     };
     const p: Expiry = {
       sanction: c,
-      floor: before?.id ?? "0",
+      floor,
       opaqueJobs: true,
       nextCheck: at.getTime() + 20_000,
       ...(previous ? { supersedes: previous } : {}),
@@ -347,19 +377,15 @@ export async function applyBan(
     await ctx.schedule.after(20_000, "bindBanEvidence", jobRef(number, "check", p.nextCheck!));
     await store(ctx, p);
     await options.beforeDiscord?.(c);
-    const auditReason = marker(c) + `${moderator?.name ?? "automatic"}: ${reason || "no reason"}`;
-    await ctx.server.ban(member.id, {
+    const auditReason =
+      marker(c) +
+      `${moderator?.name ?? ctx.i18n.t("case.automatic")}: ${reason || ctx.i18n.t("case.noReason")}`;
+    await banWithMarker(ctx, member.id, c, {
       reason: Array.from(auditReason).slice(0, 512).join(""),
       ...(deleteMessages ? { deleteMessagesSeconds: 86400 } : {}),
     });
     await materialize(ctx, p);
-    // The durable evidence task owns recovery if Discord's audit entry is late.
-    try {
-      const result = await checkBan(ctx, p);
-      if (result.kind === "verified") await checkpoint(ctx, p, result);
-    } catch {
-      ctx.log.warn("Ban evidence will be retried", { number });
-    }
+    ctx.status.set("banReplace", null);
     return c;
   });
 }
@@ -373,15 +399,16 @@ async function releaseCurrent(
 ) {
   const p = await ctx.kv.get<Expiry>(expiryKey(number));
   if (!p || p.sanction.member?.id !== user) return false;
-  const result = await checkBan(ctx, p);
-  if (result.kind === "pending") throw new Error("Ban ownership is unconfirmed; release deferred");
-  if (result.kind === "replaced" || (result.kind === "absent" && !p.release)) {
-    await retire(ctx, p, result.kind === "absent" ? "lifted" : "superseded");
+  const state = await checkBan(ctx, p);
+  if (state === "replaced") {
+    await retire(ctx, p, "superseded");
     return false;
   }
   if (!p.release) {
-    if (result.kind !== "verified") return false;
-    p.proof = result.proof;
+    if (state === "absent") {
+      await retire(ctx, p, "lifted");
+      return false;
+    }
     p.release = {
       number: await ctx.kv.increment("cases"),
       at: new Date().toISOString(),
@@ -399,27 +426,11 @@ async function releaseCurrent(
     );
     await store(ctx, p);
   }
-  if (result.kind === "verified") {
-    // Reserving a release can involve several writes. Re-check after those writes,
-    // immediately before Discord's unconditional remove-ban operation.
-    const final = await checkBan(ctx, p);
-    if (final.kind === "pending") throw new Error("Ban ownership is unconfirmed; release deferred");
-    if (final.kind !== "verified") {
-      await retire(ctx, p, final.kind === "absent" ? "lifted" : "superseded");
-      return false;
-    }
-    await ctx.server.unban(user, marker(p.release) + p.release.reason);
-  }
-  // A missing ban is not proof that our remove succeeded. A moderator may have
-  // lifted it while our request was in flight or before this worker resumed.
-  const receipt = await latest(ctx, "member.unban", user, Date.parse(p.release.at) - 30_000);
-  if (
-    !receipt ||
-    (p.proof && BigInt(receipt.id) <= BigInt(p.proof.entryId)) ||
-    receipt.attribution.certainty !== "confirmed"
-  )
-    throw new Error("Awaiting release audit evidence");
-  if (!confirmedInstallation(ctx, receipt) || !hasMarker(ctx, p.release, receipt.reason)) {
+  if (state === "ours") await ctx.server.unban(user, marker(p.release) + p.release.reason);
+  // Discord answers an unban of an already lifted ban with success. When the audit
+  // log names another account for the latest unban, staff lifted it first.
+  const receipt = (await trail(ctx, user, Date.parse(p.release.at) - 30_000))?.unban;
+  if (receipt && BigInt(receipt.id) > BigInt(p.floor ?? "0") && !mayBeOurs(ctx, receipt)) {
     await retire(ctx, p, "lifted");
     return false;
   }
@@ -427,13 +438,13 @@ async function releaseCurrent(
     await saveNewCase(
       ctx,
       p.erasedTarget
-        ? { ...p.sanction, member: { id: p.erasedTarget, name: "Deleted user" }, reason: "" }
+        ? { ...p.sanction, member: { id: p.erasedTarget, name: ctx.i18n.t("case.deletedUser") }, reason: "" }
         : p.sanction,
     );
   await saveNewCase(
     ctx,
     p.erasedTarget
-      ? { ...p.release, member: { id: p.erasedTarget, name: "Deleted user" }, reason: "" }
+      ? { ...p.release, member: { id: p.erasedTarget, name: ctx.i18n.t("case.deletedUser") }, reason: "" }
       : p.release,
   );
   await retire(ctx, p, p.release.moderator ? "lifted" : "expired");
@@ -447,7 +458,7 @@ export async function expireBan(ctx: Context, payload?: Json) {
   if (!user || saved?.sanction.action !== "tempban" || (job.legacyUser && job.legacyUser !== user))
     return;
   await forMember(ctx, user, () =>
-    releaseCurrent(ctx, user, job.number, null, `Temporary ban #${job.number} expired`),
+    releaseCurrent(ctx, user, job.number, null, ctx.i18n.t("ban.expired", { number: job.number })),
   );
 }
 
@@ -483,8 +494,7 @@ export async function preserveBanTasksForErasure(ctx: Context, user: string, pse
               "bindBanEvidence",
               jobRef(number, "release", p.release.number),
             );
-          else if (p.nextCheck !== undefined || !p.proof) {
-            p.nextCheck ??= Date.now();
+          else if (p.nextCheck !== undefined) {
             await ctx.schedule.after(
               Math.max(1, p.nextCheck - Date.now()),
               "bindBanEvidence",
@@ -520,7 +530,7 @@ export async function liftBan(ctx: Context, member: Person, moderator: Person, r
     if (number) {
       const p = await ctx.kv.get<Expiry>(expiryKey(number));
       if (p) {
-        if (p.erasedTarget) target = { id: p.erasedTarget, name: "Deleted user" };
+        if (p.erasedTarget) target = { id: p.erasedTarget, name: ctx.i18n.t("case.deletedUser") };
         await retire(ctx, p, "lifted");
       } else {
         await setStatus(ctx, number, "lifted");

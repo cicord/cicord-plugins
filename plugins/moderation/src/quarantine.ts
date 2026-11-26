@@ -139,7 +139,7 @@ export async function preserveQuarantineForErasure(ctx: Context, user: string, d
     if (q.overlay && Date.parse(q.until) > Date.now())
       await ctx.server.overlays.apply({
         id: overlayId(user),
-        reason: "Quarantine case #" + q.number,
+        reason: ctx.i18n.t("quarantine.caseReason", { number: q.number }),
         until: new Date(q.until),
         members: { [user]: { suspendDeclaredRoles: true } },
       });
@@ -147,9 +147,9 @@ export async function preserveQuarantineForErasure(ctx: Context, user: string, d
       q.pending.reason = "";
       delete q.pending.evidence;
       delete q.pending.evidenceChannelId;
-      q.pending.member = { id: deleted, name: "Deleted user" };
+      q.pending.member = { id: deleted, name: ctx.i18n.t("case.deletedUser") };
       if (q.pending.moderator?.id === user)
-        q.pending.moderator = { id: deleted, name: "Deleted user" };
+        q.pending.moderator = { id: deleted, name: ctx.i18n.t("case.deletedUser") };
     }
     await ctx.kv
       .atomic()
@@ -173,7 +173,7 @@ async function enforce(ctx: Context, q: Quarantine, m: Member) {
   if (q.overlay)
     await ctx.server.overlays.apply({
       id: overlayId(m.id),
-      reason: "Quarantine case #" + q.number,
+      reason: ctx.i18n.t("quarantine.caseReason", { number: q.number }),
       until: new Date(q.until),
       members: { [m.id]: { suspendDeclaredRoles: true } },
     });
@@ -280,6 +280,27 @@ export async function staffRoleChange(ctx: Context, e: AuditLogEntry) {
       q.removing = q.removing.filter((id) => !ids.has(id));
     }
     await save(ctx, q);
+  });
+}
+
+/**
+ * Discord drops every role when a member leaves. A returning member with an active
+ * quarantine gets the quarantine role back, and roles granted on return (sticky or
+ * automatic roles) are suspended with the saved set until the release.
+ */
+export async function rejoinQuarantine(ctx: Context, m: Member) {
+  await serialize(key(m.id), async () => {
+    const q = await ctx.kv.get<Quarantine>(key(m.id));
+    if (!q || Date.parse(q.until) <= Date.now()) return;
+    const extra = m.roles
+      .filter((r) => !r.declaredMembers && !r.managed && r.id !== q.role && r.id !== ctx.server.id)
+      .map((r) => r.id);
+    q.restore = [...new Set([...q.restore, ...extra])];
+    q.removing = [...new Set([...q.removing, ...extra])];
+    await save(ctx, q);
+    const reason = ctx.i18n.t("quarantine.caseReason", { number: q.number });
+    if (!m.hasRole({ id: q.role })) await m.addRole({ id: q.role }, reason);
+    for (const id of extra) if (m.hasRole({ id })) await m.removeRole({ id }, reason);
   });
 }
 

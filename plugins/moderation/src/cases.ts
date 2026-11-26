@@ -23,8 +23,10 @@ const numberOption = {
   required: true,
   minValue: 1,
 } as const;
-function describe(c: Case) {
-  return `#${c.number} · ${c.action} · ${c.status ?? "active"} — ${c.reason || "No reason"}`;
+function describe(ctx: Context, c: Case) {
+  const action = ctx.i18n.t("actions." + c.action),
+    status = ctx.i18n.t("caseStatus." + (c.status ?? "active"));
+  return `#${c.number} · ${action} · ${status} — ${c.reason || ctx.i18n.t("case.noReason")}`;
 }
 export const caseCommand = command({
   description: "Read or update moderation cases",
@@ -40,7 +42,7 @@ export const caseCommand = command({
           await it.reply(ctx.i18n.t("access.staff"));
           return;
         }
-        await it.reply(c ? describe(c) : ctx.i18n.t("case.missing"));
+        await it.reply(c ? describe(ctx, c) : ctx.i18n.t("case.missing"));
       },
     }),
     reason: subcommand({
@@ -67,7 +69,7 @@ export const caseCommand = command({
             changes: ["reason"],
             by: it.user.id,
           });
-        await it.reply(describe(c));
+        await it.reply(describe(ctx, c));
       },
     }),
     void: subcommand({
@@ -150,7 +152,7 @@ export const historyCommand = command({
     }
     const items = await history(ctx, it.options.member.id, staff, 10);
     await it.reply(
-      items.length ? items.map(describe).join("\n").slice(0, 1950) : ctx.i18n.t("case.empty"),
+      items.length ? items.map((c) => describe(ctx, c)).join("\n").slice(0, 1950) : ctx.i18n.t("case.empty"),
     );
   },
 });

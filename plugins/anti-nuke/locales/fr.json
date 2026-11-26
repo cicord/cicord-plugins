@@ -29,5 +29,12 @@
   "message.incidentRecordErased": "Enregistrement effacé.",
   "status.monitor": "Surveillance active.",
   "status.staffOnly": "Réservé à l’équipe.",
-  "status.notificationDelivery": "Un incident a été enregistré dans le portail. Une notification externe a échoué."
+  "status.notificationDelivery": "Un incident a été enregistré dans le portail. Une notification externe a échoué.",
+  "message.enforceWould": "En mode enforce, Anti-nuke aurait : ",
+  "message.enforceWouldTargetNobody": "En mode enforce, aucune action ne viserait une personne ; l’équipe peut toujours appliquer un verrouillage.",
+  "response.removeRoles": "retiré les rôles de l’acteur",
+  "response.kick": "expulsé le bot",
+  "response.finalSanction": "appliqué la sanction finale configurée (bannissement ou quarantaine)",
+  "response.requestSync": "demandé une synchronisation pour restaurer la structure déclarée",
+  "message.enforceWouldAlsoSync": "Il demanderait une synchronisation pour restaurer la structure déclarée."
 }

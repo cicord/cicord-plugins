@@ -9,7 +9,7 @@ metadata:
   license: Apache-2.0
   keywords: [audit, logs, moderation, staff, events]
 spec:
-  engine: ">=0.2.0-0"
+  engine: ">=0.2.0"
   entry: ./src/index.ts
   capabilities:
     - discord.messages.send # post observations and edit the bot's own log copies

@@ -14,7 +14,11 @@ type Receipt = {
 };
 const key = (number: number) => "activity-copy:" + number;
 const prefix = (subject: string) => "activity-owner:" + subject + ":";
-const marker = (task: string) => "Member log " + task.slice(0, 25);
+const marker = (ctx: Context, task: string) =>
+  ctx.i18n.t("activity.marker", { task: task.slice(0, 25) });
+/** The footer is localized: the task nonce identifies it in any locale. */
+const marked = (text: string | undefined, task: string) =>
+  text?.endsWith(" " + task.slice(0, 25)) === true;
 const retention = 365 * 86400000;
 
 export async function writeActivity(
@@ -46,7 +50,7 @@ export async function writeActivity(
           description: text,
           color,
           timestamp: new Date().toISOString(),
-          footer: { text: marker(task.id) },
+          footer: { text: marker(ctx, task.id) },
         },
       ],
       nonce: task.id.slice(0, 25),
@@ -66,7 +70,7 @@ async function withdraw(ctx: Context, receipt: Receipt) {
     message = rows.find(
       (m) =>
         m.author.id === ctx.bot.user.id &&
-        m.embeds.some((e) => e.footer?.text === marker(receipt.task)),
+        m.embeds.some((e) => marked(e.footer?.text, receipt.task)),
     );
     if (
       !message &&

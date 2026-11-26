@@ -4,7 +4,8 @@ declare module "@cicord/sdk" {
     locale?: "en" | "fr";
     panelChannel: string;
     verifiedRole: string;
-    method: "button" | "visual" | "turnstile" | "hcaptcha";
+    method: "button" | "typed" | "visual" | "turnstile" | "hcaptcha";
+    fallback: "review" | "button";
     minAccountAgeDays: number;
     youngAccount: "hold" | "kick" | "delay";
     delayHours: number;

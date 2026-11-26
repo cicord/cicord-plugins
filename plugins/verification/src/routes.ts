@@ -4,11 +4,25 @@ export type Decision =
 export type Challenge =
   | Decision
   | { id: string; method: "button" }
+  | {
+      id: string;
+      method: "typed";
+      kind: "typed";
+      prompt: string;
+      /** data:image/png;base64 URL of the code. */
+      image: string;
+      length: number;
+      charset: "alphanumeric";
+    }
   | { id: string; method: "visual"; prompt: string; image: string; choices: number[] }
   | { id: string; method: "turnstile" | "hcaptcha"; siteKey: string };
 export interface Routes {
   "GET /challenge": { response: Challenge };
-  "POST /challenge": { body: { id: string; token?: string; answer?: number }; response: Decision };
+  "POST /challenge": {
+    /** `answer`: the typed code (string) or the visual choice (number). */
+    body: { id: string; token?: string; answer?: number | string };
+    response: Decision;
+  };
   "GET /queue": {
     query: { cursor?: string };
     response: { items: { userId: string; joined: number }[]; cursor: string | null };

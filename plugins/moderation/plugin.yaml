@@ -9,7 +9,7 @@ metadata:
   license: Apache-2.0
   keywords: [moderation, warnings, audit, automod]
 spec:
-  engine: ">=0.2.0-0"
+  engine: ">=0.2.0"
   entry: ./src/index.ts
   locales: ./locales
   delivery: at-least-once
@@ -28,6 +28,7 @@ spec:
     - {feature: quarantine, capabilities: [discord.roles.assign]}
     - {feature: appeals, capabilities: [portal.links]}
     - {feature: appealsViaTicket, capabilities: ["plugins.call:tickets.open"]}
+    - {feature: tempRoles, capabilities: [events.subscribe]}
   interop:
     types: ./src/contracts.ts
     publishes:
@@ -35,6 +36,8 @@ spec:
       - {topic: case, scope: server, version: 2}
       - {topic: caseUpdated, scope: server, version: 1}
       - {topic: appeal, scope: server, version: 1}
+    subscribes:
+      - {topic: member-roles.tempRoleExpired, version: 1}
     provides: {queries: [standing, cases], actions: [sanction]}
     consumes: {actions: [tickets.open]}
   capabilities:

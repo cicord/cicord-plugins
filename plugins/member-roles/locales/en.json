@@ -12,6 +12,11 @@
   "error.member": "The member is unavailable on this server.",
   "error.unmanaged": "Cannot manage {role}. Check declared YAML members, integration ownership and role metadata.",
   "status.boost": "Boost announcements require discord.channels.read and discord.messages.send.",
+  "error.failed": "The role change failed. Try again or ask an administrator to check the instance status.",
+  "error.interopAllowlist": "Other plugins may grant temporary roles only when temp.roles lists them.",
+  "status.unmanaged": "Role {role} is skipped: its holders are declared in YAML, an integration owns it or its metadata is unavailable.",
+  "status.hierarchy": "Role {role} is skipped: the bot needs Manage Roles and a role above it.",
+  "status.missing": "Role {role} is skipped: it does not exist on this server.",
   "commands.temprole.name": "temprole",
   "commands.temprole.add.name": "add",
   "commands.temprole.remove.name": "remove",
@@ -35,5 +40,8 @@
   "commands.temprole.remove.options.reason.name": "reason",
   "commands.temprole.remove.options.reason.description": "Audit reason",
   "commands.temprole.list.options.user.name": "user",
-  "commands.temprole.list.options.user.description": "Server member"
+  "commands.temprole.list.options.user.description": "Server member",
+  "error.privileged": "{role} grants {permissions}: list it in temp.privilegedRoles to grant it temporarily.",
+  "error.permissionsUnknown": "The permissions of {role} are unknown yet, so it is not granted. Try again shortly, or list it in temp.privilegedRoles.",
+  "status.privileged": "Temporary role {role} grants {permissions} and is refused: list it in temp.privilegedRoles to allow it."
 }

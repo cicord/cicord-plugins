@@ -1,4 +1,4 @@
-import type { Context, RouteRequest, RouteResponse } from "@cicord/sdk";
+import type { Context, Member, RouteRequest, RouteResponse } from "@cicord/sdk";
 import { editCase, readCase, who, warnPrefix, type Case } from "./moderation.ts";
 import { liftBanIfCurrent } from "./bans.ts";
 import { release } from "./quarantine.ts";
@@ -27,6 +27,7 @@ const save = (ctx: Context, a: Appeal) =>
   });
 const safeNumber = (id: string | undefined) =>
   id && /^[1-9]\d*$/.test(id) && Number.isSafeInteger(Number(id)) ? Number(id) : undefined;
+const top = (m: Member) => Math.max(0, ...m.roles.map((r) => r.position ?? 0));
 const enabled = (ctx: Context) => !!ctx.config.appeals?.enabled && ctx.features.enabled("appeals");
 export async function appealLink(ctx: Context, c: Case) {
   if (!enabled(ctx) || !c.member || c.action === "note") return "";
@@ -138,6 +139,14 @@ export async function decideAppeal(ctx: Context, r: RouteRequest): Promise<Route
     const a = await ctx.kv.get<Appeal>(key(n)),
       c = await readCase(ctx, n);
     if (!a || !c || !c.member || c.member.id !== a.userId) return { status: 404 };
+    // Nobody decides an appeal of their own case, nor overrules a moderator ranked
+    // above them; the owner may decide any appeal but their own.
+    if (staff.id === a.userId) return { status: 403, body: { error: "own_case" } };
+    if (c.moderator && c.moderator.id !== staff.id && staff.id !== ctx.server.ownerId) {
+      const issuer = await ctx.server.member(c.moderator.id);
+      if (issuer && (issuer.id === ctx.server.ownerId || top(issuer) > top(staff)))
+        return { status: 403, body: { error: "issuer_outranks" } };
+    }
     if (a.status !== "pending") {
       await finalizeDecision(ctx, a);
       return { status: 200, body: a };
@@ -145,7 +154,7 @@ export async function decideAppeal(ctx: Context, r: RouteRequest): Promise<Route
     let resolution = "no change";
     if (status === "accepted") {
       const actor = who(staff.user, staff.displayName),
-        reason = "Appeal accepted for case #" + n;
+        reason = ctx.i18n.t("appeal.acceptedReason", { number: n });
       let lifted = false;
       if (c.status === "active") {
         if (c.action === "ban" || c.action === "tempban")

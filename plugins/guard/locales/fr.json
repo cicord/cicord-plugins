@@ -27,5 +27,9 @@
   "contextMenus.Block image.name": "Bloquer cette image",
   "status.raidPending": "Raid enregistré. Certaines restrictions sont en attente et seront réessayées automatiquement.",
   "status.raidNoticePending": "Les mesures du raid sont en place. Une notification au staff est en attente.",
-  "status.raidClosing": "Guard lève les restrictions et réessaiera jusqu’à leur retrait."
+  "status.raidClosing": "Guard lève les restrictions et réessaiera jusqu’à leur retrait.",
+  "status.inviteGrant": "Les invitations Discord sont bloquées : sans l’autorisation discord.invites.read, Guard ne peut pas reconnaître les invitations de ce serveur.",
+  "status.sanctionLimit": "Sanctions automatiques suspendues : plus de {count} en {seconds} s. Les nouveaux signalements attendent un examen du staff.",
+  "message.lockdownActive": "Verrouillage actif. Les restrictions restent en place jusqu’à leur levée ou la fin de la période de calme.",
+  "message.lockdownRefused": "Rien n’a été appliqué : un verrouillage nécessite l’autorisation server.overlays pour cette installation de Guard."
 }

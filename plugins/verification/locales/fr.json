@@ -1,5 +1,4 @@
 {
-  "message.howManySquaresAreInThe": "Combien de carrés voyez-vous ?",
   "message.youCanRejoinAfter": "Vous pouvez revenir après le ",
   "message.openChallenge": "Ouvrir le défi",
   "message.challengeFallbackIsActiveCheckOptional": "Méthode de secours active. Vérifiez les autorisations, la clé publique et le secret.",
@@ -20,5 +19,12 @@
   "review.denied": "Demande refusée.",
   "review.missing": "Aucune demande pour ce membre.",
   "status.verified": "Compte vérifié.",
-  "status.pending": "Compte non vérifié."
+  "status.pending": "Compte non vérifié.",
+  "message.whichNumberIsShown": "Quel nombre voyez-vous dans l’image ?",
+  "status.kickGrant": "Les expulsions de la vérification nécessitent {grant}. Les comptes récents attendent l’examen de l’équipe, et les membres en attente expirés restent jusqu’à cette autorisation.",
+  "status.kickNotice": "Les membres expulsés ne reçoivent ni avis ni lien de retour : accordez discord.dm.send.",
+  "status.expiryFailed": "{count} membres en attente expirés n’ont pas pu être expulsés. Nouvelle tentative prévue ; consultez les journaux.",
+  "message.typeTheCode": "Saisissez le code affiché dans l’image.",
+  "status.renderFailed": "L’image du défi n’a pas pu être générée. Les membres reçoivent la solution de secours configurée (examen par l’équipe ou bouton) jusqu’au retour du rendu.",
+  "status.challengeReview": "Le défi en image nécessite l’autorisation facultative render. En attendant, les nouveaux membres attendent l’examen de l’équipe (fallback : review)."
 }

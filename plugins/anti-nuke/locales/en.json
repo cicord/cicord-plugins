@@ -29,5 +29,12 @@
   "message.incidentRecordErased": "Incident record erased.",
   "status.monitor": "Monitoring is active.",
   "status.staffOnly": "Staff only.",
-  "status.notificationDelivery": "An incident was saved in the staff portal. External notification delivery failed."
+  "status.notificationDelivery": "An incident was saved in the staff portal. External notification delivery failed.",
+  "message.enforceWould": "Enforce mode would: ",
+  "message.enforceWouldTargetNobody": "Enforce mode would take no action against a person; staff may still apply a lockdown.",
+  "response.removeRoles": "remove the actor's roles",
+  "response.kick": "kick the bot",
+  "response.finalSanction": "apply the configured final sanction (ban or quarantine)",
+  "response.requestSync": "request a sync to restore the declared structure",
+  "message.enforceWouldAlsoSync": "It would request a sync to restore the declared structure."
 }

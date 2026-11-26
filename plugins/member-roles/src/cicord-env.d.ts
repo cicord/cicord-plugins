@@ -19,6 +19,7 @@ declare module "@cicord/sdk" {
       maxDays: number;
       managerRoles: string[];
       roles: string[];
+      privilegedRoles: string[];
     };
   }
 }

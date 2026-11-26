@@ -1,10 +1,12 @@
 import {
+  InteropError,
   action,
   command,
   definePlugin,
   subcommand,
   type Context,
   type Interaction,
+  type InteropCall,
   type Json,
   type Member,
 } from "@cicord/sdk";
@@ -17,6 +19,7 @@ import {
   joined,
   leave,
   manager,
+  Refusal,
   revoke,
   scan,
   subjectData,
@@ -48,11 +51,41 @@ async function invoke(ctx: Context, it: Interaction, fn: (m: Member) => Promise<
       allowedMentions: { users: false, roles: false, everyone: false },
     });
   } catch (err) {
+    // Only translated refusals reach the member; runtime and Discord errors stay in the log.
+    if (!(err instanceof Refusal)) ctx.log.warn("temprole failed", { error: String(err) });
     await it.reply({
-      content: err instanceof Error ? err.message : response(ctx, it, "error.denied"),
+      content: err instanceof Refusal ? err.message : response(ctx, it, "error.failed"),
       ephemeral: true,
       allowedMentions: { users: false, roles: false, everyone: false },
     });
+  }
+}
+/**
+ * Inter-plugin actions: the caller's grant only lets it ask, and only for the roles of
+ * temp.roles. A person acting on another member must be a temp-role manager who
+ * outranks the role, exactly as for /temprole. A member's own self-service request (a
+ * shop purchase, a giveaway claim) needs no manager authority. Refusals become
+ * InteropError so callers can tell them from failures.
+ */
+async function interop<T>(
+  ctx: Context,
+  call: InteropCall,
+  subject: string,
+  fn: (actor: Member | undefined) => Promise<T>,
+): Promise<T> {
+  try {
+    let actor: Member | undefined;
+    if (call.onBehalfOf) {
+      if (call.onBehalfOf.access === "scoped") throw new Refusal(ctx.i18n.t("error.denied"));
+      if (call.onBehalfOf.userId === subject) return await fn(undefined);
+      actor = await ctx.server.member(call.onBehalfOf.userId);
+      if (!actor) throw new Refusal(ctx.i18n.t("error.denied"));
+      await manager(ctx, actor);
+    }
+    return await fn(actor);
+  } catch (err) {
+    if (err instanceof Refusal) throw new InteropError(err.code, err.message);
+    throw err;
   }
 }
 const memberOption = { type: "user", description: "Server member", required: true } as const;
@@ -60,6 +93,7 @@ const roleOption = { type: "role", description: "Role to manage", required: true
 const reasonOption = { type: "string", description: "Audit reason", maxLength: 256 } as const;
 export default definePlugin({
   async onStart(ctx) {
+    // Refused roles get status lines; the instance and the other roles keep running.
     await validateRoles(ctx);
     if (ctx.config.enabled) await ctx.schedule.after(1000, "scan");
   },
@@ -139,12 +173,14 @@ export default definePlugin({
   actions: {
     grantTemporary: action({
       async run(ctx, input: Grant, call) {
-        return grant(ctx, input, call.idempotencyKey);
+        return interop(ctx, call, input.userId, (actor) =>
+          grant(ctx, input, call.idempotencyKey, actor, true),
+        );
       },
     }),
     revoke: action({
-      async run(ctx, input: Revoke) {
-        return revoke(ctx, input);
+      async run(ctx, input: Revoke, call) {
+        return interop(ctx, call, input.userId, (actor) => revoke(ctx, input, actor, true));
       },
     }),
   },
@@ -153,10 +189,10 @@ export default definePlugin({
     memberJoin: joined,
     memberUpdate: (ctx, member) => changed(ctx, member),
   },
-  schedules: { tenure: { cron: "*/5 * * * *", run: scan } },
+  schedules: { tenure: { cron: "*/5 * * * *", run: (ctx) => scan(ctx) } },
   tasks: {
-    scan: async (ctx) => {
-      await scan(ctx);
+    scan: async (ctx, payload) => {
+      await scan(ctx, payload === "chain");
     },
     expire: async (ctx, payload) => {
       const p = payload as TempRoleExpired | undefined;

@@ -208,15 +208,15 @@ test("erasing one member edits a shared Discord batch, removes search rows and p
   await plugin.tasks!.flush!(t.ctx, undefined);
   expect(sent(t)).toHaveLength(1);
   expect(sent(t)[0]).toMatch(/Alice[\s\S]*Bob|Bob[\s\S]*Alice/);
-  expect((await plugin.privacy!.erase(t.ctx, "110")).erased).toBeGreaterThan(0);
+  expect((await t.eraseMember(plugin, "110")).erased).toBeGreaterThan(0);
   const edited = JSON.stringify(t.edits.at(-1));
   expect(edited).toContain("Bob");
   expect(edited).not.toContain("Alice");
-  expect(await plugin.privacy!.export(t.ctx, "110")).toEqual([]);
-  expect(await plugin.privacy!.export(t.ctx, "220")).toHaveLength(1);
+  expect(await t.exportMember(plugin, "110")).toEqual([]);
+  expect(await t.exportMember(plugin, "220")).toHaveLength(1);
   tick(31 * 86400000);
   await housekeeping(t.ctx);
-  expect(await plugin.privacy!.export(t.ctx, "220")).toEqual([]);
+  expect(await t.exportMember(plugin, "220")).toEqual([]);
 });
 test("public log, incomplete source, ignored channels, disabled installation and missing partners fail closed", async () => {
   const t = setup({ channel: "open", batchSeconds: 0 });
@@ -314,10 +314,10 @@ test("a multi-member moderation record preserves the other subject and clears id
       publisher: { plugin: "moderation", bot: "bot", instance: "moderation" },
     },
   );
-  expect(await plugin.privacy!.export(t.ctx, "110")).toHaveLength(1);
-  await plugin.privacy!.erase(t.ctx, "110");
-  expect(await plugin.privacy!.export(t.ctx, "110")).toEqual([]);
-  expect(await plugin.privacy!.export(t.ctx, "990")).toHaveLength(1);
+  expect(await t.exportMember(plugin, "110")).toHaveLength(1);
+  await t.eraseMember(plugin, "110");
+  expect(await t.exportMember(plugin, "110")).toEqual([]);
+  expect(await t.exportMember(plugin, "990")).toHaveLength(1);
   const edited = JSON.stringify(t.edits.at(-1));
   expect(edited).toContain("deleted-user-");
   expect(edited).toContain("<@990>");

@@ -311,7 +311,7 @@ describe("sanctions", () => {
     });
     expect(t.moderation).toEqual([
       { member: "2", action: "timeout", durationMs: 600_000, reason: "mia: calm down" },
-      { member: "2", action: "timeout", durationMs: 0, reason: "mia: no reason" },
+      { member: "2", action: "timeout", durationMs: 0, reason: "mia: No reason" },
       {
         member: "2",
         action: "ban",
@@ -462,7 +462,9 @@ describe("webhook and routes", () => {
       user: "1",
       options: { member: user(t, "2"), reason: "spam" },
     });
-    const res = await callRoute(plugin, t, "DELETE /warnings/2", { viewer: "1" });
+    // An admin route: a moderator gets 403 (as from internal/api/portal.go).
+    expect((await callRoute(plugin, t, "DELETE /warnings/2", { viewer: "1" })).status).toBe(403);
+    const res = await callRoute(plugin, t, "DELETE /warnings/2", { viewer: "6" });
     expect(res.body).toEqual({ cleared: 1 });
     expect(logs(t).at(-1)?.title).toBe("Case #2 · Warnings cleared");
     expect((await callRoute(plugin, t, "GET /warnings/2", { viewer: "1" })).body).toEqual({
@@ -576,6 +578,58 @@ describe("case access and approval", () => {
     await runComponent(plugin, t, "purge-confirm:1", { user: "100", channel: "general" });
     expect(await t.ctx.kv.get("cases")).toBe(1);
   });
+  test("a purge that fails after its first batch still records a case for what it deleted", async () => {
+    const t = setup();
+    const ch = t.ctx.server.channel("general");
+    for (let n = 0; n < 150; n++) await ch.send("sample " + n);
+    await runCommand(plugin, t, "purge", {
+      user: "100",
+      channel: "general",
+      options: { count: 150, contains: "sample" },
+    });
+    const remove = ch.bulkDelete.bind(ch);
+    let batches = 0;
+    vi.spyOn(ch, "bulkDelete").mockImplementation(
+      async (ids, reason) => {
+        if (++batches > 1) throw new Error("A message is older than 14 days");
+        return remove(ids, reason);
+      },
+    );
+    vi.spyOn(t.ctx.server, "channel").mockReturnValue(ch);
+    await runComponent(plugin, t, "purge-confirm:1", { user: "100", channel: "general" });
+    expect(await t.ctx.kv.get("case:1")).toMatchObject({
+      action: "purge",
+      reason: expect.stringContaining("Deleted 100 messages"),
+    });
+  });
+  test("/lock neutralizes role allows of Send Messages and reports a refused overlay", async () => {
+    const t = createTestContext({
+      locales: { en, fr },
+      schema,
+      config: { logChannel: "general" },
+      grants: [...grants, "server.overlays"],
+      features: ["lock"],
+      server: { ownerId: "100" },
+      roles: { admin: { name: "Admin", position: 10, permissions: ["Administrator"] } },
+      access: { admins: { roles: ["admin"] } },
+      channels: { general: { name: "general" } },
+      members: [{ id: "6", roles: ["admin"] }],
+    });
+    const lock = () =>
+      runCommand(plugin, t, "lock", {
+        user: "6",
+        options: { channel: t.ctx.server.channel("general"), duration: 30 },
+      });
+    await lock();
+    const [overlay] = await t.ctx.server.overlays.list();
+    expect(overlay?.channels?.general?.overwrites).toEqual({
+      "@everyone": { deny: ["SendMessages", "SendMessagesInThreads"] },
+      "*": { neutral: ["SendMessages", "SendMessagesInThreads"] },
+    });
+    vi.spyOn(t.ctx.server.overlays, "apply").mockRejectedValue(new Error("invalid overwrite target"));
+    const refused = await lock();
+    expect(JSON.stringify(refused)).toContain("nothing was applied");
+  });
   test("old cases are indexed in bounded batches and migration can resume", async () => {
     const t = setup();
     for (let n = 1; n <= 30; n++)
@@ -672,52 +726,122 @@ describe("ownership and delivery recovery", () => {
     expect(await t.ctx.kv.get("case:1")).toMatchObject({ status: "lifted" });
   });
 
-  test("an outage longer than the retained audit window keeps the ban in force", async () => {
+  test("an expiry after an outage longer than Discord's audit retention lifts its own ban", async () => {
     const t = setup();
     await runCommand(plugin, t, "ban", {
       user: "1",
       options: { member: user(t, "2"), duration: 100_000 },
     });
     vi.advanceTimersByTime(45 * 86_400_000);
-    await expect(plugin.tasks!.expireBan!(t.ctx, { number: 1, user: "2" })).rejects.toThrow(
-      "unconfirmed",
-    );
-    expect(await t.ctx.server.bans()).toHaveLength(1);
-  });
-
-  test("delayed proof uses a durable task; probable or another installation's evidence cannot lift", async () => {
-    const t = setup();
-    const list = t.ctx.server.auditLog.bind(t.ctx.server);
-    let late = true;
-    vi.spyOn(t.ctx.server, "auditLog").mockImplementation((query) =>
-      late ? Promise.resolve([]) : list(query),
-    );
-    await runCommand(plugin, t, "ban", {
-      user: "1",
-      options: { member: user(t, "2"), duration: 60 },
-    });
-    const task = t.scheduled.find((x) => x.task === "bindBanEvidence")!;
-    expect(await t.ctx.kv.get("ban-expiry:1")).not.toHaveProperty("proof");
-    await expect(plugin.tasks!.expireBan!(t.ctx, { number: 1, user: "2" })).rejects.toThrow(
-      "unconfirmed",
-    );
-    late = false;
-    const entry = t.audit[0]!;
-    entry.attribution.certainty = "probable";
-    await expect(plugin.tasks!.expireBan!(t.ctx, { number: 1, user: "2" })).rejects.toThrow(
-      "unconfirmed",
-    );
-    entry.attribution.certainty = "confirmed";
-    const origin = entry.attribution.plugin!;
-    origin.instance = "another";
-    await expect(
-      liftBanIfCurrent(t.ctx, "2", 1, { id: "1", name: "staff" }, "review"),
-    ).rejects.toThrow("unconfirmed");
-    origin.instance = t.ctx.plugin.instance;
-    await plugin.tasks!.bindBanEvidence!(t.ctx, task.payload);
-    expect(await t.ctx.kv.get("ban-expiry:1")).toHaveProperty("proof.entryId", entry.id);
+    // Discord no longer returns the issuing entry.
+    t.audit.splice(0);
     await plugin.tasks!.expireBan!(t.ctx, { number: 1, user: "2" });
     expect(await t.ctx.server.bans()).toHaveLength(0);
+    expect(await t.ctx.kv.get("case:1")).toMatchObject({ status: "expired" });
+    expect(await t.ctx.kv.get("case:2")).toMatchObject({ action: "unban" });
+  });
+
+  test("missing, late, probable or unreadable audit evidence never keeps a temporary ban", async () => {
+    for (const mode of ["late", "probable", "unreadable"] as const) {
+      const t = setup();
+      const list = t.ctx.server.auditLog.bind(t.ctx.server);
+      vi.spyOn(t.ctx.server, "auditLog").mockImplementation((query) =>
+        mode === "late"
+          ? Promise.resolve([])
+          : mode === "unreadable"
+            ? Promise.reject(new Error("Missing Permissions: ViewAuditLog"))
+            : list(query),
+      );
+      await runCommand(plugin, t, "ban", {
+        user: "1",
+        options: { member: user(t, "2"), duration: 60 },
+      });
+      if (mode === "probable") t.audit[0]!.attribution = { kind: "cicord", certainty: "probable" };
+      expect(await t.ctx.kv.get("case:1"), mode).toMatchObject({ status: "active" });
+      await plugin.tasks!.expireBan!(t.ctx, { number: 1, user: "2" });
+      expect(await t.ctx.server.bans(), mode).toHaveLength(0);
+      expect(await t.ctx.kv.get("case:1"), mode).toMatchObject({ status: "expired" });
+      if (mode === "unreadable")
+        expect(t.logs.some((l) => l.message.startsWith("banAudit: "))).toBe(true);
+    }
+  });
+
+  test("another installation's or account's newer ban is never lifted by an expiry", async () => {
+    for (const other of ["installation", "account"] as const) {
+      const t = setup();
+      await runCommand(plugin, t, "ban", {
+        user: "1",
+        options: { member: user(t, "2"), duration: 60 },
+      });
+      const original = t.audit[0]!;
+      // The same marker, but Discord's newer entry names someone else.
+      t.audit.unshift({
+        ...original,
+        id: String(BigInt(original.id) + 1n),
+        ...(other === "account"
+          ? { actorId: "6", attribution: { kind: "human", certainty: "confirmed" } }
+          : {
+              attribution: {
+                kind: "cicord",
+                certainty: "confirmed",
+                plugin: { bot: t.ctx.bot.key, instance: "another", plugin: "moderation" },
+              },
+            }),
+      } as AuditLogEntry);
+      await plugin.tasks!.expireBan!(t.ctx, { number: 1, user: "2" });
+      expect(await t.ctx.server.bans(), other).toHaveLength(1);
+      expect(await t.ctx.kv.get("case:1"), other).toMatchObject({ status: "superseded" });
+    }
+  });
+
+  test("a replacement over a ban Discord keeps unchanged takes the ban over and can expire", async () => {
+    const t = setup();
+    const target = user(t, "2");
+    await runCommand(plugin, t, "ban", { user: "1", options: { member: target } });
+    // Discord may answer a ban of a banned user without touching the existing ban.
+    const issue = vi.mocked(t.ctx.server.ban).getMockImplementation()!;
+    vi.mocked(t.ctx.server.ban).mockImplementation(async (id, options) => {
+      if ((await t.ctx.server.bans()).some((b) => b.user.id === id)) return;
+      await issue(id, options);
+    });
+    await runCommand(plugin, t, "ban", {
+      user: "1",
+      options: { member: target, duration: 5, reason: "shorter", delete_messages: true },
+    });
+    const [ban] = await t.ctx.server.bans();
+    expect(ban?.reason).toBe("[cicord tempban #2] mia: shorter");
+    expect(t.moderation.filter((a) => a.action === "ban").at(-1)).toMatchObject({
+      deleteMessagesSeconds: 86400,
+    });
+    expect(await t.ctx.kv.get("case:1")).toMatchObject({ status: "superseded" });
+    const expiry = t.scheduled.find((x) => x.task === "expireBan")!;
+    await plugin.tasks!.expireBan!(t.ctx, expiry.payload);
+    expect(await t.ctx.server.bans()).toHaveLength(0);
+    expect(await t.ctx.kv.get("case:2")).toMatchObject({ status: "expired" });
+  });
+
+  test("the evidence task binds a ban whose command died, and drops one Discord never applied", async () => {
+    const t = setup();
+    const issue = vi.mocked(t.ctx.server.ban).getMockImplementation()!;
+    let crash: "after" | "before" = "after";
+    vi.mocked(t.ctx.server.ban).mockImplementation(async (id, options) => {
+      if (crash === "after") await issue(id, options);
+      throw new Error("worker lost");
+    });
+    await runCommand(plugin, t, "ban", { user: "1", options: { member: user(t, "2"), duration: 60 } });
+    const check = t.scheduled.find((x) => x.task === "bindBanEvidence")!;
+    await plugin.tasks!.bindBanEvidence!(t.ctx, check.payload);
+    expect(await t.ctx.kv.get("case:1")).toMatchObject({ action: "tempban", status: "active" });
+    expect(await t.ctx.kv.get("active-ban:2")).toBe(1);
+    await plugin.tasks!.expireBan!(t.ctx, { number: 1, user: "2" });
+    expect(await t.ctx.server.bans()).toHaveLength(0);
+
+    crash = "before";
+    await runCommand(plugin, t, "ban", { user: "1", options: { member: user(t, "5"), duration: 60 } });
+    const late = t.scheduled.filter((x) => x.task === "bindBanEvidence").at(-1)!;
+    await plugin.tasks!.bindBanEvidence!(t.ctx, late.payload);
+    expect(await t.ctx.kv.get("ban-expiry:3")).toBeUndefined();
+    expect(await t.ctx.kv.get("case:3")).toBeUndefined();
   });
 
   test("a new attempt never reposts an uncertain staff message after its history window", async () => {
@@ -866,4 +990,118 @@ test("French interactions use the French warning reply and sanction DM", async (
   expect(r.replies[0]).toContain("a reçu un avertissement");
   expect(dms(t, "2")[0]).toContain("Vous avez reçu un avertissement");
   expect(logs(t)[0]?.title).toBe("Dossier nº 1 · Avertissement");
+});
+
+describe("localized Discord output (SPA-18)", () => {
+  test("French member-log lines, case fields and footers come from the locales", async () => {
+    const t = setup({ locale: "fr" });
+    const troll = t.member("2")!;
+    const updated = {
+      ...troll,
+      nickname: "Gentil",
+      roles: [...troll.roles, t.ctx.server.role("mod")],
+    };
+    await plugin.events!.memberUpdate!(t.ctx, updated, troll);
+    expect(logs(t).at(-1)?.description).toBe("✏️ <@2>: pseudo : — → Gentil; rôles : +Moderator");
+    expect(logs(t).at(-1)?.footer?.text).toMatch(/^Journal des membres /);
+    await saveNewCase(t.ctx, {
+      number: 31,
+      action: "warn",
+      member: { id: "2", name: "troll" },
+      moderator: null,
+      reason: "",
+      at: new Date().toISOString(),
+    } as Case);
+    await deliverCase(t.ctx, { number: 31 });
+    const embed = logs(t).at(-1)!;
+    expect(embed.fields?.find((f) => f.name === "Modérateur")?.value).toBe("automatique");
+    expect(embed.footer?.text).toMatch(/^Envoi du dossier /);
+    // English text appears nowhere in the French staff log.
+    expect(JSON.stringify(logs(t))).not.toMatch(/automatic"|Case delivery|Member log|nickname:/);
+  });
+
+  test("an automatic timeout's audit reason and /case replies are localized", async () => {
+    const t = setup({ locale: "fr" });
+    const r = await runCommand(plugin, t, "timeout", {
+      user: "1",
+      options: { member: user(t, "2"), duration: 5 },
+    });
+    expect(r.replies[0]).toBeDefined();
+    expect(t.moderation.at(-1)?.reason).toBe("mia: Aucun motif");
+    const view = await runCommand(plugin, t, "case view", { user: "1", options: { number: 1 } });
+    expect(view.replies[0]).toBe("#1 · Exclusion temporaire · actif — Aucun motif");
+  });
+
+  test("every /timeout choice has an English and a French name", () => {
+    const command = plugin.commands!.timeout as unknown as {
+      options: { duration: { choices: { name: string; value: number }[] } };
+    };
+    for (const { name, value } of command.options.duration.choices) {
+      const key = `commands.timeout.options.duration.choices.${value}`;
+      expect((en as Record<string, string>)[key]).toBe(name);
+      expect((fr as Record<string, string>)[key]).toBeTruthy();
+    }
+    expect(Object.keys(en).filter((k) => !(k in fr))).toEqual([]);
+    expect(Object.keys(fr).filter((k) => !(k in en))).toEqual([]);
+  });
+});
+
+describe("/slowmode and /lock (SPA-19)", () => {
+  function overlayHarness(locale?: string) {
+    return createTestContext({
+      locales: { en, fr },
+      schema,
+      config: { logChannel: "general", ...(locale ? { locale } : {}) },
+      grants: [...grants, "server.overlays"],
+      features: ["lock"],
+      server: { ownerId: "100" },
+      roles: {
+        admin: { name: "Admin", position: 10, permissions: ["Administrator"] },
+        mod: { name: "Moderator", position: 5 },
+      },
+      access: { admins: { roles: ["admin"] }, moderators: { roles: ["mod"] } },
+      channels: { general: { name: "general" } },
+      members: [
+        { id: "6", roles: ["admin"] },
+        { id: "3", roles: ["mod"] },
+      ],
+    });
+  }
+  test("/slowmode applies a temporary overlay with the requested seconds and duration", async () => {
+    const t = overlayHarness();
+    const r = await runCommand(plugin, t, "slowmode", {
+      user: "6",
+      options: { channel: t.ctx.server.channel("general"), seconds: 30, duration: 15 },
+    });
+    expect(r.replies[0]).toBe("Set slowmode to 30 seconds in general for 15 minutes.");
+    const [overlay] = await t.ctx.server.overlays.list();
+    expect(overlay).toMatchObject({
+      id: "slowmode-general",
+      channels: { general: { slowmodeSeconds: 30 } },
+    });
+    expect(+new Date(overlay!.until!)).toBe(Date.now() + 15 * 60000);
+  });
+  test("/slowmode needs seconds, a managed channel and Manage Channels", async () => {
+    const t = overlayHarness();
+    const run = (user: string, options: Record<string, unknown>) =>
+      runCommand(plugin, t, "slowmode", { user, options: options as never });
+    const general = t.ctx.server.channel("general");
+    expect((await run("6", { channel: general })).replies[0]).toBe(en["overlay.seconds"]);
+    // A moderator without Manage Channels in the channel is refused.
+    expect((await run("3", { channel: general, seconds: 10 })).replies[0]).toBe(
+      en["overlay.authority"],
+    );
+    expect(await t.ctx.server.overlays.list()).toEqual([]);
+  });
+  test("/lock replies in French and holds for the default 60 minutes", async () => {
+    const t = overlayHarness("fr");
+    const r = await runCommand(plugin, t, "lock", {
+      user: "6",
+      options: { channel: t.ctx.server.channel("general") },
+    });
+    expect(r.replies[0]).toBe("Salon general verrouillé pour 60 minutes.");
+    const [overlay] = await t.ctx.server.overlays.list();
+    expect(overlay?.id).toBe("lock-general");
+    expect(+new Date(overlay!.until!)).toBe(Date.now() + 60 * 60000);
+  });
 });

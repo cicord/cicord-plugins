@@ -6,12 +6,20 @@ export type Action = PluginConfig["links"]["action"];
 export type Ref = { id: string; channel: string; at: number; hint: number; mentions: number };
 export const normalize = (text: string) =>
   text.normalize("NFKC").trim().toLowerCase().replace(/\s+/g, " ");
+/**
+ * Cicord never sanctions itself (P7): this bot and every other bot of the project on this
+ * server, by id, whatever the member's `bot` flag says.
+ */
+export const cicordBot = (ctx: Context, id: string) =>
+  id === ctx.bot.user.id || (ctx.server.cicordBotIds ?? []).includes(id);
 export function exempt(ctx: Context, m: Member, channel?: string) {
   return (
+    cicordBot(ctx, m.id) ||
     !m.access ||
+    // Bots are never sanctioned by Guard.
+    m.user.bot ||
     staff(m) ||
     m.id === ctx.server.ownerId ||
-    m.id === ctx.bot.user.id ||
     ctx.config.exempt.bots.includes(m.id) ||
     ctx.config.exempt.roles.some((role) => m.hasRole(role)) ||
     (!!channel && ctx.config.exempt.channels.includes(channel))
@@ -60,16 +68,20 @@ async function badLink(ctx: Context, links: ReturnType<typeof linksIn>) {
   for (const { host, invite } of links) {
     if (invite && config.blockInvites) {
       if (!config.allowOwnInvites) return true;
-      if (ctx.features.enabled("invites")) {
-        try {
-          invites ??= new Set((await ctx.server.invites()).map((x) => x.code));
-        } catch {
-          ctx.status.set("invites", tr(ctx, "status.inviteLookup"));
-          continue;
-        }
-        if (!invites.has(invite)) return true;
-        continue;
+      // Without the invite list this server's invitations cannot be told apart: fail closed.
+      if (!ctx.features.enabled("invites")) {
+        ctx.status.set("invites", tr(ctx, "status.inviteGrant"));
+        return true;
       }
+      try {
+        invites ??= new Set((await ctx.server.invites()).map((x) => x.code));
+      } catch {
+        ctx.status.set("invites", tr(ctx, "status.inviteLookup"));
+        return true;
+      }
+      ctx.status.set("invites", null);
+      if (!invites.has(invite)) return true;
+      continue;
     }
     if (
       config.blockShorteners &&
@@ -126,7 +138,9 @@ export async function inspect(
     const candidates = history.filter(
       (x) => x.hint === hint && x.at >= now - cfg.duplicates.seconds * 1000,
     );
-    if (candidates.length + 1 >= cfg.duplicates.count) {
+    // Short chatter ("gg", "lol", emoji) never counts unless it carries a link.
+    const substantial = links.length > 0 || text.length >= cfg.duplicates.minLength;
+    if (substantial && candidates.length + 1 >= cfg.duplicates.count) {
       const found = [ref];
       for (const old of candidates.slice(-20)) {
         try {
@@ -137,7 +151,11 @@ export async function inspect(
           continue;
         }
       }
-      if (found.length >= cfg.duplicates.count) return { rule: "duplicates", refs: found };
+      if (
+        found.length >= cfg.duplicates.count &&
+        new Set(found.map((x) => x.channel)).size >= cfg.duplicates.minChannels
+      )
+        return { rule: "duplicates", refs: found };
     }
   }
   if (links.length && (await badLink(ctx, links))) return { rule: "links", refs: [ref] };

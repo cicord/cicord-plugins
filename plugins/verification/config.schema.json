@@ -27,12 +27,22 @@
       "type": "string",
       "enum": [
         "button",
+        "typed",
         "visual",
         "turnstile",
         "hcaptcha"
       ],
-      "default": "visual",
-      "description": "Preferred challenge method."
+      "default": "typed",
+      "description": "Preferred challenge method. typed (default): type a 6-character code shown in an image; visual: pick a 4-digit number among 12. Both need the optional render grant."
+    },
+    "fallback": {
+      "type": "string",
+      "enum": [
+        "review",
+        "button"
+      ],
+      "default": "review",
+      "description": "When a typed or visual challenge cannot be served (no render grant, or rendering fails): review sends the member to the staff queue; button offers the one-click button. Both set an instance status line."
     },
     "minAccountAgeDays": {
       "type": "integer",

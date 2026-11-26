@@ -153,7 +153,8 @@ export async function finishPurge(ctx: Context, it: ComponentInteraction) {
     // bound every batch; a second click can never clear a new page of messages.
     await ctx.kv.delete(key);
     const channel = ctx.server.channel({ id: preview.channel });
-    let deleted = 0;
+    let deleted = 0,
+      failed = false;
     try {
       for (let n = 0; n < preview.ids.length; n += 100)
         deleted += await channel.bulkDelete(
@@ -161,18 +162,27 @@ export async function finishPurge(ctx: Context, it: ComponentInteraction) {
           `Purge by ${it.user.id}`,
         );
     } catch {
+      failed = true;
+    }
+    // Every deletion leaves a case, including the batches done before a failure.
+    if (deleted > 0 || !failed)
+      await recordCase(ctx, {
+        action: "purge",
+        member: null,
+        moderator: who(it.user),
+        reason: ctx.i18n.t(failed ? "purge.caseReasonPartial" : "purge.caseReason", {
+          count: deleted,
+          channel: channel.mention,
+          skipped: preview.skipped,
+        }),
+      });
+    if (failed) {
       await it.update({
         content: ctx.i18n.t("purge.partial", { count: deleted }),
         components: [],
       });
       return;
     }
-    await recordCase(ctx, {
-      action: "purge",
-      member: null,
-      moderator: who(it.user),
-      reason: `Deleted ${deleted} messages in ${channel.mention}; skipped ${preview.skipped}.`,
-    });
     await it.update({
       content: ctx.i18n.t("purge.done", { count: deleted, skipped: preview.skipped }),
       components: [],

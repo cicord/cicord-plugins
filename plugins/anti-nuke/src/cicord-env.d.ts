@@ -40,6 +40,7 @@ declare module "@cicord/sdk" {
       count: number;
       responses: string[];
       trigger: string;
+      wouldRespond?: ("removeRoles" | "kick" | "finalSanction" | "requestSync")[];
     };
   }
   interface EventContracts {
@@ -50,6 +51,7 @@ declare module "@cicord/sdk" {
       count: number;
       responses: string[];
       trigger: string;
+      wouldRespond?: ("removeRoles" | "kick" | "finalSanction" | "requestSync")[];
     };
   }
 }

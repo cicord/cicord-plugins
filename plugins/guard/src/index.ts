@@ -10,9 +10,28 @@ import {
 import { MONTH, object, rows, serial, staff, tr } from "./data.ts";
 import { domain, exempt, inspect, refreshFeeds } from "./rules.ts";
 import { record } from "./sanctions.ts";
-import { close, control, onJoin, open, publicRaid, quiet, reconcileRaid } from "./raid.ts";
+import {
+  ARRIVAL,
+  JOIN,
+  close,
+  control,
+  onJoin,
+  open,
+  publicRaid,
+  quiet,
+  reconcileRaid,
+} from "./raid.ts";
 
-const prefixes = ["history:", "violations:", "automod:", "selection:", "failed:", "lock:member:"];
+const prefixes = [
+  "history:",
+  "violations:",
+  "automod:",
+  "selection:",
+  "failed:",
+  "lock:member:",
+  JOIN,
+  ARRIVAL,
+];
 async function memberData(ctx: Context, id: string, erase: boolean) {
   const data: Record<string, Json> = {};
   let erased = 0;
@@ -23,22 +42,6 @@ async function memberData(ctx: Context, id: string, erase: boolean) {
       data[prefix] = value;
       if (erase) {
         await ctx.kv.delete(key);
-        erased++;
-      }
-    }
-  }
-  for (const key of ["joins", "arrivals"]) {
-    const list = (await ctx.kv.get<Json[]>(key)) ?? [];
-    const match = (x: Json) => x === id || object(x).id === id;
-    const mine = list.filter(match);
-    if (mine.length) {
-      data[key] = mine;
-      if (erase) {
-        await ctx.kv.set(
-          key,
-          list.filter((x) => !match(x)),
-          { ttlSeconds: key === "joins" ? ctx.config.raid.seconds : 86400 },
-        );
         erased++;
       }
     }
@@ -96,7 +99,7 @@ export default definePlugin({
         if (match) await record(ctx, member, match.rule, msg.channel.id, match.refs, msg.id);
       });
     },
-    memberJoin: (ctx, m) => serial(ctx, "raid", () => onJoin(ctx, m)),
+    memberJoin: (ctx, m) => onJoin(ctx, m, (rate) => serial(ctx, "raid", () => open(ctx, rate))),
     async automodAction(ctx, e) {
       const m = await ctx.server.member(e.userId);
       if (
@@ -194,15 +197,17 @@ export default definePlugin({
               await i.reply(tr(ctx, "message.unavailable"));
               return;
             }
-            const phase = await serial(ctx, "raid", () => open(ctx, 0));
+            const phase = await serial(ctx, "raid", () => open(ctx, 0, true));
             await i.reply(
               tr(
                 ctx,
                 phase === "active"
-                  ? "message.requestProcessed"
-                  : phase === "closing"
-                    ? "status.raidClosing"
-                    : "status.raidPending",
+                  ? "message.lockdownActive"
+                  : phase === "refused"
+                    ? "message.lockdownRefused"
+                    : phase === "closing"
+                      ? "status.raidClosing"
+                      : "status.raidPending",
               ),
             );
           },

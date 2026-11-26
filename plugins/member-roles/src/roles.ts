@@ -11,6 +11,17 @@ type ActiveGrant = {
   job: string;
 };
 const grantKey = (userId: string, roleId: string) => `temporary:${userId}:${roleId}`;
+const scanNextKey = "scan:next";
+
+/** A refusal the caller can act on. `code` maps to the interop error returned to plugins. */
+export class Refusal extends Error {
+  constructor(
+    message: string,
+    readonly code: "denied" | "invalid_input" = "denied",
+  ) {
+    super(message);
+  }
+}
 const stickyKey = (id: string) => "sticky:" + id;
 const boostKey = (id: string) => "boost:" + id;
 
@@ -34,14 +45,17 @@ function roleRef(ref: string) {
 function resolve(ctx: Context, ref: string): Role {
   return ctx.server.role(roleRef(ref));
 }
-function assignable(ctx: Context, role: Role) {
-  if (
+function unassignable(ctx: Context, role: Role) {
+  return (
     role.id === ctx.server.id ||
     role.managed !== false ||
     role.declaredMembers !== false ||
     role.position === undefined
-  )
-    throw new Error(translate(ctx, "error.unmanaged", { role: role.key ?? role.id }));
+  );
+}
+function assignable(ctx: Context, role: Role) {
+  if (unassignable(ctx, role))
+    throw new Refusal(translate(ctx, "error.unmanaged", { role: role.key ?? role.id }));
 }
 function outranks(actor: Member, role: Role) {
   return actor.roles.some(
@@ -60,12 +74,27 @@ async function checkRole(ctx: Context, role: Role, actor?: Member, cachedBot?: M
   assignable(ctx, role);
   const bot = cachedBot ?? (await ctx.server.member(ctx.bot.user.id));
   if (!bot || !bot.permissions?.includes("ManageRoles") || !outranks(bot, role))
-    throw new Error(translate(ctx, "error.hierarchy", { role: role.name }));
+    throw new Refusal(translate(ctx, "error.hierarchy", { role: role.name }));
   if (actor && actor.id !== ctx.server.ownerId && !outranks(actor, role))
-    throw new Error(translate(ctx, "error.hierarchy", { role: role.name }));
+    throw new Refusal(translate(ctx, "error.hierarchy", { role: role.name }));
+}
+/** Why a configured role cannot be changed automatically, or undefined when it can. */
+async function problem(ctx: Context, role: Role, bot?: Member): Promise<string | undefined> {
+  if (unassignable(ctx, role)) return "status.unmanaged";
+  const b = bot ?? (await ctx.server.member(ctx.bot.user.id));
+  if (!b || !b.permissions?.includes("ManageRoles") || !outranks(b, role))
+    return "status.hierarchy";
+  return undefined;
+}
+function tryResolve(ctx: Context, ref: string): Role | undefined {
+  try {
+    return resolve(ctx, ref);
+  } catch {
+    return undefined;
+  }
 }
 export async function manager(ctx: Context, actor?: Member) {
-  if (!ctx.config.enabled || !actor) throw new Error(translate(ctx, "error.disabled"));
+  if (!ctx.config.enabled || !actor) throw new Refusal(translate(ctx, "error.disabled"));
   if (actor.id === ctx.server.ownerId) return;
   const allowed = ctx.config.temp.managerRoles;
   if (
@@ -73,16 +102,67 @@ export async function manager(ctx: Context, actor?: Member) {
       ? !allowed.some((ref) => actor.hasRole(roleRef(ref)))
       : !actor.permissions?.includes("ManageRoles")
   )
-    throw new Error(translate(ctx, "error.denied"));
+    throw new Refusal(translate(ctx, "error.denied"));
 }
-function temporaryRole(ctx: Context, ref: string) {
-  if (!ctx.config.enabled) throw new Error(translate(ctx, "error.disabled"));
-  const r = resolve(ctx, ref);
+/**
+ * Inter-plugin calls never get the "every assignable role" default: a caller granted
+ * plugins.call could otherwise hand out any role below the bot, including one carrying
+ * Administrator. The operator lists the roles other plugins may grant in temp.roles.
+ */
+/** Bit index of each Discord permission that makes a role a privilege (MOD-09). */
+const PRIVILEGED = {
+  KickMembers: 1n,
+  BanMembers: 2n,
+  Administrator: 3n,
+  ManageChannels: 4n,
+  ManageGuild: 5n,
+  MentionEveryone: 17n,
+  ManageRoles: 28n,
+  ManageWebhooks: 29n,
+  ModerateMembers: 40n,
+} as const;
+/**
+ * The privileged permissions a role grants, from its decimal bitfield. Undefined when the
+ * runtime does not know them (not cached yet, or an older engine): unknown, never "none".
+ */
+export function privileges(role: Role): string[] | undefined {
+  const raw = role.permissions;
+  if (typeof raw !== "string" || !/^\d{1,30}$/.test(raw)) return undefined;
+  const bits = BigInt(raw);
+  return Object.entries(PRIVILEGED)
+    .filter(([, bit]) => (bits >> bit) & 1n)
+    .map(([name]) => name);
+}
+/** temp.privilegedRoles: the explicit opt-in to grant a privileged role temporarily. */
+function optedIn(ctx: Context, role: Role) {
+  return ctx.config.temp.privilegedRoles.some((key) => tryResolve(ctx, key)?.id === role.id);
+}
+/**
+ * A temporary grant never hands out moderation or administration power by accident: a role
+ * with a privileged permission, or whose permissions are unknown, is refused (fail closed)
+ * unless temp.privilegedRoles lists it.
+ */
+function unprivileged(ctx: Context, role: Role) {
+  if (optedIn(ctx, role)) return;
+  const found = privileges(role);
+  if (found === undefined)
+    throw new Refusal(translate(ctx, "error.permissionsUnknown", { role: role.name }));
+  if (found.length)
+    throw new Refusal(
+      translate(ctx, "error.privileged", { role: role.name, permissions: found.join(", ") }),
+    );
+}
+function temporaryRole(ctx: Context, ref: string, interop = false) {
+  if (!ctx.config.enabled) throw new Refusal(translate(ctx, "error.disabled"));
+  if (interop && !ctx.config.temp.roles.length)
+    throw new Refusal(translate(ctx, "error.interopAllowlist"));
+  const r = tryResolve(ctx, ref);
+  if (!r) throw new Refusal(translate(ctx, "error.denied"));
   if (
     ctx.config.temp.roles.length &&
-    !ctx.config.temp.roles.some((key) => resolve(ctx, key).id === r.id)
+    !ctx.config.temp.roles.some((key) => tryResolve(ctx, key)?.id === r.id)
   )
-    throw new Error(translate(ctx, "error.denied"));
+    throw new Refusal(translate(ctx, "error.denied"));
   return r;
 }
 async function ensure(
@@ -98,6 +178,14 @@ async function ensure(
   if (present) await member.addRole({ id: role.id }, reason);
   else await member.removeRole({ id: role.id }, reason);
 }
+/** Policy changes (sticky, tenure, boost) skip a role reported at startup instead of
+ * failing the member event or the scan page that carries every other member. */
+async function apply(ctx: Context, member: Member, ref: string, present: boolean, bot?: Member) {
+  const role = tryResolve(ctx, ref);
+  if (!role || member.hasRole({ id: role.id }) === present) return;
+  if (await problem(ctx, role, bot)) return;
+  await ensure(ctx, member, role, present, undefined, bot);
+}
 // Store an opaque equality token for the most recent request. Core owns the durable
 // 30-day idempotency record. Caller-supplied keys can contain private workflow IDs.
 function requestToken(value: string): string {
@@ -110,18 +198,28 @@ function requestToken(value: string): string {
   }
   return a.toString(16).padStart(16, "0") + b.toString(16).padStart(16, "0");
 }
-export async function grant(ctx: Context, input: Grant, key: string, actor?: Member) {
-  const role = temporaryRole(ctx, input.role);
+export async function grant(
+  ctx: Context,
+  input: Grant,
+  key: string,
+  actor?: Member,
+  interop = false,
+) {
+  const role = temporaryRole(ctx, input.role, interop);
+  unprivileged(ctx, role);
   if (
     !Number.isSafeInteger(input.durationSeconds) ||
     input.durationSeconds < 1 ||
     input.durationSeconds > ctx.config.temp.maxDays * 86400
   )
-    throw new Error(translate(ctx, "error.duration", { days: ctx.config.temp.maxDays }));
+    throw new Refusal(
+      translate(ctx, "error.duration", { days: ctx.config.temp.maxDays }),
+      "invalid_input",
+    );
   return serial(grantKey(input.userId, role.id), async () => {
     await checkRole(ctx, role, actor);
     const member = await ctx.server.member(input.userId);
-    if (!member) throw new Error(translate(ctx, "error.member"));
+    if (!member) throw new Refusal(translate(ctx, "error.member"));
     const k = grantKey(input.userId, role.id);
     const old = await ctx.kv.get<ActiveGrant>(k);
     const request = requestToken(key);
@@ -154,11 +252,12 @@ export async function grant(ctx: Context, input: Grant, key: string, actor?: Mem
 function policyWants(ctx: Context, m: Member, id: string) {
   return (
     Boolean(
-      m.premiumSince && ctx.config.boost.role && resolve(ctx, ctx.config.boost.role).id === id,
+      m.premiumSince && ctx.config.boost.role && tryResolve(ctx, ctx.config.boost.role)?.id === id,
     ) ||
     ctx.config.tenure.some(
       (rule) =>
-        resolve(ctx, rule.role).id === id && Date.now() - m.joinedAt.getTime() >= rule.days * DAY,
+        tryResolve(ctx, rule.role)?.id === id &&
+        Date.now() - m.joinedAt.getTime() >= rule.days * DAY,
     )
   );
 }
@@ -194,8 +293,8 @@ export async function expire(
     await end(ctx, current, true);
   });
 }
-export async function revoke(ctx: Context, input: Revoke, actor?: Member) {
-  const role = temporaryRole(ctx, input.role);
+export async function revoke(ctx: Context, input: Revoke, actor?: Member, interop = false) {
+  const role = temporaryRole(ctx, input.role, interop);
   const k = grantKey(input.userId, role.id);
   return serial(k, async () => {
     await checkRole(ctx, role, actor);
@@ -220,27 +319,54 @@ export async function grants(ctx: Context, userId?: string): Promise<ActiveGrant
   } while (cursor);
   return out;
 }
-export async function validateRoles(ctx: Context) {
-  if (!ctx.config.enabled) return;
+/**
+ * Never throws: each refused role gets its own instance status line naming it and the
+ * reason, and only the rules using that role skip it. The other roles keep working.
+ * Returns the refused role references.
+ */
+export async function validateRoles(ctx: Context): Promise<string[]> {
+  if (!ctx.config.enabled) return [];
+  const refused: string[] = [];
+  const bot = await ctx.server.member(ctx.bot.user.id);
   for (const ref of new Set([
     ...ctx.config.sticky.roles,
     ...ctx.config.tenure.map((t) => t.role),
     ...ctx.config.temp.roles,
     ...(ctx.config.boost.role ? [ctx.config.boost.role] : []),
   ])) {
-    await checkRole(ctx, resolve(ctx, ref));
+    const role = tryResolve(ctx, ref);
+    const reason = role ? await problem(ctx, role, bot) : "status.missing";
+    ctx.status.set(
+      "role:" + ref,
+      reason ? translate(ctx, reason, { role: role?.name ?? ref }) : null,
+    );
+    if (reason) refused.push(ref);
   }
-  if (ctx.config.boost.announce)
+  // Temporary roles with a privileged permission are refused at grant time unless opted in.
+  for (const ref of ctx.config.temp.roles) {
+    const role = tryResolve(ctx, ref);
+    const found = role && !optedIn(ctx, role) ? privileges(role) : undefined;
+    ctx.status.set(
+      "privileged:" + ref,
+      role && found?.length
+        ? translate(ctx, "status.privileged", { role: role.name, permissions: found.join(", ") })
+        : null,
+    );
+  }
+  if (ctx.config.boost.announce) {
+    const active = ctx.features.enabled("boostAnnouncements");
     ctx.features.report(
       "boostAnnouncements",
-      ctx.features.enabled("boostAnnouncements"),
-      translate(ctx, "status.boost"),
+      active,
+      active ? undefined : translate(ctx, "status.boost"),
     );
+  }
+  return refused;
 }
 async function remember(ctx: Context, m: Member, departed = false) {
   const ids = ctx.config.sticky.roles
-    .map((r) => resolve(ctx, r))
-    .filter((r) => m.hasRole({ id: r.id }))
+    .map((r) => tryResolve(ctx, r))
+    .filter((r): r is Role => !!r && m.hasRole({ id: r.id }))
     .map((r) => r.id);
   if (ids.length)
     await ctx.kv.set(
@@ -263,27 +389,26 @@ export async function leave(ctx: Context, id: string, previous?: Member) {
 }
 export async function joined(ctx: Context, m: Member) {
   if (!ctx.config.enabled || m.user.bot) return;
-  const configured = new Set(ctx.config.sticky.roles.map((ref) => resolve(ctx, ref).id));
+  const configured = new Set(ctx.config.sticky.roles.map((ref) => tryResolve(ctx, ref)?.id));
   for (const r of await grants(ctx, m.id)) {
-    if (r.expiresAt > Date.now()) await ensure(ctx, m, resolve(ctx, r.roleId), true);
+    if (r.expiresAt > Date.now()) await apply(ctx, m, r.roleId, true);
     else await expire(ctx, r);
   }
   const saved = await ctx.kv.get<string[]>(stickyKey(m.id));
-  for (const id of saved ?? [])
-    if (configured.has(id)) await ensure(ctx, m, resolve(ctx, id), true);
+  for (const id of saved ?? []) if (configured.has(id)) await apply(ctx, m, id, true);
   await changed(ctx, m);
 }
 export async function changed(ctx: Context, m: Member, bot?: Member) {
   if (!ctx.config.enabled || m.user.bot) return;
   for (const rule of ctx.config.tenure)
     if (Date.now() - m.joinedAt.getTime() >= rule.days * DAY)
-      await ensure(ctx, m, resolve(ctx, rule.role), true, undefined, bot);
-  if (ctx.config.boost.role) {
-    const role = resolve(ctx, ctx.config.boost.role);
+      await apply(ctx, m, rule.role, true, bot);
+  const role = ctx.config.boost.role ? tryResolve(ctx, ctx.config.boost.role) : undefined;
+  if (role) {
     const k = boostKey(m.id);
     if (m.premiumSince) {
       const old = await ctx.kv.get<string>(k);
-      await ensure(ctx, m, role, true, undefined, bot);
+      await apply(ctx, m, role.id, true, bot);
       const since = m.premiumSince.toISOString();
       if (old !== since) {
         if (ctx.config.boost.announce && ctx.features.enabled("boostAnnouncements")) {
@@ -299,20 +424,26 @@ export async function changed(ctx: Context, m: Member, bot?: Member) {
     } else if (await ctx.kv.get(k)) {
       const grant = await ctx.kv.get<ActiveGrant>(grantKey(m.id, role.id));
       if (!policyWants(ctx, m, role.id) && (!grant || grant.expiresAt <= Date.now()))
-        await ensure(ctx, m, role, false, undefined, bot);
+        await apply(ctx, m, role.id, false, bot);
       await ctx.kv.delete(k);
     }
   }
   if (ctx.config.sticky.roles.length) await remember(ctx, m);
 }
 type Scan = { day: string; after: string; done: boolean };
-export async function scan(ctx: Context) {
+/**
+ * Startup and the five-minute cron start a scan only when no page chain is alive. Each
+ * unfinished page schedules the next one with `chain` set and refreshes a short lease,
+ * so a crashed chain is restarted by the next tick instead of every tick adding a chain.
+ */
+export async function scan(ctx: Context, chain = false) {
   if (
     !ctx.config.enabled ||
     (!ctx.config.tenure.length && !ctx.config.sticky.roles.length && !ctx.config.boost.role)
   )
     return;
   return serial("scan", async () => {
+    if (!chain && (await ctx.kv.get(scanNextKey))) return;
     const today = new Date().toISOString().slice(0, 10);
     const previous = await ctx.kv.get<Scan>("scan");
     if (previous?.done && previous.day === today) return;
@@ -337,7 +468,11 @@ export async function scan(ctx: Context) {
     }
     const done = processed === page.length && page.length < BATCH;
     await ctx.kv.set("scan", { day: today, after: done ? "" : cursor, done });
-    if (!done) await ctx.schedule.after(1000, "scan");
+    if (done) await ctx.kv.delete(scanNextKey);
+    else {
+      await ctx.kv.set(scanNextKey, true, { ttlSeconds: 120 });
+      await ctx.schedule.after(1000, "scan", "chain");
+    }
   });
 }
 export async function subjectData(ctx: Context, id: string, erase: boolean) {
@@ -352,11 +487,20 @@ export async function subjectData(ctx: Context, id: string, erase: boolean) {
     const v = await ctx.kv.get(k);
     if (v === undefined) continue;
     result[k] = v;
-    if (erase) {
-      if (k.startsWith("temporary:")) await ctx.schedule.cancel((v as ActiveGrant).job);
-      await ctx.kv.delete(k);
-      erased++;
+    if (!erase) continue;
+    if (k.startsWith("temporary:")) {
+      // Retained until it expires: erasing the record and its job would leave the
+      // Discord role in place forever, turning a timed grant or restriction permanent.
+      // Only the opaque request token goes; the job still removes the role on schedule.
+      const g = v as ActiveGrant;
+      if (g.request) {
+        await ctx.kv.set(k, { ...g, request: "" });
+        erased++;
+      }
+      continue;
     }
+    await ctx.kv.delete(k);
+    erased++;
   }
   const position = await ctx.kv.get<Scan>("scan");
   if (position?.after === id) {

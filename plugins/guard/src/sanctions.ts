@@ -1,6 +1,6 @@
 import type { Context, Member } from "@cicord/sdk";
 import { MONTH, tr } from "./data.ts";
-import type { Action, Ref, Rule } from "./rules.ts";
+import { cicordBot, type Action, type Ref, type Rule } from "./rules.ts";
 type Violation = {
   at: number;
   rule: Rule;
@@ -18,6 +18,11 @@ export async function sanction(
   key: string,
 ) {
   if (action.type === "delete") return;
+  // Last line of defence for P7, whatever path led here.
+  if (cicordBot(ctx, member.id)) {
+    ctx.log.warn("guard: refused to sanction a Cicord bot of this project", { member: member.id });
+    return;
+  }
   if (ctx.plugins.has("moderation")) {
     if (!ctx.features.enabled("sanctions")) throw new Error("moderation.sanction grant required");
     await ctx.plugins.call(
@@ -48,6 +53,26 @@ export async function sanction(
   if (action.type === "timeout") await member.timeout(action.minutes * 60000, reason);
   if (action.type === "kick") await member.kick(reason);
   if (action.type === "ban") await member.ban({ reason });
+}
+class SanctionLimit extends Error {}
+/**
+ * Circuit breaker across all members: a buggy rule or a poisoned feed must not sanction a
+ * crowd. Counts reservations in fixed buckets; above the limit findings wait for staff.
+ */
+async function reserveSanction(ctx: Context) {
+  const { count, seconds } = ctx.config.sanctionLimit;
+  const key = "sanctions:" + Math.floor(Date.now() / (seconds * 1000));
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const entry = await ctx.kv.getEntry<number>(key);
+    const used = entry?.value ?? 0;
+    if (used >= count) throw new SanctionLimit();
+    const tx = ctx.kv.atomic().check(key, entry?.version ?? null);
+    if ((await tx.set(key, used + 1, { ttlSeconds: seconds * 2 }).commit()).ok) {
+      ctx.status.set("sanctionLimit", null);
+      return;
+    }
+  }
+  throw new SanctionLimit();
 }
 export async function record(
   ctx: Context,
@@ -97,14 +122,24 @@ export async function record(
           !Array.isArray(standing) &&
           standing.quarantined === true;
       }
-      if (!alreadyQuarantined)
+      if (!alreadyQuarantined && action.type !== "delete") {
+        await reserveSanction(ctx);
         await sanction(ctx, m, action, "guard " + rule, "guard:" + rule + ":" + origin);
+      }
     }
-  } catch {
+  } catch (error) {
     // The provider may already have acted. Staff retain the finding and inspect the
     // failure; a direct retry here could apply a second sanction.
     outcome = "needs_review";
-    ctx.status.set("action", tr(ctx, "message.aGuardActionRequiresStaffReview"));
+    if (error instanceof SanctionLimit)
+      ctx.status.set(
+        "sanctionLimit",
+        ctx.i18n.t("status.sanctionLimit", {
+          count: ctx.config.sanctionLimit.count,
+          seconds: ctx.config.sanctionLimit.seconds,
+        }),
+      );
+    else ctx.status.set("action", tr(ctx, "message.aGuardActionRequiresStaffReview"));
   }
   await ctx.kv.set(key, [...list.slice(-99), { ...event, status: outcome, at: now }], {
     ttlSeconds: MONTH,

@@ -24,6 +24,8 @@ declare module "@cicord/sdk" {
       enabled: boolean;
       count: number;
       seconds: number;
+      minChannels: number;
+      minLength: number;
       action: {
         type: "delete" | "warn" | "timeout" | "quarantine" | "kick" | "ban";
         minutes: number;
@@ -71,6 +73,10 @@ declare module "@cicord/sdk" {
         minutes: number;
       };
       enabled: boolean;
+    };
+    sanctionLimit: {
+      count: number;
+      seconds: number;
     };
     raid: {
       joins: number;

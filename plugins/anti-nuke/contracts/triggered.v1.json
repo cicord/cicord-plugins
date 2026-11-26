@@ -23,7 +23,21 @@
       "type": "array",
       "items": {
         "type": "string"
-      }
+      },
+      "description": "Responses applied. Always empty in monitor mode."
+    },
+    "wouldRespond": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "removeRoles",
+          "kick",
+          "finalSanction",
+          "requestSync"
+        ]
+      },
+      "description": "Responses enforce mode would apply, in order. Monitor mode applies none (responses is empty)."
     },
     "certainty": {
       "type": "string",

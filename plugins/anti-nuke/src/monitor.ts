@@ -2,6 +2,7 @@ import type { Context, AuditLogEntry, PluginConfig } from "@cicord/sdk";
 import { MONTH, rows, tr } from "./data.ts";
 
 export type Trigger = keyof PluginConfig["thresholds"];
+type Response = "removeRoles" | "kick" | "finalSanction" | "requestSync";
 type Evidence = {
   id: string;
   time: number;
@@ -27,6 +28,10 @@ type Alert = {
   certainty: "confirmed" | "probable" | "unknown";
   count: number;
   why: string;
+  /** What enforce mode would have done. Monitor mode never acts. */
+  wouldRespond?: Response[];
+  /** Publication generation: every update is a distinct event. */
+  revision?: number;
   staffMessage?: { channel: string; id: string };
 };
 const WAIT = 30000;
@@ -81,9 +86,49 @@ const notice = (ctx: Context, a: Alert) =>
   "\n" +
   a.why +
   "\n" +
+  wouldDo(ctx, a) +
+  "\n" +
   tr(ctx, "message.staffReviewRecommendedRestoredChannelsReceive");
+// Spec §5.6 order of enforce responses. Monitor mode only describes them.
+function wouldDo(ctx: Context, a: Alert) {
+  const planned = a.wouldRespond ?? [];
+  const sync = planned.includes("requestSync");
+  if (!planned.some((r) => r !== "requestSync"))
+    return (
+      tr(ctx, "message.enforceWouldTargetNobody") +
+      (sync ? " " + tr(ctx, "message.enforceWouldAlsoSync") : "")
+    );
+  return (
+    tr(ctx, "message.enforceWould") + planned.map((r) => tr(ctx, "response." + r)).join("; ") + "."
+  );
+}
+const STRUCTURE: Trigger[] = ["channelDelete", "roleDelete"];
+async function plannedResponses(
+  ctx: Context,
+  trigger: Trigger,
+  actorType: Alert["actorType"],
+): Promise<Response[]> {
+  const out: Response[] = [];
+  // Neutralize, then the final sanction. Never against an unattributed or Cicord actor.
+  if (actorType === "human") out.push("removeRoles", "finalSanction");
+  if (actorType === "bot") out.push("kick", "finalSanction");
+  if (STRUCTURE.includes(trigger)) {
+    try {
+      const protection = await ctx.server.protection();
+      if (protection.known && !protection.selfHeal) out.push("requestSync");
+    } catch {
+      // An unverified protection snapshot is already reported by /antinuke status.
+    }
+  }
+  return out;
+}
+// A server-wide incident spans the alerts of one attack wave: one owner DM and one
+// webhook per wave, however many triggers and actors it involves.
+const NOTIFY_SECONDS = 600;
 async function alert(ctx: Context, key: string, a: Alert) {
   const old = await ctx.kv.get<Alert>(key);
+  a.revision = (old?.revision ?? 0) + 1;
+  if (old?.staffMessage) a.staffMessage = old.staffMessage;
   await ctx.kv.set(key, a, { ttlSeconds: MONTH });
   await ctx.events.publish(
     "triggered",
@@ -92,23 +137,27 @@ async function alert(ctx: Context, key: string, a: Alert) {
       count: a.count,
       actorType: a.actorType,
       certainty: a.certainty,
+      // Monitor mode applies nothing. wouldRespond describes enforce mode.
       responses: [],
+      wouldRespond: a.wouldRespond ?? [],
       ...(a.actorId ? { actorId: a.actorId } : {}),
     },
-    { idempotencyKey: key + (old ? ":updated" : ":new") },
+    { idempotencyKey: key + ":" + a.revision },
   );
+  const wave = await ctx.kv.get<boolean>("incident:notify");
+  await ctx.kv.set("incident:notify", true, { ttlSeconds: NOTIFY_SECONDS });
+  const notify = !old && !wave;
   try {
-    if (old?.staffMessage) {
+    if (a.staffMessage) {
       const copy = await ctx.server
-        .channel({ id: old.staffMessage.channel })
-        .message(old.staffMessage.id);
-      if (copy) {
+        .channel({ id: a.staffMessage.channel })
+        .message(a.staffMessage.id);
+      if (copy)
         await copy.edit({
           content: notice(ctx, a),
           allowedMentions: { users: false, roles: false, everyone: false },
         });
-        a.staffMessage = old.staffMessage;
-      }
+      else delete a.staffMessage;
     }
     if (!a.staffMessage && ctx.config.staffChannel) {
       const channel = ctx.server.channel(ctx.config.staffChannel);
@@ -120,12 +169,12 @@ async function alert(ctx: Context, key: string, a: Alert) {
       await ctx.kv.set(key, a, { ttlSeconds: MONTH });
       if (a.actorId) await ctx.schedule.after(MONTH * 1000, "redact", a.staffMessage);
     }
-    if (!old && ctx.config.notifyOwner && ctx.features.enabled("ownerDM") && ctx.server.ownerId) {
+    if (notify && ctx.config.notifyOwner && ctx.features.enabled("ownerDM") && ctx.server.ownerId) {
       const owner = await ctx.server.member(ctx.server.ownerId);
       await owner?.send(tr(ctx, "message.antiNukeDetectedAnIncidentReview"));
     }
     if (
-      !old &&
+      notify &&
       ctx.config.notifyWebhook &&
       ctx.features.enabled("webhook") &&
       ctx.secrets.has("WEBHOOK_URL")
@@ -173,7 +222,10 @@ async function classify(ctx: Context, key: string, p: Pair) {
   if (known && (await trusted(ctx, e))) return;
   const probable = !conflict && e?.kind === "cicord" && e.certainty === "probable";
   const actor = known ? e.actor : undefined;
-  const group = "counter:" + (actor ?? "_unknown") + ":" + p.trigger,
+  // Unattributed and probable observations each aggregate per trigger, so an attack
+  // that saturates audit enrichment produces one updated alert instead of a storm.
+  const subject = actor ?? (probable ? "_probable" : "_unknown");
+  const group = "counter:" + subject + ":" + p.trigger,
     seconds = ctx.config.windowSeconds;
   const at = known ? e.time : p.began;
   const previous = (await ctx.kv.get<{ key: string; at: number }[]>(group)) ?? [];
@@ -184,29 +236,45 @@ async function classify(ctx: Context, key: string, p: Pair) {
   history.push({ key, at });
   await ctx.kv.set(group, history.slice(-100), { ttlSeconds: seconds });
   const raid = (await ctx.kv.get<boolean>("raid")) === true;
-  const limit = Math.max(
-    1,
-    Math.ceil(
-      ctx.config.thresholds[p.trigger] * (raid ? ctx.config.raidThresholdPercent / 100 : 1),
-    ),
-  );
-  if (known && history.length !== limit) return;
+  const limit = known
+    ? Math.max(
+        1,
+        Math.ceil(
+          ctx.config.thresholds[p.trigger] * (raid ? ctx.config.raidThresholdPercent / 100 : 1),
+        ),
+      )
+    : 1;
+  // One alert per actor (or per uncertain class) and trigger while observations keep
+  // arriving within the window. Later observations update its count, even after the
+  // sliding counter alone would have dropped below the threshold.
+  const incidentKey = "incident:" + subject + ":" + p.trigger;
+  const incident = await ctx.kv.get<string>(incidentKey);
+  const existing = incident ? await ctx.kv.get<Alert>(incident) : undefined;
+  if (!existing && history.length < limit) return;
+  const alertKey = existing ? incident! : "alert:" + now + ":" + subject + ":" + p.trigger;
+  await ctx.kv.set(incidentKey, alertKey, { ttlSeconds: seconds });
   const why = known
     ? tr(ctx, "message.confirmedAuditEvidenceStaffMayReview")
     : probable
       ? tr(ctx, "message.possibleBotTokenCompromiseInspectThe")
       : tr(ctx, "message.missingDelayedMergedOrConflictingEvidence");
+  const actorType: Alert["actorType"] = known
+    ? (e.kind as "human" | "bot")
+    : probable
+      ? "cicord"
+      : "unknown";
   const a: Alert = {
     trigger: p.trigger,
-    at: now,
-    count: history.length,
-    actorType: known ? (e.kind as "human" | "bot") : probable ? "cicord" : "unknown",
+    at: existing?.at ?? now,
+    count: existing ? existing.count + 1 : history.length,
+    actorType,
     certainty: known ? "confirmed" : probable ? "probable" : "unknown",
     why,
+    wouldRespond: await plannedResponses(ctx, p.trigger, actorType),
     ...(actor ? { actorId: actor } : {}),
   };
-  p.alert = "alert:" + p.began + ":" + key;
-  await alert(ctx, p.alert, a);
+  p.alert = alertKey;
+  await alert(ctx, alertKey, a);
 }
 async function pair(
   ctx: Context,
@@ -231,7 +299,13 @@ async function pair(
     if (e && p.alert) {
       const a = await ctx.kv.get<Alert>(p.alert);
       if (a && (a.certainty !== "confirmed" || a.actorId !== e.actor)) {
-        const revised: Alert = { ...a, actorType: "unknown", certainty: "unknown" };
+        const revised: Alert = {
+          ...a,
+          actorType: "unknown",
+          certainty: "unknown",
+          // An unattributed alert never proposes an action against a person.
+          wouldRespond: (a.wouldRespond ?? []).filter((r) => r === "requestSync"),
+        };
         delete revised.actorId;
         await alert(ctx, p.alert, {
           ...revised,
@@ -323,7 +397,10 @@ export async function memberData(ctx: Context, id: string, erase: boolean) {
       erased++;
     }
   }
-  for (const r of await rows(ctx, "counter:" + id + ":")) {
+  for (const r of [
+    ...(await rows(ctx, "counter:" + id + ":")),
+    ...(await rows(ctx, "incident:" + id + ":")),
+  ]) {
     result[r.key] = r.value;
     if (erase) {
       await ctx.kv.delete(r.key);
