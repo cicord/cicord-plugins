@@ -56,9 +56,9 @@ function outranks(actor: Member, role: Role) {
           BigInt(r.id) < BigInt(role.id))),
   );
 }
-async function checkRole(ctx: Context, role: Role, actor?: Member) {
+async function checkRole(ctx: Context, role: Role, actor?: Member, cachedBot?: Member) {
   assignable(ctx, role);
-  const bot = await ctx.server.member(ctx.bot.user.id);
+  const bot = cachedBot ?? (await ctx.server.member(ctx.bot.user.id));
   if (!bot || !bot.permissions?.includes("ManageRoles") || !outranks(bot, role))
     throw new Error(translate(ctx, "error.hierarchy", { role: role.name }));
   if (actor && actor.id !== ctx.server.ownerId && !outranks(actor, role))
@@ -85,9 +85,16 @@ function temporaryRole(ctx: Context, ref: string) {
     throw new Error(translate(ctx, "error.denied"));
   return r;
 }
-async function ensure(ctx: Context, member: Member, role: Role, present: boolean, reason?: string) {
+async function ensure(
+  ctx: Context,
+  member: Member,
+  role: Role,
+  present: boolean,
+  reason?: string,
+  bot?: Member,
+) {
   if (member.hasRole({ id: role.id }) === present) return;
-  await checkRole(ctx, role);
+  await checkRole(ctx, role, undefined, bot);
   if (present) await member.addRole({ id: role.id }, reason);
   else await member.removeRole({ id: role.id }, reason);
 }
@@ -266,17 +273,17 @@ export async function joined(ctx: Context, m: Member) {
     if (configured.has(id)) await ensure(ctx, m, resolve(ctx, id), true);
   await changed(ctx, m);
 }
-export async function changed(ctx: Context, m: Member) {
+export async function changed(ctx: Context, m: Member, bot?: Member) {
   if (!ctx.config.enabled || m.user.bot) return;
   for (const rule of ctx.config.tenure)
     if (Date.now() - m.joinedAt.getTime() >= rule.days * DAY)
-      await ensure(ctx, m, resolve(ctx, rule.role), true);
+      await ensure(ctx, m, resolve(ctx, rule.role), true, undefined, bot);
   if (ctx.config.boost.role) {
     const role = resolve(ctx, ctx.config.boost.role);
     const k = boostKey(m.id);
     if (m.premiumSince) {
       const old = await ctx.kv.get<string>(k);
-      await ensure(ctx, m, role, true);
+      await ensure(ctx, m, role, true, undefined, bot);
       const since = m.premiumSince.toISOString();
       if (old !== since) {
         if (ctx.config.boost.announce && ctx.features.enabled("boostAnnouncements")) {
@@ -292,7 +299,7 @@ export async function changed(ctx: Context, m: Member) {
     } else if (await ctx.kv.get(k)) {
       const grant = await ctx.kv.get<ActiveGrant>(grantKey(m.id, role.id));
       if (!policyWants(ctx, m, role.id) && (!grant || grant.expiresAt <= Date.now()))
-        await ensure(ctx, m, role, false);
+        await ensure(ctx, m, role, false, undefined, bot);
       await ctx.kv.delete(k);
     }
   }
@@ -311,9 +318,25 @@ export async function scan(ctx: Context) {
     if (previous?.done && previous.day === today) return;
     const after = previous && !previous.done ? previous.after : "";
     const page = await ctx.server.members({ limit: BATCH, ...(after ? { after } : {}) });
-    for (const m of page) await changed(ctx, m);
-    const done = page.length < BATCH;
-    await ctx.kv.set("scan", { day: today, after: done ? "" : page.at(-1)!.id, done });
+    const bot = await ctx.server.member(ctx.bot.user.id);
+    const started = Date.now();
+    let processed = 0;
+    let lastCheckpoint = started;
+    let cursor = after;
+    for (const m of page) {
+      await changed(ctx, m, bot);
+      cursor = m.id;
+      processed++;
+      const now = Date.now();
+      if (now - lastCheckpoint >= 1000) {
+        await ctx.kv.set("scan", { day: today, after: cursor, done: false });
+        lastCheckpoint = now;
+      }
+      // Leave time within the runtime's handler deadline to persist and schedule the next page.
+      if (now - started >= 4000) break;
+    }
+    const done = processed === page.length && page.length < BATCH;
+    await ctx.kv.set("scan", { day: today, after: done ? "" : cursor, done });
     if (!done) await ctx.schedule.after(1000, "scan");
   });
 }
