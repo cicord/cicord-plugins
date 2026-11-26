@@ -30,7 +30,8 @@ for file in "$dir/test/runtime.mjs" "$dir"/test/*.sim.mjs "$dir"/test/*.test.mjs
   [[ ! -f "$file" ]] || acceptance+=("$file")
 done
 if (( ${#acceptance[@]} )); then
-  node --test "${acceptance[@]}"
+  # Each scenario boots a full runtime and has its own interaction deadlines.
+  node --test --test-concurrency=1 --test-timeout=300000 "${acceptance[@]}"
 fi
 if [[ -n "${CICORD_SOURCE:-}" && -f "$dir/test/persistence/run.mjs" ]]; then
   node "$dir/test/persistence/run.mjs"

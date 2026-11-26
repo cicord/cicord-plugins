@@ -12,7 +12,14 @@ export async function startSimulator(t, pluginDir, grants, config, options = {})
   const health=Array.isArray(options.health)?options.health:[options.health??"Healthy"];
   const root = await mkdtemp(join(tmpdir(),"cicord-plugin-test-"));
   const repo=join(root,"acceptance"), name=basename(pluginDir);
-  t.after(()=>rm(root,{recursive:true,force:true}));
+  let stop;
+  t.after(async () => {
+    try {
+      await stop?.();
+    } finally {
+      await rm(root, {recursive:true, force:true});
+    }
+  });
   execFileSync("cicord",["init",repo],{stdio:"pipe"});
   await cp(pluginDir,join(repo,"plugins",name),{recursive:true,filter:path=>![".cicord","node_modules","dist",".git"].includes(basename(path))});
   for (const [name, content] of Object.entries(options.files ?? {})) {
@@ -36,14 +43,24 @@ export async function startSimulator(t, pluginDir, grants, config, options = {})
   let stderr="";
   child.stderr.on("data",chunk=>{stderr=(stderr+chunk.toString()).slice(-4096);});
   const exited=once(child,"exit");
-  t.after(async()=>{if(child.exitCode===null && child.signalCode===null){child.kill("SIGTERM");await exited;}});
+  stop = async () => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    child.kill("SIGTERM");
+    const watchdog = setTimeout(() => child.kill("SIGKILL"), 8_000);
+    try {
+      const [, signal] = await exited;
+      assert.notEqual(signal, "SIGKILL", `simulator stalled during shutdown: ${stderr}`);
+    } finally {
+      clearTimeout(watchdog);
+    }
+  };
   const base=`http://${address}`;
   async function api(path,body,token,method=body===undefined?"GET":"POST") {
-    const response=await fetch(base+path,{method,
+    const response=await fetch(base+path,{method,signal:AbortSignal.timeout(45_000),
       headers:{"Content-Type":"application/json","X-Cicord-Request":"1",...(token?{Authorization:`Bearer ${token}`}:{})},
       ...(body===undefined?{}:{body:JSON.stringify(body)})});
     const text=await response.text();
-    if(!response.ok)throw new Error(`${path} returned ${response.status}: ${text}`);
+    if(!response.ok)throw new Error(`${path} returned ${response.status}: ${text}${response.status >= 500 ? "\n" + stderr : ""}`);
     return text?JSON.parse(text):undefined;
   }
   let ready=false, diagnostics;
