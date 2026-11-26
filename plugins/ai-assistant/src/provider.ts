@@ -20,7 +20,7 @@ export async function askProvider(
     system: instructions,
     messages: [{ role: "user", content: user }],
   };
-  for (let attempt = 0; attempt < 2; attempt++) {
+  {
     let response;
     try {
       response = await ctx.http.fetch("https://api.anthropic.com/v1/messages", {
@@ -32,10 +32,6 @@ export async function askProvider(
       if (response.headers["x-cicord-budget"] === "exhausted") return "budget";
       if (response.status === 429 || response.status >= 500) throw new Error("temporary");
     } catch {
-      if (attempt === 0) {
-        await new Promise<void>((done) => setTimeout(done, 150));
-        continue;
-      }
       return "unavailable";
     }
     if (response.status !== 200) return "unavailable";
@@ -47,5 +43,4 @@ export async function askProvider(
       return "unknown";
     }
   }
-  return "unavailable";
 }

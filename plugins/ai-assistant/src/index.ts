@@ -36,8 +36,8 @@ async function answer(
   id: string,
   ephemeral: boolean,
   history: string[] = [],
-): Promise<MessagePayload> {
-  const say = (key: string) => ({ content: ctx.i18n.t(key), allowedMentions: quiet });
+): Promise<{ message: MessagePayload; source?: Passage }> {
+  const say = (key: string) => ({ message: { content: ctx.i18n.t(key), allowedMentions: quiet } });
   if (!ctx.config.enabled) return say("disabled");
   if (
     ch.type === "dm" ||
@@ -120,10 +120,22 @@ async function answer(
     );
   }
   const retention = !source && ctx.config.keepUnanswered ? " " + ctx.i18n.t("retention") : "";
+  const finalMember = await ctx.server.member(user.id);
+  if (
+    !finalMember ||
+    !allowed(ctx, finalMember) ||
+    !finalMember.canView(ch) ||
+    (await ctx.kv.get("opt:" + user.id)) ||
+    (source && !visible(ctx, source, finalMember, ephemeral ? undefined : ch))
+  )
+    return say("restricted");
   return {
-    content: (content + retention).slice(0, 2000),
-    components: [row],
-    allowedMentions: quiet,
+    message: {
+      content: (content + retention).slice(0, 2000),
+      components: [row],
+      allowedMentions: quiet,
+    },
+    ...(source ? { source } : {}),
   };
 }
 
@@ -164,7 +176,9 @@ async function memberRecords(ctx: Context, id: string, erase: boolean) {
           if (privateRecord) {
             const record = item.value as { channel?: string; source?: string };
             out[item.key] =
-              !record.source && shareable(record.channel) ? item.value : { restricted: true };
+              !item.key.includes(":pending:") && !record.source && shareable(record.channel)
+                ? item.value
+                : { restricted: true };
           } else out[item.key] = item.value;
         }
       }
@@ -189,6 +203,39 @@ export default definePlugin({
     await ctx.schedule.after(1, "indexFiles", 0);
   },
   tasks: {
+    async question(ctx, payload, task) {
+      const reply = task?.interaction;
+      if (!reply || !payload || typeof payload !== "object" || Array.isArray(payload)) return;
+      const id = String(payload.id ?? "");
+      if (id !== reply.id || Date.now() >= reply.expiresAt.getTime()) return;
+      const key = userKey(reply.userId, "pending:" + id);
+      const pending = await ctx.kv.get<{ question: string; channel: string }>(key);
+      if (!pending || pending.channel !== reply.channelId) return;
+      const member = await ctx.server.member(reply.userId);
+      const channel = ctx.server.channel({ id: reply.channelId });
+      if (!member) return;
+      const result = await answer(ctx, member, channel, pending.question, id, true);
+      // Recheck immediately before delivery, after all provider/storage work.
+      const optedOut = await ctx.kv.get("opt:" + reply.userId);
+      const retained = await ctx.kv.get(key);
+      const current = await ctx.server.member(reply.userId);
+      if (retained && current?.canView(channel)) {
+        const eligible =
+          ctx.config.enabled &&
+          allowed(ctx, current) &&
+          !optedOut &&
+          (!result.source || visible(ctx, result.source, current));
+        await reply.reply(
+          eligible
+            ? result.message
+            : {
+                content: ctx.i18n.t(ctx.config.enabled ? "restricted" : "disabled"),
+                allowedMentions: quiet,
+              },
+        );
+      }
+      await ctx.kv.delete(key);
+    },
     async indexFiles(ctx, input) {
       if (!ctx.config.enabled) return;
       let file = 0,
@@ -265,13 +312,14 @@ export default definePlugin({
         }
       }
       const reply = await answer(ctx, msg.member, channel, q, msg.id, false, history);
-      await msg.reply(reply);
+      await msg.reply(reply.message);
       await ctx.kv.delete(userKey(msg.author.id, "task:" + msg.id));
     },
   },
   commands: {
     ask: command({
       description: "Ask about community knowledge",
+      ephemeral: true,
       subcommands: {
         question: subcommand({
           description: "Get an answer with sources",
@@ -301,16 +349,16 @@ export default definePlugin({
               });
               return;
             }
-            await it.defer({ ephemeral: true });
-            const result = await answer(
-              ctx,
-              it.member,
-              it.channel,
-              it.options.question,
-              it.id,
-              true,
+            // Private content remains owner-scoped and erasable; queue only its ID.
+            await ctx.kv.set(
+              userKey(it.user.id, "pending:" + it.id),
+              {
+                question: it.options.question,
+                channel: it.channel.id,
+              },
+              ttl(14 * 60),
             );
-            await it.reply({ ...result, ephemeral: true });
+            await it.deferTask("question", { id: it.id });
           },
         }),
         optout: subcommand({

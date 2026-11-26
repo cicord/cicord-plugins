@@ -49,8 +49,8 @@ spec:
     records:
       - name: member activity
         policy: erase
-        description: Opt-out, rate limit, pending support handoff, feedback and unanswered questions.
-        retention: Session handoffs 15 minutes, review records 7 days, opt-out until changed.
+        description: Opt-out, rate limit, pending private questions, support handoff, feedback and unanswered questions.
+        retention: Pending private questions 14 minutes, session handoffs 15 minutes, review records 7 days, opt-out until changed.
       - name: solved posts
         policy: erase
         description: Explicitly enabled knowledge excerpts and their references.

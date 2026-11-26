@@ -7,9 +7,8 @@
     "lib": ["ES2023", "DOM"],
     "skipLibCheck": false,
     "resolveJsonModule": true,
-    // One copy of the SDK types: the installed @cicord/sdk, which @cicord/sdk/testing also
-    // references (not .cicord/, which only serves the plugin sources).
-    "paths": { "@cicord/sdk": ["../../../node_modules/@cicord/sdk/dist/index.d.ts"] }
+    // Check task reply types against the same generated runtime contract as sources.
+    "paths": { "@cicord/sdk": ["../.cicord/cicord-sdk.d.ts"] }
   },
   "include": ["../src", "."]
 }

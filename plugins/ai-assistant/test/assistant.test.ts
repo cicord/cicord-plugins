@@ -22,10 +22,10 @@ it("returns a host budget refusal without retrying the provider", async () => {
   expect(await askProvider(fake.ctx, "Which button?", [])).toBe("budget");
   expect(fake.calls()).toBe(1);
 });
-it("backs off once after provider 500 then 429", async () => {
+it("does not retry a potentially charged provider 500", async () => {
   const fake = provider([500, 429]);
   expect(await askProvider(fake.ctx, "Which button?", [])).toBe("unavailable");
-  expect(fake.calls()).toBe(2);
+  expect(fake.calls()).toBe(1);
 });
 it("keeps citations local to evidence across fifty attempted fabricated answers", () => {
   const docs = sections(
@@ -49,4 +49,20 @@ it("keeps citations local to evidence across fifty attempted fabricated answers"
   expect(sections("---\naudiences: private\n---\nText", "f", "https://docs.example.org")).toEqual(
     [],
   );
+});
+
+it("does not retry an ambiguous network failure", async () => {
+  let charges = 0;
+  const ctx = {
+    config: { model: "fixture", maxOutputTokens: 100 },
+    secrets: { ref: () => "opaque" },
+    http: {
+      fetch: async () => {
+        charges++;
+        throw new Error("response lost after charge");
+      },
+    },
+  } as unknown as Context;
+  expect(await askProvider(ctx, "question", [])).toBe("unavailable");
+  expect(charges).toBe(1);
 });
