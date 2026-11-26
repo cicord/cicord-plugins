@@ -18,5 +18,14 @@
   "adminConfirm": "Confirmez la vérification en tant qu’administrateur du serveur.",
   "noUncertain": "Aucune création incertaine pour cet indicateur.",
   "needVoice": "Choisissez un compteur vocal existant.",
-  "resolved": "Récupération du compteur enregistrée."
+  "resolved": "Récupération du compteur enregistrée.",
+  "weeklyHeading": "Activité · semaine · du {from} au {to} UTC",
+  "monthlyHeading": "Activité · mois · du {from} au {to} UTC",
+  "weekday0": "lun.",
+  "weekday1": "mar.",
+  "weekday2": "mer.",
+  "weekday3": "jeu.",
+  "weekday4": "ven.",
+  "weekday5": "sam.",
+  "weekday6": "dim."
 }

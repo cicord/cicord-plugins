@@ -7,7 +7,7 @@ staffChannel: reports
 counters: [members.total, members.online, members.boosting]
 ```
 
-Enable server analytics and restrict `reports` to the intended staff members using Discord overwrites. The plugin withholds reports when the channel is public or its audience cannot be determined. Reports use the same aggregate reader as the Analytics page. Channel rankings include publicly visible channels only. An active-member distinct is daily, and the weekly value averages those daily counts.
+Set `locale: fr` or `locale: en` to choose the report language, including period headings and UTC weekday labels. Enable server analytics and restrict `reports` to the intended staff members using Discord overwrites. The plugin withholds reports when the channel is public or its audience cannot be determined. Reports use the same aggregate reader as the Analytics page. Channel rankings include publicly visible channels only. An active-member distinct is daily, and the weekly value averages those daily counts.
 
 ## Short stays
 

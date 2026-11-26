@@ -3,6 +3,7 @@ declare module "@cicord/sdk" {
   interface PluginConfig {
     staffChannel?: string;
     counters: ("members.total" | "members.online" | "members.boosting")[];
+    locale?: "en" | "fr";
   }
 }
 export {};

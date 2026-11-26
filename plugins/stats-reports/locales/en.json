@@ -18,5 +18,14 @@
   "adminConfirm": "Confirm the inspection as a server administrator.",
   "noUncertain": "No unresolved creation exists for this metric.",
   "needVoice": "Choose an existing voice counter.",
-  "resolved": "Counter recovery saved."
+  "resolved": "Counter recovery saved.",
+  "weeklyHeading": "Activity · week · {from} to {to} UTC",
+  "monthlyHeading": "Activity · month · {from} to {to} UTC",
+  "weekday0": "Mon",
+  "weekday1": "Tue",
+  "weekday2": "Wed",
+  "weekday3": "Thu",
+  "weekday4": "Fri",
+  "weekday5": "Sat",
+  "weekday6": "Sun"
 }

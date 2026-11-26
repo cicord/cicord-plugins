@@ -18,6 +18,14 @@
       },
       "uniqueItems": true,
       "default": []
+    },
+    "locale": {
+      "type": "string",
+      "enum": [
+        "en",
+        "fr"
+      ],
+      "description": "Report language. Falls back to the server locale when omitted."
     }
   },
   "required": [],

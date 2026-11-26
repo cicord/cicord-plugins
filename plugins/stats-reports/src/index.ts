@@ -46,11 +46,14 @@ export async function shortStays(ctx: Context, from: number, to: number) {
   }
   return { joined, left };
 }
-async function publish(ctx: Context, kind: "week" | "month") {
+export async function publish(ctx: Context, kind: "week" | "month", periodAt = Date.now()) {
   if (!ctx.config.staffChannel) return;
-  const { from, to } = range(Date.now(), kind),
+  const { from, to } = range(periodAt, kind),
     key = `report:${kind}:${day(to)}`,
-    marker = `Activity · ${kind} · ${day(from)} to ${day(to)} UTC`;
+    marker = ctx.i18n.t(kind === "week" ? "weeklyHeading" : "monthlyHeading", {
+      from: day(from),
+      to: day(to),
+    });
   const previous = await ctx.kv.getEntry<ReportReceipt | boolean>(key);
   if (previous?.value === true) return;
   const rec = typeof previous?.value === "object" ? previous.value : undefined;
@@ -88,7 +91,7 @@ async function publish(ctx: Context, kind: "week" | "month") {
     return;
   }
   const s = await ctx.analytics.summary({ from: iso(from), to: iso(to), granularity: "day" });
-  const lines = s.kpis.map((k) => `${ctx.i18n.t(k.metric)}: ${Number(k.value.toFixed(2))}`);
+  const lines = s.kpis.map((k) => `${ctx.i18n.t(k.metric)}: ${k.value}`);
   if (ctx.features.enabled("cohorts")) {
     const c = await shortStays(ctx, from, to);
     lines.push(ctx.i18n.t("cohort", c));
@@ -101,7 +104,7 @@ async function publish(ctx: Context, kind: "week" | "month") {
     row.forEach((v, h) => {
       if (v > best) {
         best = v;
-        when = `${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][i]} ${String(h).padStart(2, "0")}:00 UTC`;
+        when = `${ctx.i18n.t("weekday" + i)} ${String(h).padStart(2, "0")}:00 UTC`;
       }
     }),
   );
